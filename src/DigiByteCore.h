@@ -24,6 +24,21 @@ namespace jsonrpc {
 } // namespace jsonrpc
 
 class DigiByteCore {
+public:
+    enum AddressTypes {
+        LEGACY,
+        SEGWIT,
+        BECH32
+    };
+
+    enum WalletVersion {
+        unknown= 0,
+        v7=7,         //7 or less
+        v8=8          //8 or higher
+    };
+
+
+private:
     std::unique_ptr<jsonrpc::HttpClient> httpClient = nullptr;
     std::unique_ptr<jsonrpc::Client> client = nullptr;
     uint64_t _dgbToSat(std::string value);
@@ -38,13 +53,10 @@ class DigiByteCore {
 
     long long _runTime = 0;
     unsigned int _runCount = 0;
+    WalletVersion _walletVersion = unknown;
 
 public:
-    enum AddressTypes {
-        LEGACY,
-        SEGWIT,
-        BECH32
-    };
+    WalletVersion coreVersion();
 
 
     std::string printProfilingInfo() {

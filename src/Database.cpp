@@ -429,7 +429,7 @@ void Database::initializeClassValues() {
     _stmtIsWatchAddress.prepare(_db, "SELECT address FROM exchangeWatch WHERE address=?;");
 
     //statement to add exchange watch address
-    _stmtAddWatchAddress.prepare(_db, "INSERT INTO exchangeWatch VALUES (?);");
+    _stmtAddWatchAddress.prepare(_db, "INSERT OR IGNORE INTO exchangeWatch VALUES (?);");
 
 
     //statement to insert new exchange rate
@@ -1022,7 +1022,7 @@ std::vector<AssetBasics> Database::getLastAssetsIssued(unsigned int amount, unsi
  * Possible Errors:
  *  exceptionFailedSelect
  */
-int Database::getFlagInt(const string& flag) {
+int Database::getFlagInt(const string& flag, int defaultValue=INT_MIN) {
     //try to get from ram
     try {
         return _flagState.at(flag); //will throw out of range error if not present
@@ -1034,6 +1034,7 @@ int Database::getFlagInt(const string& flag) {
     checkFlag.bindText(1, flag);
     int rc = checkFlag.executeStep();
     if (rc != SQLITE_ROW) { //there should always be one
+        if (defaultValue!=INT_MIN) return defaultValue;
         handleSpecialErrors(__LINE__);
         throw exceptionFailedSelect(); //failed to check database
     }
@@ -1130,6 +1131,48 @@ void Database::setBeenPrunedVoteHistory(int state) {
 
 void Database::setBeenPrunedNonAssetUTXOHistory(bool state) {
     setFlagInt("wasPrunedNonAssetUTXOHistory", state);
+}
+
+
+DigiByteCore::WalletVersion Database::getCompatibleWalletVersion() {
+    return DigiByteCore::WalletVersion::unknown;
+
+    //check if defined
+    int allowedCoreVersion=getFlagInt("coreVersion",0);
+    if (allowedCoreVersion>DigiByteCore::WalletVersion::unknown)
+        return static_cast<DigiByteCore::WalletVersion>(allowedCoreVersion);
+
+    //search database for v8 only values
+    sqlite3_stmt* stmt;
+    const char* sql8="SELECT * FROM utxos WHERE lower(substr(address, 1, 1)) IN ('0','1','2','3','4','5','6','7','8','9','a','b','c','e','f') LIMIT 1;";
+    int rc = sqlite3_prepare_v2(_db, sql8, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        setFlagInt("coreVersion",8);
+        return DigiByteCore::WalletVersion::v8;
+    }
+
+    //search database for first tx that can show v7
+    const char* sql7a="SELECT address FROM utxos WHERE txid='dd8a4a3b8ecdc14e4142ffb73a5b0c8801030f98dbd818f1b90ac3683b4f2c60' AND vout=0 LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql7a, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        //if 8 value will be 038776097791c01e02d4f729485361ba00e5fe7528bca55e416bbce611f0e9f10c which would trigger v8 code above so must be v7
+        setFlagInt("coreVersion",7);
+        return DigiByteCore::WalletVersion::v7;
+    }
+
+    //if pruning is turned on database could still be v7 otherwise database is compatible with both(unknown)
+    const char* sql7b="SELECT address FROM utxos WHERE txid='344dd72b318f8676f420bd6c4a15cf4ca8cda5fa11efb14e0f109ab1acec5f25' AND vout=2 LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql7b, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        //if 8 value will be hex which would trigger v8 code above so must be v7
+        setFlagInt("coreVersion",7);
+        return DigiByteCore::WalletVersion::v7;
+    }
+
+    return DigiByteCore::WalletVersion::unknown;
 }
 
 
@@ -1815,7 +1858,7 @@ void Database::addWatchAddress(const string& address) {
     LockedStatement addWatchAddress{_stmtAddWatchAddress};
     addWatchAddress.bindText(1, address);
     int rc = addWatchAddress.executeStep();
-    if (rc != SQLITE_OK) {
+    if (rc != SQLITE_DONE) {
         handleSpecialErrors(__LINE__);
         throw exceptionFailedInsert();
     }

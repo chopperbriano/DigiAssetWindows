@@ -26,7 +26,7 @@ namespace RPC {
             Json::Value rawTransactionData = AppMain::GetInstance()->getDigiByteCore()->sendcommand("getrawtransaction", params);
 
             //handle core version 8.22
-            if (rawTransactionData.isObject()) {
+            if (rawTransactionData.isObject()) {//todo delete this whole section
                 for (Json::ValueIterator it = rawTransactionData["vout"].begin(); it != rawTransactionData["vout"].end(); it++) {
                     Json::Value& val = *it;
                     if (val["scriptPubKey"].isMember("address")) {

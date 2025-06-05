@@ -288,7 +288,7 @@ private:
     void initializeClassValues();
 
     //flag table
-    int getFlagInt(const std::string& flag);
+    int getFlagInt(const std::string& flag, int defaultValue);  //defaultValue is optional
     void setFlagInt(const std::string& flag, int state);
     std::map<std::string, int> _flagState;
 
@@ -383,6 +383,9 @@ public:
 
     //reset database
     void reset(); //used in case of roll back exceeding pruned history
+
+    //check database integrity to core wallet
+    DigiByteCore::WalletVersion getCompatibleWalletVersion();
 
     //assets table
     uint64_t addAsset(const DigiAsset& asset);

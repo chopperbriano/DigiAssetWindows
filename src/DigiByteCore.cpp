@@ -4,6 +4,7 @@
 
 #include "DigiByteCore.h"
 #include "Config.h"
+#include "utils.h"//todo delete
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -1238,23 +1239,51 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
             output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
 
             output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
-            if (val["scriptPubKey"].isMember("address")) {
+            if (!val["scriptPubKey"].isMember("addresses")) {
                 //handle 8.22
-                output.scriptPubKey.addresses.push_back(val["scriptPubKey"]["address"].asString());
+                if (val["scriptPubKey"].isMember("address")) {
+                    _walletVersion=v8;
+                    output.scriptPubKey.addresses.push_back(val["scriptPubKey"]["address"].asString());
+                } else {
+                    string hex=val["scriptPubKey"]["hex"].asString();
+                    string type =val["scriptPubKey"]["type"].asString();
+                    if (type=="pubkey") {
+                        // remove the leading size value and trailing 0xac
+                        string addrHex = hex.substr(2, hex.size() - 4);
+                        output.scriptPubKey.addresses.push_back(addrHex);
+                    } else if (type=="multisig") {
+                        // split the ASM into tokens
+                        std::istringstream iss(val["scriptPubKey"]["asm"].asString());
+                        std::vector<std::string> parts;
+                        std::string tok;
+                        while (iss >> tok) parts.push_back(tok);
+
+                        // parts = [ m, pub1, pub2, …, pubN, n, "OP_CHECKMULTISIG" ]
+                        unsigned int m = std::stoul(parts[0]);                            // required sigs
+                        unsigned int n = std::stoul(parts[parts.size() - 2]);             // total pubkeys
+                        output.scriptPubKey.reqSigs = m;
+
+                        // pull out exactly n pubkey hexes (parts[1] through parts[n])
+                        for (unsigned int i = 1; i <= n; ++i) {
+                            output.scriptPubKey.addresses.push_back(parts[i]);
+                        }
+                    } else if (type=="nulldata") {
+                        //do nothing
+                    } else if (type=="nonstandard") {
+                        cerr << "nonstandard: " << txid << "\n";
+                        //do nothing
+                    } else {
+                        utils::printJson(val);
+                        cerr << "Unexpected scriptPubKey.hex format: " << hex << "\n";
+                    }
+                }
             } else {
                 //handle older versions
+                _walletVersion=v7;
                 for (ValueIterator it2 = val["scriptPubKey"]["addresses"].begin();
                      it2 != val["scriptPubKey"]["addresses"].end(); it2++) {
                     output.scriptPubKey.addresses.push_back((*it2).asString());
                 }
-            }
-            auto &addr = val["scriptPubKey"]["address"];
-             if (addr) {
-                 std::string addrStr = addr.asString();
-                 // Check if address is already in the vector before adding it.
-                 if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
-                     output.scriptPubKey.addresses.push_back(addrStr);
-                 }
             }
             ret.vout.push_back(output);
         }
@@ -1575,4 +1604,10 @@ uint64_t DigiByteCore::_dgbToSat(std::string value) {
     std::istringstream iss(value);
     iss >> result;
     return result;
+}
+
+DigiByteCore::WalletVersion DigiByteCore::coreVersion() {
+    if (_walletVersion!=unknown) return _walletVersion;
+    getrawtransaction("0378a92db8025318a129c83e2ee0766a5908550ef7b4619e8a325c9c69873a4b",true); //force wallet version to be set
+    return _walletVersion;
 }

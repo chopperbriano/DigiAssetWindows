@@ -13,6 +13,11 @@
 
 
 int main() {
+    struct bootStrap {
+        string cid;
+        unsigned int height;
+    };
+
     //make sure only one instance
     InstanceLock lock("digiasset_core");
     if (!lock.acquire()) {
@@ -21,9 +26,11 @@ int main() {
     std::cout << "Core application running. PID: " << getpid() << std::endl;
 
     ///When updating bootstrap image change both values.   Reviewers make sure this value is only ever changed by trusted party
-    const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM"};
-    const string officialBootstrapCID = "QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU";
-    const unsigned int officialBootStrapHeight = 19256623;
+    const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM","QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU"};
+    const bootStrap officialBootstrap[2]{
+            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 19256623},   //v7
+            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 21505152}    //v8
+    };
 
     /*
      * Check if config exists and prompt user to make one if it doesn't
@@ -120,20 +127,6 @@ int main() {
     log->addMessage("Starting DigiAsset Core " + getVersionString());
 
     /*
-     * Predownload database files if config files allow and database missing
-     */
-    unsigned int pauseHeight = 0;
-    if (                                                   //download bootstrap if all of the above are true
-            config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
-            !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
-            !utils::fileExists("chain.db")) {              //if the chain database does not yet exist
-        log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
-        IPFS ipfs("config.cfg", false);
-        ipfs.downloadFile(officialBootstrapCID, "chain.db", true);
-        pauseHeight = officialBootStrapHeight+2;
-    }
-
-    /*
      * Create AppMain
      */
     AppMain* main = AppMain::GetInstance();
@@ -163,6 +156,26 @@ int main() {
     }
     main->setDigiByteCore(&dgb);
 
+    /*
+     * Get wallet version
+     */
+    DigiByteCore::WalletVersion walletVersion = dgb.coreVersion();
+
+    /*
+     * Predownload database files if config files allow and database missing
+     */
+    unsigned int pauseHeight = 0;
+    if (                                                   //download bootstrap if all of the above are true
+            config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
+            !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
+            !utils::fileExists("chain.db")) {              //if the chain database does not yet exist
+        log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
+        IPFS ipfs("config.cfg", false);
+        const auto bootstrap=(walletVersion==DigiByteCore::WalletVersion::v8)? officialBootstrap[1]: officialBootstrap[0];
+        ipfs.downloadFile(bootstrap.cid, "chain.db", true);
+        pauseHeight = bootstrap.height+2;
+    }
+
     //make sure if we predownloaded data from ipfs that the wallet is synced past the point image was syned to
     if (pauseHeight > 0) {
         while (dgb.getBlockCount() < pauseHeight) {
@@ -179,6 +192,19 @@ int main() {
     try {
         log->addMessage("Loading Database");
         db = new Database("chain.db");
+        auto compatibleWalletVersion = db->getCompatibleWalletVersion();
+        if ((compatibleWalletVersion>0) && (compatibleWalletVersion != walletVersion)) {
+            cout << "██ ███    ██  ██████  ██████  ███    ███ ██████   █████  ████████ ██ ██████  ██      ███████ \n"
+                    "██ ████   ██ ██      ██    ██ ████  ████ ██   ██ ██   ██    ██    ██ ██   ██ ██      ██      \n"
+                    "██ ██ ██  ██ ██      ██    ██ ██ ████ ██ ██████  ███████    ██    ██ ██████  ██      █████   \n"
+                    "██ ██  ██ ██ ██      ██    ██ ██  ██  ██ ██      ██   ██    ██    ██ ██   ██ ██      ██      \n"
+                    "██ ██   ████  ██████  ██████  ██      ██ ██      ██   ██    ██    ██ ██████  ███████ ███████ \n"
+                    "                                                                                             \n"
+                    " DigiByte Core Wallet " << (walletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << " detected. \n"
+                    " Database compatible with " << (compatibleWalletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << "\n"
+                    " Change core version or delete chain.db and restart\n";
+            return -1;
+        }
         main->setDatabase(db);
     } catch (const Database::exceptionFailedToOpen& e) {
         log->addMessage("Database could not be opened", Log::CRITICAL);
@@ -191,7 +217,9 @@ int main() {
     log->addMessage("Starting IPFS handler");
     IPFS ipfs("config.cfg");
     main->setIPFS(&ipfs);
-    ipfs.pin(officialBootstrapCID);
+    for (const auto& bootstrap: officialBootstrap) {
+        ipfs.pin(bootstrap.cid);
+    }
     for (const auto& cid: oldBootstrapCIDs) {
         ipfs.unpin(cid);
     }
