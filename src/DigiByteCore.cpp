@@ -19,6 +19,25 @@
 using jsonrpc::Client;
 using jsonrpc::JSONRPC_CLIENT_V1;
 
+/**
+ * URL-encode a string for safe use in HTTP basic auth URLs.
+ * Characters like /, +, =, @ in RPC passwords would otherwise
+ * break the URL parsing in jsonrpc::HttpClient.
+ */
+static std::string urlEncode(const std::string& value) {
+    std::string encoded;
+    for (unsigned char c : value) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded += c;
+        } else {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", c);
+            encoded += buf;
+        }
+    }
+    return encoded;
+}
+
 using jsonrpc::HttpClient;
 using jsonrpc::JsonRpcException;
 
@@ -91,8 +110,8 @@ void DigiByteCore::makeConnection() {
     //see if core is online and config if valid
     try {
         httpClient.reset(new jsonrpc::HttpClient(
-                "http://" + config.getString("rpcuser") + ":" +
-                config.getString("rpcpassword") + "@" +
+                "http://" + urlEncode(config.getString("rpcuser")) + ":" +
+                urlEncode(config.getString("rpcpassword")) + "@" +
                 config.getString("rpcbind", "127.0.0.1") + ":" +
                 std::to_string(_useAssetPort ? config.getInteger("rpcassetport", 14024) : config.getInteger("rpcport", 14022))));
         client.reset(new jsonrpc::Client(*httpClient, jsonrpc::JSONRPC_CLIENT_V1));
