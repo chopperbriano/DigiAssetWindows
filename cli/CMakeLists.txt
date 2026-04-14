@@ -14,6 +14,7 @@ add_library(llibcurl STATIC IMPORTED)
 set(HEADER_FILES
         ../src/Config.h
         ../src/DigiByteCore.cpp
+        ../src/utils.cpp
         )
 
 set(SOURCE_FILES
