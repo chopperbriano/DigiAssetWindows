@@ -9,7 +9,9 @@ option(BUILD_TEST "Build Tests" OFF)
 
 # Set compiler settings
 set(CMAKE_CXX_STANDARD 11)
-SET(CMAKE_CXX_FLAGS "-std=c++11 -g -Wall")
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
+endif()
 
 # Set version number
 SET(MAJOR_VERSION 0)

@@ -12,6 +12,7 @@
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
 #include "utils.h"
 #include <algorithm>
+#include <cstdint>
 #include <mutex>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -226,6 +227,10 @@ void Database::initializeClassValues() {
     addPerformanceIndex("utxos", "heightCreated");
     addPerformanceIndex("utxos", "heightDestroyed");
     addPerformanceIndex("votes", "height");
+
+    //covering indexes for hot queries (getAddressHoldings, getAssetHolders, getValidUTXO)
+    addPerformanceIndex("utxos", "address", "heightDestroyed", "assetIndex", "amount");
+    addPerformanceIndex("utxos", "assetIndex", "heightDestroyed", "address", "amount");
 
 
 
@@ -671,6 +676,28 @@ Database::Database(const string& newFileName) {
     rc = sqlite3_open_v2(newFileName.c_str(), &_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nullptr);
     if (rc) throw exceptionFailedToOpen();
 
+    //configure SQLite performance pragmas
+    sqlite3_busy_timeout(_db, 5000); //5 second busy timeout instead of manual retry
+    sqlite3_exec(_db, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
+    sqlite3_wal_autocheckpoint(_db, 0); //disable auto-checkpoint on main connection (it would fail with SQLITE_LOCKED due to active cursors)
+
+    //open a second connection dedicated to WAL checkpointing
+    //a same-connection checkpoint returns SQLITE_LOCKED whenever any prepared statement
+    //has an active cursor (stepped but not reset).  With 10+ IPFS/RPC threads constantly
+    //querying, there is almost always an active cursor, so same-connection checkpoints
+    //silently fail every time.  A second connection avoids this entirely.
+    rc = sqlite3_open_v2(newFileName.c_str(), &_dbCheckpoint, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr);
+    if (rc) throw exceptionFailedToOpen();
+    sqlite3_busy_timeout(_dbCheckpoint, 5000);
+    sqlite3_exec(_dbCheckpoint, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr); //must match main connection
+    sqlite3_exec(_db, "PRAGMA synchronous = FULL;", nullptr, nullptr, nullptr);
+    sqlite3_exec(_db, "PRAGMA cache_size = -65536;", nullptr, nullptr, nullptr); //64MB page cache
+#if INTPTR_MAX == INT64_MAX
+    sqlite3_exec(_db, "PRAGMA mmap_size = 268435456;", nullptr, nullptr, nullptr); //256MB mmap on 64-bit
+#else
+    sqlite3_exec(_db, "PRAGMA mmap_size = 33554432;", nullptr, nullptr, nullptr); //32MB mmap on 32-bit
+#endif
+
     //create needed tables
     if (firstRun) {
         buildTables();
@@ -680,8 +707,12 @@ Database::Database(const string& newFileName) {
         const char* sql = "SELECT `value` FROM `flags` WHERE `key`=\"dbVersion\";";
         rc = sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr);
         if (rc != SQLITE_OK) throw exceptionCreatingStatement();
-        if (executeSqliteStepWithRetry(stmt) != SQLITE_ROW) throw exceptionFailedSelect();
+        if (executeSqliteStepWithRetry(stmt) != SQLITE_ROW) {
+            sqlite3_finalize(stmt);
+            throw exceptionFailedSelect();
+        }
         unsigned int dbVersion = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
 
         //make sure tables are in the newest format
         buildTables(dbVersion);
@@ -692,6 +723,7 @@ Database::Database(const string& newFileName) {
 }
 
 Database::~Database() {
+    if (_dbCheckpoint) sqlite3_close_v2(_dbCheckpoint);
     sqlite3_close_v2(_db);
 }
 
@@ -711,26 +743,88 @@ Database::~Database() {
  * time it takes to make all the transactions
  */
 void Database::startTransaction() {
-    char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+    if (_transactionDepth == 0) {
+        char* zErrMsg = nullptr;
+        int rc = sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+        if (rc != SQLITE_OK) {
+            if (zErrMsg) sqlite3_free(zErrMsg);
+            throw exceptionFailedSQLCommand();
+        }
+    }
+    _transactionDepth++;
 }
 
 /**
- * Finishes the batch transaction
+ * Finishes the batch transaction.  Only actually commits when the outermost
+ * transaction ends, allowing nested startTransaction/endTransaction calls.
  */
 void Database::endTransaction() {
-    char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+    if (_transactionDepth <= 0) return;
+    if (_transactionDepth == 1) {
+        //outermost transaction — actually commit
+        char* zErrMsg = nullptr;
+        int rc = sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+        if (rc != SQLITE_OK) {
+            std::string errStr = zErrMsg ? zErrMsg : "unknown";
+            if (zErrMsg) sqlite3_free(zErrMsg);
+            Log::GetInstance()->addMessage("COMMIT failed (rc=" + std::to_string(rc) + "): " + errStr, Log::WARNING);
+            //commit failed — rollback to release the transaction so WAL can be checkpointed
+            sqlite3_exec(_db, "ROLLBACK", nullptr, nullptr, nullptr);
+            _transactionDepth = 0;
+            throw exceptionFailedSQLCommand();
+        }
+        _transactionDepth = 0;
+    } else {
+        _transactionDepth--;
+    }
 }
 
 /**
- * disables write verification.  gives significant speed increase but on power failure data
- * may not all be written to the drive so must recheck at startup
+ * Flushes the WAL back to the main database file and truncates the WAL.
+ * Call periodically during heavy writes to prevent unbounded WAL growth.
+ *
+ * Strategy: try PASSIVE first (always succeeds, checkpoints what it can),
+ * then try TRUNCATE to reset the WAL file.  Avoids RESTART/FULL which hold
+ * the connection mutex during busy-wait and deadlock with FULLMUTEX.
+ */
+void Database::walCheckpoint() {
+    int nLog = 0, nCkpt = 0;
+
+    //use the dedicated checkpoint connection to avoid SQLITE_LOCKED from active cursors
+    //on the main connection.  PASSIVE always succeeds and checkpoints committed frames.
+    int rc = sqlite3_wal_checkpoint_v2(_dbCheckpoint, nullptr, SQLITE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+    Log* log = Log::GetInstance();
+    log->addMessage("WAL checkpoint PASSIVE: rc=" + std::to_string(rc) +
+                    " frames=" + std::to_string(nLog) +
+                    " checkpointed=" + std::to_string(nCkpt), Log::DEBUG);
+
+    //always attempt TRUNCATE to shrink the WAL file on disk.
+    //TRUNCATE is a blocking checkpoint that waits for readers to finish before
+    //checkpointing all remaining frames and resetting the WAL file.
+    //Without this, the WAL writer pointer never wraps back to the beginning
+    //(SQLite only resets the write pointer after a COMPLETE checkpoint) and
+    //the WAL grows without bound.  LockedStatement readers are short-lived
+    //(microseconds) so the busy_timeout (5s) is more than enough.
+    if (rc == SQLITE_OK && nLog > 0) {
+        rc = sqlite3_wal_checkpoint_v2(_dbCheckpoint, nullptr, SQLITE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt);
+        if (rc == SQLITE_OK) {
+            log->addMessage("WAL TRUNCATE succeeded", Log::DEBUG);
+        } else {
+            log->addMessage("WAL TRUNCATE failed (rc=" + std::to_string(rc) +
+                            "), WAL will be retried next checkpoint", Log::DEBUG);
+        }
+    }
+}
+
+/**
+ * disables write verification.  Under WAL mode, NORMAL is nearly as fast as OFF
+ * but survives application crashes.  Only OS crash/power failure can lose the last
+ * transaction, and the database will never corrupt.
  */
 void Database::disableWriteVerification() {
     char* zErrMsg = nullptr;
-    sqlite3_exec(_db, "PRAGMA synchronous = OFF", nullptr, nullptr, &zErrMsg);
-    sqlite3_exec(_db, "PRAGMA journal_mode = MEMORY", nullptr, nullptr, &zErrMsg);
+    int rc = sqlite3_exec(_db, "PRAGMA synchronous = NORMAL", nullptr, nullptr, &zErrMsg);
+    if (rc != SQLITE_OK && zErrMsg) sqlite3_free(zErrMsg);
 }
 
 /*

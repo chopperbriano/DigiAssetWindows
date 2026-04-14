@@ -76,21 +76,15 @@ namespace RPC {
     ███████║███████╗   ██║   ╚██████╔╝██║
     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝
      */
-    Server::Server(const string& fileName) : _io(), _work(_io) {
+    Server::Server(const string& fileName) : _io(), _work(boost::asio::make_work_guard(_io)) {
         Config config = Config(fileName);
         _username = config.getString("rpcuser");
         _password = config.getString("rpcpassword");
         _port = config.getInteger("rpcassetport", 14024);
 
-        // Create work to keep io_ running
-        boost::asio::io_service::work work(_io);
+        // Create work to keep io_ running (io_context replaces deprecated io_service)
 
-        // Create a pool of threads to run all of the io_services.
-        size_t poolSize = config.getInteger("rpcparallel", 8);
-        for (std::size_t i = 0; i < poolSize; ++i) {
-            _thread_pool.emplace_back([this] { run_thread(); });
-        }
-
+        // Bind socket before spawning threads so if this fails we don't leak threads
         tcp::endpoint endpoint(tcp::v4(), _port);
         _acceptor.open(endpoint.protocol());
         _acceptor.set_option(tcp::acceptor::reuse_address(true));
@@ -98,8 +92,13 @@ namespace RPC {
         _acceptor.listen();
 
         _allowedRPC = config.getBoolMap("rpcallow");
-
         _showParamsOnError = config.getBool("rpcdebugshowparamsonerror", false);
+
+        // Create a pool of threads to run all of the io_services.
+        size_t poolSize = config.getInteger("rpcparallel", 8);
+        for (std::size_t i = 0; i < poolSize; ++i) {
+            _thread_pool.emplace_back([this] { run_thread(); });
+        }
     }
 
     Server::~Server() {
@@ -137,7 +136,7 @@ namespace RPC {
                 _acceptor.accept(*socket);
 
                 log->addMessage("RPC call #" + std::to_string(callNumber) + " added to que", Log::DEBUG);
-                _io.post([this, socket, callNumber]() { this->handleConnection(socket, callNumber); });
+                boost::asio::post(_io, [this, socket, callNumber]() { this->handleConnection(socket, callNumber); });
             } catch (const std::exception& e) {
                 log->addMessage("Unexpected exception in RPC call #" + std::to_string(callNumber) + ": " + e.what(), Log::DEBUG);
             } catch (...) {

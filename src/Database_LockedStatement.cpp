@@ -13,6 +13,7 @@ LockedStatement::LockedStatement(Statement& statement)
 }
 
 LockedStatement::~LockedStatement() {
+    sqlite3_reset(_stmt); //release any read lock before giving up the mutex
     auto duration = std::chrono::steady_clock::now() - _creationTime;
     _creator->addLockDuration(std::chrono::duration_cast<std::chrono::microseconds>(duration));
 }

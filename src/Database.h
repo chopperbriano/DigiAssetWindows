@@ -84,6 +84,8 @@ struct BlockBasics {
 class Database {
 private:
     sqlite3* _db = nullptr;
+    sqlite3* _dbCheckpoint = nullptr; //second connection used exclusively for WAL checkpointing (avoids SQLITE_LOCKED on same-connection cursors)
+    int _transactionDepth = 0;
     Statement _stmtCheckFlag;
     Statement _stmtSetFlag;
     Statement _stmtGetBlockHeight;
@@ -332,6 +334,7 @@ public:
     //performance related
     void startTransaction();
     void endTransaction();
+    void walCheckpoint();       //flushes WAL back to main db and truncates the WAL file
     void
     disableWriteVerification(); //on power failure not all commands may be written.  If using need to check at startup
 

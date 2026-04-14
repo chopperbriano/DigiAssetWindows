@@ -127,6 +127,12 @@ int main() {
     log->addMessage("Starting DigiAsset Core " + getVersionString());
 
     /*
+     * Get database filename from config (default "chain.db")
+     */
+    string dbFilename = config.getString("dbfilename", "chain.db");
+    log->addMessage("Using database file: " + dbFilename);
+
+    /*
      * Create AppMain
      */
     AppMain* main = AppMain::GetInstance();
@@ -168,11 +174,11 @@ int main() {
     if (                                                   //download bootstrap if all of the above are true
             config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
             !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
-            !utils::fileExists("chain.db")) {              //if the chain database does not yet exist
+            !utils::fileExists(dbFilename)) {              //if the chain database does not yet exist
         log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
         IPFS ipfs("config.cfg", false);
         const auto bootstrap=(walletVersion==DigiByteCore::WalletVersion::v8)? officialBootstrap[1]: officialBootstrap[0];
-        ipfs.downloadFile(bootstrap.cid, "chain.db", true);
+        ipfs.downloadFile(bootstrap.cid, dbFilename, true);
         pauseHeight = bootstrap.height+2;
     }
 
@@ -191,7 +197,7 @@ int main() {
     Database* db;
     try {
         log->addMessage("Loading Database");
-        db = new Database("chain.db");
+        db = new Database(dbFilename);
         auto compatibleWalletVersion = db->getCompatibleWalletVersion();
         if ((compatibleWalletVersion>0) && (compatibleWalletVersion != walletVersion)) {
             cout << "██ ███    ██  ██████  ██████  ███    ███ ██████   █████  ████████ ██ ██████  ██      ███████ \n"

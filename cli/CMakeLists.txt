@@ -30,7 +30,10 @@ target_link_libraries(digiasset_core-cli PRIVATE CURL::libcurl)
 target_link_libraries(digiasset_core-cli PRIVATE ssl)
 target_link_libraries(digiasset_core-cli PRIVATE pthread)
 
-target_link_libraries(digiasset_core-cli PRIVATE /lib/x86_64-linux-gnu/libjsoncpp.so)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+target_include_directories(digiasset_core-cli PRIVATE ${JSONCPP_INCLUDE_DIRS})
+target_link_libraries(digiasset_core-cli PRIVATE ${JSONCPP_LIBRARIES})
 target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-common)
 target_link_libraries(digiasset_core-cli PRIVATE jsonrpccpp-client)
 

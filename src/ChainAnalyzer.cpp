@@ -289,6 +289,7 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
     stringstream ss;
+    bool inTransaction = false;
     blockinfo_t blockData = dgb->getBlock(hash); //get first blocks data in syncing process(all future ones are at end of loop)
     while ((hash == _nextHash) && !stopRequested()) {
         if (totalProcessed == 0) {
@@ -311,11 +312,27 @@ void ChainAnalyzer::phaseSync() {
         _state = 0 - blockData.confirmations;                        //calculate how far behind we are
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") "; //+1 because message is related to after block is done
 
+        //batch writes in a transaction (every block in slow mode, every 100 blocks in fast mode)
+        bool startBatch = fastMode ? (_height % 100 == 0) : true;
+        bool endBatch = fastMode ? (_height % 100 == 99) : true;
+        if (startBatch) {
+            db->startTransaction();
+            inTransaction = true;
+        }
+
         //process each tx in block
         if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) { //only non asset utxo below this height
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
         }
+
+        if (endBatch && inTransaction) {
+            db->endTransaction();
+            inTransaction = false;
+        }
+
+        //periodically checkpoint WAL
+        if (!inTransaction && (fastMode ? (_height % 100 == 99) : (_height % 1000 == 999))) db->walCheckpoint();
 
 
         //show run time stats
@@ -403,6 +420,7 @@ void ChainAnalyzer::phaseSync() {
         //save the next block to be processed to the database
         db->insertBlock(blockData.height, blockData.hash, blockData.time, blockData.algo, blockData.difficulty);
     }
+    if (inTransaction) db->endTransaction();
 }
 
 void ChainAnalyzer::phasePrune() {

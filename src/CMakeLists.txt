@@ -154,11 +154,14 @@ add_executable(digiasset_core main.cpp ${SOURCE_FILES} ${HEADER_FILES} ${RPC_MET
 
 target_link_libraries(digiasset_core PRIVATE CURL::libcurl)
 target_link_libraries(digiasset_core PUBLIC sqlite3)
-target_link_libraries(digiasset_core PRIVATE ssl)
-target_link_libraries(digiasset_core PRIVATE crypto)
-target_link_libraries(digiasset_core PRIVATE pthread)
+find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
+target_link_libraries(digiasset_core PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 
-target_link_libraries(digiasset_core PRIVATE /lib/x86_64-linux-gnu/libjsoncpp.so)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+target_include_directories(digiasset_core PRIVATE ${JSONCPP_INCLUDE_DIRS})
+target_link_libraries(digiasset_core PRIVATE ${JSONCPP_LIBRARIES})
 target_link_libraries(digiasset_core PRIVATE jsonrpccpp-common)
 target_link_libraries(digiasset_core PRIVATE jsonrpccpp-client)
 
