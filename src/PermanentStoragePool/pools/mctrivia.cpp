@@ -16,6 +16,7 @@
 using namespace std;
 
 mctrivia::mctrivia() : _keepRunning(false){};
+mctrivia::~mctrivia() { stop(); }
 
 
 
@@ -143,8 +144,10 @@ void mctrivia::keepAliveTask() {
         } catch (...) {
         }
 
-        //sleep for 20 minutes
-        std::this_thread::sleep_for(std::chrono::minutes(20));
+        //sleep for 20 minutes in 1-second increments so stop() returns promptly
+        for (int i = 0; i < 1200 && _keepRunning.load(); i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
 }
 
@@ -163,7 +166,7 @@ string mctrivia::serializeMetaProcessor(const DigiByteTransaction& tx) {
     const std::set<std::string> addresses = {
             "dgb1q84h0g4lpy0prppc2507wf7ngne26thza0sntgr",
             "dgb1q8c6p9nht8055lr5fczcvc4v29hunluqv3n3gaf",
-            "dgb1qatvzudt2jey06kx8zn3a6p0nw689s9dxkjp57g"
+            "dgb1qatvzudt2jey06kx8zn3a6p0nw689s9dxkjp57g",
             "dgb1qfc9029kc8ptvqt2nuqe4sxtps2nd83kq7pugtm",
             "dgb1qhucf64cleqdme9637vukgxau8aflpk00thlq98",
             "dgb1qj4glly6ka7py8pkdme9t0vh77s0gym0vq2esee",
@@ -250,6 +253,7 @@ bool mctrivia::isAssetBad(const std::string& assetId) {
     if (currentTime - _badTime > 1200) updateBadList();
 
     //see if assetIndex in bad list
+    std::lock_guard<std::mutex> lock(_badListMutex);
     auto it = find(_badAssets.begin(), _badAssets.end(), assetId);
     return it != _badAssets.end();
 }
@@ -262,6 +266,7 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
     }
 }
 void mctrivia::updateBadList() {
+    std::lock_guard<std::mutex> lock(_badListMutex);
     try {
         //make curl request
         const string url = "https://ipfs.digiassetx.com/bad.json";
@@ -279,7 +284,6 @@ void mctrivia::updateBadList() {
                 reportAssetBad(assetId, true);
                 _badAssets.push_back(assetId);
             }
-            _badAssets.push_back(value.asString());
         }
 
         //save bad files
@@ -289,7 +293,6 @@ void mctrivia::updateBadList() {
                 reportFileBad(assetId, true);
                 _badFiles.push_back(assetId);
             }
-            _badFiles.push_back(value.asString());
         }
 
         //update bad list time

@@ -35,6 +35,7 @@ set(HEADER_FILES
         ../src/Config.h
         ../src/DigiByteCore.h
         ../src/DigiAssetConstants.h
+        ../src/utils.h
         )
 
 set(SOURCE_FILES
@@ -43,6 +44,7 @@ set(SOURCE_FILES
         tabs/SyncTab.cpp
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
+        ../src/utils.cpp
         )
 
 # --- Create the executable ---

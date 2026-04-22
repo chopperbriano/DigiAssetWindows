@@ -9,6 +9,7 @@
 
 #include "PermanentStoragePool/PermanentStoragePool.h"
 #include "utils.h"
+#include <mutex>
 
 
 class mctrivia : public PermanentStoragePool {
@@ -23,21 +24,27 @@ private:
     std::atomic<bool> _keepRunning;
     std::string _secretCode = utils::generateRandom(8, utils::CodeType::ALPHANUMERIC);
     void keepAliveTask();
-    void updateBadList();
     void _callServer(ServerCalls command, const std::string& extra = "");
 
-    std::vector<std::string> _badAssets;
-    std::vector<std::string> _badFiles;
-    unsigned int _badTime = 0;
+    std::mutex _badListMutex;
     bool _visible = true;
 
 protected:
+    std::vector<std::string> _badAssets;
+    std::vector<std::string> _badFiles;
+    unsigned int _badTime = 0;
+
     void _setConfig(const Config& config) override;
     void _reportAssetBad(const std::string& assetId) override;
     void _reportFileBad(const std::string& cid) override;
+    virtual void updateBadList();
 
 public:
     mctrivia();
+    ~mctrivia();
+
+    size_t getBadAssetCount() const { return _badAssets.size(); }
+    size_t getBadFileCount() const { return _badFiles.size(); }
 
     //called by Node Operators that subscribe to PSP
     std::string serializeMetaProcessor(const DigiByteTransaction& tx) override;                                              //if tx is part of PSP returns serialized data for processing metadata if not returns empty

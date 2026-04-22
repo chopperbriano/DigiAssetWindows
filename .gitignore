@@ -1,4 +1,5 @@
 cmake-build-debug
+cmake-build-release
 .idea
 bin/*
 bin/cache/*
@@ -6,7 +7,9 @@ bin/stream/*
 build
 build/*
 src/Version.h
+config.cfg
+debug.log
 */_*
 tests/testFiles/assetTest.*
-tests/testFiles/rpcTest.db
+tests/testFiles/rpcTest.*
 !*/.gitkeep

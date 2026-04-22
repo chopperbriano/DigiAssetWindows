@@ -28,6 +28,8 @@ protected:
 
 
 public:
+    virtual ~PermanentStoragePool() = default;
+
     //called by PoolList
     void setPoolIndexAndInitialize(unsigned int index, const Config& config);
 

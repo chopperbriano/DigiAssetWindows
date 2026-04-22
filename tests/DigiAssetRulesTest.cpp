@@ -161,6 +161,259 @@ TEST(DigiAssetRules, serialize) {
 }
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// empty() and lock()
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, empty) {
+    DigiAssetRules rules;
+    EXPECT_TRUE(rules.empty());
+
+    rules.setRewritable(true);
+    EXPECT_FALSE(rules.empty());
+
+    DigiAssetRules rules2;
+    rules2.setExpiry(1000);
+    EXPECT_FALSE(rules2.empty());
+
+    DigiAssetRules rules3;
+    rules3.setDeflationary(50);
+    EXPECT_FALSE(rules3.empty());
+}
+
+TEST(DigiAssetRules, lock) {
+    DigiAssetRules rules;
+    rules.setRewritable(true);
+    EXPECT_TRUE(rules.isRewritable());
+
+    rules.lock();
+    EXPECT_FALSE(rules.isRewritable());
+
+    // lock() on already-non-rewritable is a no-op
+    DigiAssetRules rules2;
+    EXPECT_FALSE(rules2.isRewritable());
+    rules2.lock();
+    EXPECT_FALSE(rules2.isRewritable());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expiry — never / height / time
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, expiryNever) {
+    DigiAssetRules rules;
+    EXPECT_FALSE(rules.expires());
+    // EXPIRE_NEVER is numeric_limits<uint64_t>::max() — not a block-height expiry
+    EXPECT_FALSE(rules.isExpiryHeight());
+    // Never expires regardless of height/time
+    EXPECT_FALSE(rules.getIfExpired(99999999, 9999999999ULL));
+}
+
+TEST(DigiAssetRules, expiryHeight) {
+    DigiAssetRules rules;
+    rules.setExpiry(1000); // block height 1000
+
+    EXPECT_TRUE(rules.expires());
+    EXPECT_TRUE(rules.isExpiryHeight()); // 1000 < MIN_EPOCH_VALUE
+
+    // Expired: height > 1000
+    EXPECT_TRUE(rules.getIfExpired(1001, 0));
+    EXPECT_TRUE(rules.getIfExpired(9999, 0));
+
+    // Not expired: height <= 1000
+    EXPECT_FALSE(rules.getIfExpired(1000, 0)); // strict >
+    EXPECT_FALSE(rules.getIfExpired(999, 0));
+    EXPECT_FALSE(rules.getIfExpired(0, 0));
+}
+
+TEST(DigiAssetRules, expiryTime) {
+    // Use a time well past MIN_EPOCH_VALUE (Jan 1 2020 in ms = 1577836800000)
+    const uint64_t expiryMs = DigiAssetRules::MIN_EPOCH_VALUE + 3600000ULL; // +1 hour
+    DigiAssetRules rules;
+    rules.setExpiry(expiryMs);
+
+    EXPECT_TRUE(rules.expires());
+    EXPECT_FALSE(rules.isExpiryHeight()); // >= MIN_EPOCH_VALUE → time based
+
+    // getIfExpired checks (time in seconds) >= (expiryMs / 1000)
+    uint64_t expirySeconds = expiryMs / 1000;
+    EXPECT_TRUE(rules.getIfExpired(0, expirySeconds));     // exactly at expiry
+    EXPECT_TRUE(rules.getIfExpired(0, expirySeconds + 1)); // after
+    EXPECT_FALSE(rules.getIfExpired(0, expirySeconds - 1)); // before
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Geofence
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, geofence_none) {
+    DigiAssetRules rules;
+    EXPECT_FALSE(rules.getIfGeoFenced());
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("USA"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("CAD"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive(""));
+}
+
+TEST(DigiAssetRules, geofence_requireAnyKYC) {
+    DigiAssetRules rules;
+    rules.setRequireKYC(); // ban=true, list=empty → any KYCed country allowed
+    EXPECT_TRUE(rules.getIfGeoFenced());
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("USA"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("CAD"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("AUS"));
+}
+
+TEST(DigiAssetRules, geofence_whitelist) {
+    DigiAssetRules rules;
+    rules.setRequireKYC({"USA", "CAD"}); // whitelist: only USA and CAD
+    EXPECT_TRUE(rules.getIfGeoFenced());
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("USA"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("CAD"));
+    EXPECT_FALSE(rules.getIfCountryAllowedToReceive("AUS"));
+    EXPECT_FALSE(rules.getIfCountryAllowedToReceive("GBR"));
+}
+
+TEST(DigiAssetRules, geofence_banlist) {
+    DigiAssetRules rules;
+    rules.setRequireKYC({"USA"}, true); // banlist: USA banned
+    EXPECT_TRUE(rules.getIfGeoFenced());
+    EXPECT_FALSE(rules.getIfCountryAllowedToReceive("USA"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("CAD"));
+    EXPECT_TRUE(rules.getIfCountryAllowedToReceive("AUS"));
+}
+
+TEST(DigiAssetRules, geofence_emptyWhitelist_throws) {
+    DigiAssetRules rules;
+    EXPECT_THROW(rules.setRequireKYC({}, false), DigiAssetRules::exceptionInvalidRule);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vote
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, vote) {
+    DigiAssetRules rules;
+    EXPECT_FALSE(rules.getIfVote());
+    EXPECT_FALSE(rules.getIfVoteRestricted()); // movable=true by default
+
+    vector<VoteOption> opts = {
+        {.address = "addr_yes", .label = "Yes"},
+        {.address = "addr_no", .label = "No"},
+        {.address = "addr_abstain", .label = "Abstain"},
+    };
+    rules.setVote(opts);
+    EXPECT_TRUE(rules.getIfVote());
+    EXPECT_FALSE(rules.getIfVoteRestricted()); // movable unchanged by setVote
+
+    EXPECT_TRUE(rules.getIfValidVoteAddress("addr_yes"));
+    EXPECT_TRUE(rules.getIfValidVoteAddress("addr_no"));
+    EXPECT_TRUE(rules.getIfValidVoteAddress("addr_abstain"));
+    EXPECT_FALSE(rules.getIfValidVoteAddress("addr_other"));
+    EXPECT_FALSE(rules.getIfValidVoteAddress(""));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deflation
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, deflation) {
+    DigiAssetRules rules;
+    EXPECT_EQ(rules.getRequiredBurn(), 0u);
+
+    rules.setDeflationary(250);
+    EXPECT_EQ(rules.getRequiredBurn(), 250u);
+    EXPECT_FALSE(rules.empty());
+
+    rules.setDeflationary(0);
+    EXPECT_EQ(rules.getRequiredBurn(), 0u);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Serialize / deserialize round-trips for expiry and deflation
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAssetRules, serializeDeserialize_expiryHeight) {
+    DigiAssetRules original;
+    original.setExpiry(50000);
+
+    vector<uint8_t> data;
+    serialize(data, original);
+    EXPECT_FALSE(data.empty());
+
+    DigiAssetRules restored;
+    size_t i = 0;
+    deserialize(data, i, restored);
+
+    EXPECT_TRUE(restored == original);
+    EXPECT_TRUE(restored.expires());
+    EXPECT_TRUE(restored.isExpiryHeight());
+    EXPECT_EQ(restored.getExpiry(), 50000u);
+}
+
+TEST(DigiAssetRules, serializeDeserialize_expiryTime) {
+    const uint64_t expiryMs = DigiAssetRules::MIN_EPOCH_VALUE + 86400000ULL; // +1 day
+    DigiAssetRules original;
+    original.setExpiry(expiryMs);
+
+    vector<uint8_t> data;
+    serialize(data, original);
+
+    DigiAssetRules restored;
+    size_t i = 0;
+    deserialize(data, i, restored);
+
+    EXPECT_TRUE(restored == original);
+    EXPECT_FALSE(restored.isExpiryHeight());
+    EXPECT_EQ(restored.getExpiry(), expiryMs);
+}
+
+TEST(DigiAssetRules, serializeDeserialize_deflation) {
+    DigiAssetRules original;
+    original.setDeflationary(1000);
+
+    vector<uint8_t> data;
+    serialize(data, original);
+
+    DigiAssetRules restored;
+    size_t i = 0;
+    deserialize(data, i, restored);
+
+    EXPECT_TRUE(restored == original);
+    EXPECT_EQ(restored.getRequiredBurn(), 1000u);
+}
+
+TEST(DigiAssetRules, serializeDeserialize_rewritableWithExpiry) {
+    DigiAssetRules original;
+    original.setRewritable(true);
+    original.setExpiry(999000);
+    original.setDeflationary(5);
+
+    vector<uint8_t> data;
+    serialize(data, original);
+
+    DigiAssetRules restored;
+    size_t i = 0;
+    deserialize(data, i, restored);
+
+    EXPECT_TRUE(restored == original);
+    EXPECT_TRUE(restored.isRewritable());
+    EXPECT_EQ(restored.getExpiry(), 999000u);
+    EXPECT_EQ(restored.getRequiredBurn(), 5u);
+}
+
+TEST(DigiAssetRules, serializeDeserialize_empty) {
+    DigiAssetRules original; // default: empty
+    vector<uint8_t> data;
+    serialize(data, original);
+    EXPECT_TRUE(data.empty()); // empty rules serialize to nothing
+
+    DigiAssetRules restored;
+    size_t i = 0;
+    deserialize(data, i, restored);
+    EXPECT_TRUE(restored.empty());
+}
+
+
 TEST(DigiAssetRules, deserialize) {
     size_t i = 0;
 

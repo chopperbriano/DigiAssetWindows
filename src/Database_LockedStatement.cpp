@@ -62,6 +62,7 @@ double LockedStatement::getColumnDouble(int index) {
 
 std::string LockedStatement::getColumnText(int index) {
     const unsigned char* text = sqlite3_column_text(_stmt, index);
+    if (text == nullptr) return "";
     return std::string(reinterpret_cast<const char*>(text));
 }
 
