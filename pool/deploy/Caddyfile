@@ -1,0 +1,36 @@
+# Caddy reverse proxy for a DigiAssetPoolServer.
+#
+# What this does:
+#   - Serves a static landing page (./site) at "/" and any non-API path.
+#   - Reverse-proxies the pool wire-protocol routes to the local
+#     DigiAssetPoolServer.exe listening on 127.0.0.1:14028.
+#   - Obtains and auto-renews a TLS certificate for the domain (Let's Encrypt).
+#
+# Requirements:
+#   - A DNS A/AAAA record for the domain pointing at this server's public IP.
+#   - Inbound TCP 80 and 443 reachable from the internet (Caddy needs 80 for the
+#     ACME HTTP challenge and 443 to serve HTTPS).
+#   - DigiAssetPoolServer.exe running locally with poolport=14028.
+#
+# setup-caddy.ps1 rewrites the two placeholders below (DOMAIN, SITE_ROOT) and the
+# pool port before launching Caddy. If you edit this by hand, set them yourself.
+
+{$DOMAIN} {
+	encode gzip
+
+	# Pool wire-protocol endpoints -> the pool server exe.
+	# Keep this list in sync with the routes in pool/PoolServer.cpp.
+	@api path /permanent/* /list/* /keepalive /nodes.json /map.json /bad.json
+	handle @api {
+		reverse_proxy 127.0.0.1:{$POOLPORT}
+	}
+
+	# Everything else -> the static landing page.
+	handle {
+		root * {$SITE_ROOT}
+		file_server
+	}
+
+	# Don't leak the reverse-proxy target in error pages.
+	header -Server
+}

@@ -83,6 +83,16 @@ int main() {
         config.setString("psp0payout", payout);
         config.setString("psp1payout", payout);
 
+        //Get the Permanent Storage Pool server to join. This is the pool that
+        //verifies your node and pays you for hosting. Keep the default in sync
+        //with DEFAULT_POOL_BASE in src/PermanentStoragePool/pools/mctrivia.cpp.
+        const string defaultPoolServer = "https://pool.digistamp.co";
+        cout << "Which Permanent Storage Pool server should pay you for hosting?\n";
+        cout << "Press Enter for the default (" << defaultPoolServer << ") or type another pool's URL: ";
+        string poolServer = utils::getAnswerString();
+        if (poolServer.empty()) poolServer = defaultPoolServer;
+        config.setString("psp1server", poolServer);
+
         //check if user wants to store minimal information or everything
         cout << "Unpruned mode requires 100GB of storage.  Pruned mode requires 2 GB of storage.  Unless running a service like an explorer or wallet back end Pruned Mode is recommended.\n";
         cout << "Would you like to run in pruning mode(Y/N)? ";

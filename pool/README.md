@@ -128,15 +128,38 @@ the last 7 days.
 ## Node operator setup (earning DGB)
 
 1. Run kubo (IPFS) and `DigiAssetCore` as usual.
-2. **Forward TCP port 4001** — see the requirement section above. Without this
-   you will register but never verify, and never get paid.
+2. **Forward TCP port 4001** — strongly recommended (see the port-4001 section
+   above). Forwarded nodes verify instantly; NAT'd nodes can still qualify via
+   the fallback but less reliably.
 3. Point the node at the pool by adding to `config.cfg`:
    ```
-   psp1server=http://<pool-host>:14028
+   psp1server=https://pool.digistamp.co
    ```
+   (New installs are prompted for this in the first-run wizard and default to the
+   DigiStamp pool, so most users don't need to edit anything by hand.)
 4. The node auto-generates a payout address and registers it with the pool via
    `/list`. Watch the DigiAssetCore dashboard's Payment row: `registered (no
    payouts yet)` means the pool hasn't enabled payouts; `active` means it has.
+
+## Advertising your pool ("Join my pool" snippet)
+
+There is **no in-app pool discovery** — a node only finds your pool if you tell
+people the URL. Copy-paste this to Discord/Twitter/your site:
+
+> **Join the DigiStamp Permanent Storage Pool and earn DGB for hosting DigiAssets.**
+> 1. Install DigiAsset Core for Windows: https://github.com/chopperbriano/DigiAsset_Core_Windows
+> 2. When the setup wizard asks for a pool, press Enter to accept the default
+>    (`https://pool.digistamp.co`) — or add `psp1server=https://pool.digistamp.co`
+>    to your `config.cfg`.
+> 3. Forward IPFS port 4001 on your router for reliable verification.
+> 4. Restart. Your node registers automatically; watch the dashboard's Payment row.
+
+## Publishing the pool (TLS + landing page)
+
+Clients default to `https://pool.digistamp.co`, but the pool exe only speaks
+plain HTTP on 14028. Use the Caddy reverse-proxy bootstrap in
+**[deploy/](deploy/README.md)** to put a real HTTPS front end and a landing page
+in front of the exe with one script.
 
 ---
 

@@ -1,0 +1,113 @@
+<#
+.SYNOPSIS
+    Bootstrap a Caddy reverse proxy + landing page in front of DigiAssetPoolServer.exe.
+
+.DESCRIPTION
+    Downloads Caddy, generates a resolved Caddyfile from the template in this
+    folder, copies the static landing page, opens the firewall for HTTP/HTTPS,
+    and registers a scheduled task so Caddy starts on boot. Caddy then:
+      - serves the landing page at https://<domain>/
+      - reverse-proxies the pool API routes to the local pool exe
+      - obtains and renews a TLS certificate automatically
+
+.PREREQUISITES
+    - Run in an ELEVATED PowerShell (Administrator).
+    - A DNS A record for <Domain> must already point at this server's public IP.
+    - Inbound TCP 80 and 443 must be reachable from the internet.
+    - DigiAssetPoolServer.exe should be running locally on <PoolPort>.
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\setup-caddy.ps1
+    powershell -ExecutionPolicy Bypass -File .\setup-caddy.ps1 -Domain pool.example.com -PoolPort 14028
+#>
+[CmdletBinding()]
+param(
+    [string]$Domain    = "pool.digistamp.co",
+    [int]   $PoolPort  = 14028,
+    [string]$InstallDir = "C:\DigiStampPool"
+)
+
+$ErrorActionPreference = "Stop"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Assert-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($id)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "This script must be run from an elevated (Administrator) PowerShell."
+    }
+}
+
+Write-Host "=== DigiAssetPoolServer :: Caddy reverse-proxy setup ===" -ForegroundColor Cyan
+Assert-Admin
+
+# --- 1. Layout ------------------------------------------------------------
+$caddyExe    = Join-Path $InstallDir "caddy.exe"
+$siteDir     = Join-Path $InstallDir "site"
+$caddyfile   = Join-Path $InstallDir "Caddyfile"
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+New-Item -ItemType Directory -Force -Path $siteDir    | Out-Null
+Write-Host "Install dir: $InstallDir"
+
+# --- 2. Download Caddy (official build endpoint) --------------------------
+if (Test-Path $caddyExe) {
+    Write-Host "Caddy already present, skipping download."
+} else {
+    Write-Host "Downloading Caddy for windows/amd64 ..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri "https://caddyserver.com/api/download?os=windows&arch=amd64" `
+                      -OutFile $caddyExe
+    Write-Host ("Caddy downloaded ({0:N0} bytes)." -f (Get-Item $caddyExe).Length)
+}
+
+# --- 3. Copy the landing page --------------------------------------------
+Copy-Item -Path (Join-Path $scriptDir "site\*") -Destination $siteDir -Recurse -Force
+Write-Host "Landing page copied to $siteDir"
+
+# --- 4. Generate a resolved Caddyfile from the template -------------------
+$template = Get-Content (Join-Path $scriptDir "Caddyfile") -Raw
+$resolved = $template.
+    Replace('{$DOMAIN}',   $Domain).
+    Replace('{$POOLPORT}', "$PoolPort").
+    Replace('{$SITE_ROOT}', ($siteDir -replace '\\','/'))
+Set-Content -Path $caddyfile -Value $resolved -Encoding UTF8
+Write-Host "Caddyfile written: $caddyfile"
+
+# Validate before we commit to running it.
+& $caddyExe validate --config $caddyfile --adapter caddyfile
+if ($LASTEXITCODE -ne 0) { throw "Caddyfile validation failed." }
+Write-Host "Caddyfile validated OK." -ForegroundColor Green
+
+# --- 5. Firewall: allow HTTP (ACME) + HTTPS -------------------------------
+foreach ($p in 80,443) {
+    $rule = "Caddy inbound TCP $p"
+    netsh advfirewall firewall show rule name="$rule" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        netsh advfirewall firewall add rule name="$rule" dir=in action=allow protocol=TCP localport=$p | Out-Null
+        Write-Host "Firewall rule added: $rule"
+    }
+}
+
+# --- 6. Register a scheduled task so Caddy starts on boot -----------------
+$taskName = "DigiStampCaddy"
+$action   = New-ScheduledTaskAction -Execute $caddyExe `
+             -Argument "run --config `"$caddyfile`"" -WorkingDirectory $InstallDir
+$trigger  = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+    -Principal $principal -Settings $settings -Force | Out-Null
+Write-Host "Scheduled task '$taskName' registered (starts Caddy at boot)."
+
+# --- 7. Start it now ------------------------------------------------------
+Start-ScheduledTask -TaskName $taskName
+Write-Host ""
+Write-Host "Done. Caddy is starting." -ForegroundColor Green
+Write-Host "  Landing page : https://$Domain/"
+Write-Host "  Pool API     : proxied to 127.0.0.1:$PoolPort"
+Write-Host ""
+Write-Host "Reminders:" -ForegroundColor Yellow
+Write-Host "  * DNS: $Domain must resolve to THIS server's public IP."
+Write-Host "  * Ports 80 and 443 must be reachable from the internet for TLS to issue."
+Write-Host "  * Make sure DigiAssetPoolServer.exe is running on port $PoolPort."
+Write-Host "  * First HTTPS request may take ~10-30s while the certificate is obtained."

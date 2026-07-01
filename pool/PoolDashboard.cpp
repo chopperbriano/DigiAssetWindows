@@ -462,16 +462,23 @@ void PoolDashboard::render() {
         if ((int) _logLines.size() > availableLogLines) {
             startIdx = (int) _logLines.size() - availableLogLines;
         }
+        int printed = 0;
         for (int i = startIdx; i < (int) _logLines.size(); i++) {
             out << ERASE_LINE << "  " << _logLines[i] << "\n";
+            printed++;
+        }
+        // Pad the log area with blank lines so the key hints row stays pinned
+        // to the bottom of the window (same as ConsoleDashboard's help bar).
+        for (int i = printed; i < availableLogLines; i++) {
+            out << ERASE_LINE << "\n";
         }
     }
 
-    // Key hints row — sits right after the last log line.
+    // Key hints row — pinned at the bottom thanks to the padding above.
     // Phase 3 keys dimmed since they're placeholders.
     out << ERASE_LINE
         << " [Q] Quit  [N] Nodes  [A] Assets  [H] Help"
-        << DIM << "  [P] Payouts  [E] Execute (Phase 3)" << RESET;
+        << "  [P] Preview  [E] Execute payout";
 
     // Clear everything below: wipe stale lines from prior renders or
     // window resize, so the screen is clean below the key hints.

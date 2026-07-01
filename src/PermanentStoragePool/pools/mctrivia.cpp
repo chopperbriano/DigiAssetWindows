@@ -18,11 +18,14 @@
 using namespace std;
 
 namespace {
-    // Default base URL for the pool server. Matches mctrivia's original
-    // so existing users see no change. Override by setting `psp1server` in
-    // config.cfg — e.g. to `http://127.0.0.1:14028` to point at a local
-    // DigiAssetPoolServer.exe instance.
-    const std::string DEFAULT_MCTRIVIA_BASE = "https://ipfs.digiassetx.com";
+    // Default base URL for the pool server used when `psp1server` is not set
+    // in config.cfg. Defaults to the DigiStamp pool because mctrivia's original
+    // (https://ipfs.digiassetx.com) has returned HTTP 500 on payout endpoints
+    // since ~July 2024 and no longer pays. Override by setting `psp1server`
+    // in config.cfg — e.g. `http://127.0.0.1:14028` for a local
+    // DigiAssetPoolServer.exe instance. Keep this in sync with the wizard
+    // default in src/main.cpp.
+    const std::string DEFAULT_POOL_BASE = "https://pool.digistamp.co";
 }
 
 mctrivia::mctrivia() : _keepRunning(false), _fetcherRunning(false) {}
@@ -36,7 +39,7 @@ string mctrivia::getDescription() {
     return "Originally operated by digiassetX Inc and continued to run by Matthew Cornelisse.  This pool makes sure asset metadata is always available and pays others DigiAsset Core nodes to help distribute the metadata.";
 }
 string mctrivia::getURL() {
-    return _baseUrl.empty() ? DEFAULT_MCTRIVIA_BASE : _baseUrl;
+    return _baseUrl.empty() ? DEFAULT_POOL_BASE : _baseUrl;
 }
 
 /**
@@ -129,10 +132,11 @@ void mctrivia::enable(DigiByteTransaction& tx) {
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool("psp1visible", true);
 
-    // Pool server base URL. Defaults to mctrivia's original so existing
-    // users are unaffected. Set psp1server=http://... in config.cfg to
-    // point at a different pool (e.g. a local DigiAssetPoolServer.exe).
-    _baseUrl = config.getString("psp1server", DEFAULT_MCTRIVIA_BASE);
+    // Pool server base URL. Defaults to the DigiStamp pool (mctrivia's original
+    // no longer pays — see the DEFAULT_POOL_BASE comment above). Set
+    // psp1server=http://... in config.cfg to point at a different pool (e.g. a
+    // local DigiAssetPoolServer.exe).
+    _baseUrl = config.getString("psp1server", DEFAULT_POOL_BASE);
     // Strip any trailing slash so later url construction like `_baseUrl +
     // "/permanent/..."` produces clean paths regardless of how the user
     // wrote the config value.
