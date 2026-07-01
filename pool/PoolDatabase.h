@@ -59,6 +59,12 @@ public:
     // Has the first-run snapshot already populated the db?
     bool hasPermanentData();
 
+    // Return up to `limit` random CIDs from the permanent list. Used by the
+    // verifier's NAT-tolerant fallback: it runs findprovs on these to see
+    // whether a NAT'd node has announced itself as a provider of content it
+    // is supposed to be pinning.
+    std::vector<std::string> getSampleCids(unsigned int limit);
+
     // Build the JSON body for /permanent/<page>.json: the {changes, daily, done}
     // shape mctrivia's server uses, serialized as a string the HTTP handler
     // can send straight to the client.
@@ -94,6 +100,11 @@ public:
     // Ledger totals for dashboard display.
     double getPaidTotalDgb();        // sum of all paid-out DGB
     unsigned int getPaidCount();     // number of payout transactions
+
+    // Unix time of the most recent successful payout (0 if none). Used to
+    // enforce the once-per-period spend guard so pressing [E] twice in quick
+    // succession can't double-pay.
+    int64_t getLastPayoutAt();
 
     // Pool-local config key/value store (separate from the operator's
     // editable pool.cfg; this is runtime state like "last snapshot time").

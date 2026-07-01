@@ -3,13 +3,67 @@
 > **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
 
 ## Table of Contents
-1. [Build on Windows](#build-on-windows)
-2. [Optional Build Targets](#optional-build-targets)
-3. [Install DigiByte](#install-digibyte)
-4. [Documentation](#Documentation)
-5. [Other Notes](#other-notes)
+1. [How It Works (Architecture)](#how-it-works-architecture)
+2. [Build on Windows](#build-on-windows)
+3. [Optional Build Targets](#optional-build-targets)
+4. [Install DigiByte](#install-digibyte)
+5. [Install IPFS](#install-ipfs)
+6. [Configure DigiAsset Core](#configure-digiasset-core)
+7. [Permanent Storage Pools & Getting Paid](#permanent-storage-pools--getting-paid)
+8. [Documentation](#Documentation)
+9. [Other Notes](#other-notes)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## How It Works (Architecture)
+
+DigiAsset Core is the "brain" that ties together **three separate programs**. To
+run a full node you install and run all three. There is also a **fourth,
+optional** program (`DigiAssetPoolServer.exe`) that only pool operators need.
+
+### The three things you install
+
+| # | Program | What it provides | Why DigiAsset Core needs it |
+|---|---|---|---|
+| 1 | **DigiByte Core wallet** (`digibyted`) | The DigiByte blockchain, a JSON-RPC interface, and a wallet | DigiAsset Core reads every block and transaction from it over RPC to find DigiAsset issuances/transfers. For pool payouts it also calls the wallet's `sendtoaddress`. |
+| 2 | **IPFS Desktop / kubo** | Content-addressed file storage (the actual asset images + metadata) | DigiAssets store their media on IPFS. DigiAsset Core **pins** those files so they stay available, via IPFS's HTTP API. |
+| 3 | **DigiAsset Core** (this repo) | The chain analyzer, asset database, RPC server, web UI, and dashboard | The coordinator: reads the chain from DigiByte Core, decodes DigiAsset data, and pins the right files on IPFS. |
+
+DigiByte Core and IPFS are external programs you download and install. DigiAsset
+Core is what you build here (or download from [Releases](https://github.com/chopperbriano/DigiAsset_Core_Windows/releases)).
+
+### The executables this repo builds
+
+| Executable | Needed? | What it does |
+|---|---|---|
+| **`DigiAssetCore.exe`** | **Required** | The node itself. One process runs the sync engine, asset database, JSON-RPC server, the built-in web UI (http://localhost:8090), and the console dashboard. **This is the program you run.** |
+| `DigiAssetCore-cli.exe` | Optional | A command-line client that sends RPC commands to a running `DigiAssetCore.exe` (query assets, trigger actions). Useful for scripting; the web UI covers most needs. |
+| `DigiAssetPoolServer.exe` | Optional — **pool operators only** | A standalone pool server that pays node operators for hosting. Most users never run this. See [Permanent Storage Pools & Getting Paid](#permanent-storage-pools--getting-paid). |
+
+You do **not** need a separate web-server exe — the web UI is built into
+`DigiAssetCore.exe`.
+
+### How data flows
+
+```
+        reads blocks/txs (RPC :14022)            pins/serves files (API :5001)
+ DigiByte Core  ──────────────────────►  DigiAsset Core  ──────────────────────►  IPFS (kubo)
+ blockchain + wallet                     DigiAssetCore.exe                        file storage
+        ▲                                     │      │
+        │  sendtoaddress (pool payouts)       │      └──► web UI  http://localhost:8090
+        └─────────────────────────────────────┘
+```
+
+### Ports at a glance
+
+| Port | Program | Purpose |
+|---|---|---|
+| 14022 | DigiByte Core | JSON-RPC — DigiAsset Core reads the chain and sends payouts here |
+| 12024 | DigiByte Core | P2P network (blockchain sync) |
+| 5001 | IPFS (kubo) | HTTP API (pin / cat / findprovs) |
+| 4001 | IPFS (kubo) | Swarm P2P — other peers connect here. **Forward this if you want pool payouts** (see below) |
+| 8090 | DigiAsset Core | Built-in web UI |
+| 14028 | DigiAssetPoolServer | Pool server HTTP (operators only) |
 
 ## Build on Windows
 
@@ -92,6 +146,11 @@ cmake .. -DBUILD_CLI=ON -DBUILD_WEB=ON -DBUILD_TEST=ON
 | `BUILD_WEB` | `digiasset_core-web.exe` | Standalone web server (legacy, now built into main exe) |
 | `BUILD_TEST` | `Google_Tests_run.exe` | Google Test suite |
 
+`DigiAssetPoolServer.exe` (the optional pool server) is **built automatically on
+Windows/MSVC** — no flag needed. It lands in `build\pool\Release\`. You only run
+it if you operate your own Permanent Storage Pool; see
+[Permanent Storage Pools & Getting Paid](#permanent-storage-pools--getting-paid).
+
 ### Performance Tuning
 
 For faster initial blockchain sync, add to `config.cfg`:
@@ -156,9 +215,65 @@ Inbound TCP:5001
 Inbound TCP:12024
 ```
 
+## Permanent Storage Pools & Getting Paid
+
+DigiAssets keep their files on IPFS, but IPFS only holds a file while **someone
+pins it**. **Permanent Storage Pools (PSPs)** are the incentive layer that keeps
+those files alive: when an asset is created, the creator pays a small fee, and
+that fee is shared over time among the node operators who agree to permanently
+host ("pin") the asset's files. In short — **run a node, host the files, earn
+DGB.**
+
+There are two roles. Most people are node operators; only pool runners are pool
+operators.
+
+### Node operator — you want to earn DGB for hosting
+
+1. Run DigiByte Core + IPFS + `DigiAssetCore.exe` as described above.
+2. In `config.cfg`, subscribe to a pool and set your payout address (the `#` is
+   the pool number; see `example.cfg` for all keys):
+   ```
+   psp1subscribe=1
+   psp1payout=<your DGB address>          # or an _label to auto-generate one
+   psp1server=http://<pool-host>:14028    # the pool server you're joining
+   ```
+3. **Strongly recommended: forward IPFS port 4001** (or set `Addresses.Announce`
+   in kubo). The pool verifies you're actually hosting before it pays you.
+   Forwarded nodes verify instantly and reliably. Nodes behind NAT can still
+   qualify through a fallback provider-record check, but it's slower and less
+   reliable — so forwarding the port is the difference between "paid promptly"
+   and "maybe paid eventually." Details in **[pool/README.md](pool/README.md)**.
+4. Watch the dashboard's **Payment** row for your status (`registered (no payouts
+   yet)` → the pool hasn't enabled payouts; `active` → it has).
+
+> **Heads-up about the original pool.** The pool historically run by Matthew
+> Cornelisse (`ipfs.digiassetx.com`, pool #1) has not paid anyone since ~July
+> 2024 — its payout endpoints return HTTP 500. Registration and hosting still
+> work, but no DGB arrives. This is exactly why this fork ships a pool server so
+> the community can run **their own** paying pools.
+
+### Pool operator — you want to run a pool and pay hosts
+
+Run **`DigiAssetPoolServer.exe`**. It is a self-contained server that:
+
+- serves the canonical permanent-asset list (`/permanent/<page>.json`),
+- accepts node registrations (peerId + payout address) and keepalives,
+- **verifies** that each registered node is really hosting the content (direct
+  IPFS dial, with a NAT-tolerant DHT fallback), and
+- **pays** verified nodes from your DigiByte Core wallet, on your explicit
+  command, with a spend budget and a per-period guard.
+
+It's a *separate* program from `DigiAssetCore.exe` on purpose: it links its own
+minimal server/dashboard so it can run independently, and it only exists because
+the upstream pool went dormant. Full setup — `pool.cfg` keys, the DigiByte Core
+RPC credentials it needs, the verification model, and the `[P]`/`[E]` payout
+flow — is documented in **[pool/README.md](pool/README.md)**.
+
 ## Documentation
 
 The web UI is built into `DigiAssetCore.exe`. Once running, open http://localhost:8090/ in your browser.
+
+For running a paying Permanent Storage Pool, see **[pool/README.md](pool/README.md)**.
 
 ## Credits
 

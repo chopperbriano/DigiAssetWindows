@@ -75,6 +75,24 @@ void PoolVerifier::loop() {
             }
         } catch (...) {}
 
+        // Build the NAT-tolerant fallback state once per iteration: sample a
+        // few permanent-list CIDs, collect who the DHT says provides them, and
+        // confirm at least one is actually fetchable. If nothing is fetchable
+        // we leave `providers` empty so the fallback is disabled and we rely on
+        // direct dial only — this stops stale provider records from passing a
+        // node when the content (or our own IPFS node) is effectively dead.
+        std::set<std::string> providers;
+        bool contentLive = false;
+        try {
+            for (const auto& cid: _db.getSampleCids(3)) {
+                if (!_running.load()) break;
+                if (!contentLive && fetchable(cid)) contentLive = true;
+                auto provs = findProviders(cid);
+                providers.insert(provs.begin(), provs.end());
+            }
+        } catch (...) {}
+        if (!contentLive) providers.clear();
+
         for (const auto& peer: peers) {
             if (!_running.load()) break;
             _probesAttempted.fetch_add(1);
@@ -86,7 +104,7 @@ void PoolVerifier::loop() {
                 isSelf = true;
             }
 
-            bool ok = isSelf ? true : verifyPeer(peer);
+            bool ok = isSelf ? true : verifyPeer(peer, providers);
             if (ok) {
                 _probesSucceeded.fetch_add(1);
                 _db.recordVerifySuccess(peer);
@@ -103,7 +121,72 @@ void PoolVerifier::loop() {
     }
 }
 
-bool PoolVerifier::verifyPeer(const std::string& peerIdOrMultiaddr) {
+bool PoolVerifier::verifyPeer(const std::string& peerIdOrMultiaddr,
+                             const std::set<std::string>& providers) {
+    // 1) Strongest proof: can we dial the peer right now?
+    if (dialPeer(peerIdOrMultiaddr)) return true;
+
+    // 2) NAT-tolerant fallback: is this peer in the DHT provider records for
+    //    content it should be pinning? `providers` is already gated on the
+    //    content being fetchable, so an empty set means "don't trust the DHT
+    //    this round" and we fail closed. Match by substring so a bare peerId
+    //    and a /p2p/<id> multiaddr form both resolve.
+    for (const auto& prov: providers) {
+        if (!prov.empty() && peerIdOrMultiaddr.find(prov) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::set<std::string> PoolVerifier::findProviders(const std::string& cid) {
+    std::set<std::string> out;
+    if (cid.empty()) return out;
+
+    // routing/findprovs streams newline-delimited JSON progress objects; the
+    // provider peerIds live in the non-empty "ID" fields of the Responses
+    // arrays (the top-level per-object "ID" is empty). 20s cap: findprovs can
+    // run long, and we'd rather move on than block the verify loop.
+    const std::string url = _ipfsApiBase + "routing/findprovs?arg=" +
+                            urlEscape(cid) + "&num-providers=20";
+    std::string body;
+    try {
+        body = CurlHandler::post(url, {}, 20000);
+    } catch (...) {
+        return out;
+    }
+
+    size_t pos = 0;
+    const std::string key = "\"ID\":\"";
+    while ((pos = body.find(key, pos)) != std::string::npos) {
+        pos += key.size();
+        size_t end = body.find('"', pos);
+        if (end == std::string::npos) break;
+        std::string id = body.substr(pos, end - pos);
+        if (!id.empty()) out.insert(id);
+        pos = end + 1;
+    }
+    return out;
+}
+
+bool PoolVerifier::fetchable(const std::string& cid) {
+    if (cid.empty()) return false;
+    // Pull only the first chunk — we just need to prove the content resolves
+    // via bitswap, not download the whole file. On failure kubo returns a JSON
+    // error envelope with "Type":"error"; a real file's first bytes won't.
+    const std::string url = _ipfsApiBase + "cat?arg=" + urlEscape(cid) + "&length=256";
+    std::string body;
+    try {
+        body = CurlHandler::post(url, {}, 20000);
+    } catch (...) {
+        return false;
+    }
+    if (body.empty()) return false;
+    if (body.find("\"Type\":\"error\"") != std::string::npos) return false;
+    return true;
+}
+
+bool PoolVerifier::dialPeer(const std::string& peerIdOrMultiaddr) {
     // Normalize to a multiaddr. If the input already contains '/', assume
     // it's a multiaddr like /ip4/1.2.3.4/tcp/4001/p2p/<id>. If it's a bare
     // peerId, wrap it in /p2p/<id> so kubo's swarm/connect does a DHT lookup.

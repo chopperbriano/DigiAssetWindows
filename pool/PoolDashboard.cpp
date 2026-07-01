@@ -107,16 +107,30 @@ namespace {
             return "ERROR: HTTP " + std::to_string(status) + " " + respBody;
         }
 
-        // Parse txid from {"result":"<txid>","error":null,...}
+        // DigiByte returns {"result":"<txid>","error":null,...} on success and
+        // {"result":null,"error":{...}} on failure. Check "error" FIRST — if it's
+        // a non-null object the send failed, and we must never mistake the error
+        // body for a txid (which would record a failed payout as SENT).
+        size_t epos = respBody.find("\"error\"");
+        if (epos != std::string::npos) {
+            size_t ec = respBody.find(':', epos + 7);
+            size_t ev = (ec != std::string::npos) ? respBody.find_first_not_of(" \t", ec + 1) : std::string::npos;
+            if (ev != std::string::npos && respBody.compare(ev, 4, "null") != 0) {
+                return "ERROR: " + respBody;
+            }
+        }
+        // Parse the result, which must be a JSON string (the txid).
         size_t rpos = respBody.find("\"result\"");
         if (rpos == std::string::npos) return "ERROR: no result field in response";
-        size_t q1 = respBody.find('"', respBody.find(':', rpos) + 1);
-        size_t q2 = (q1 != std::string::npos) ? respBody.find('"', q1 + 1) : std::string::npos;
-        if (q1 == std::string::npos || q2 == std::string::npos) {
-            // result might be null (error case)
+        size_t rc = respBody.find(':', rpos + 8);
+        size_t rv = (rc != std::string::npos) ? respBody.find_first_not_of(" \t", rc + 1) : std::string::npos;
+        if (rv == std::string::npos || respBody[rv] != '"') {
+            // result is null or not a string — treat as failure.
             return "ERROR: " + respBody;
         }
-        return respBody.substr(q1 + 1, q2 - q1 - 1); // the txid
+        size_t q2 = respBody.find('"', rv + 1);
+        if (q2 == std::string::npos) return "ERROR: " + respBody;
+        return respBody.substr(rv + 1, q2 - rv - 1); // the txid
     }
 }
 
@@ -244,6 +258,16 @@ void PoolDashboard::processInput() {
             try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
             std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
 
+            // Once-per-period spend guard: poolspendperperiod is a *per period*
+            // budget, so refuse a second payout until the period has elapsed.
+            // This stops a double [E] press (or an itchy operator) from paying
+            // the full budget twice in a row. Default period is 24h.
+            int periodHours = 24;
+            try { if (cfg.count("poolpayoutperiodhours")) periodHours = std::stoi(cfg["poolpayoutperiodhours"]); } catch (...) {}
+            int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count();
+            int64_t lastPayout = _db.getLastPayoutAt();
+
             auto targets = _db.getVerifiedPayoutTargets();
 
             if (!enabled) {
@@ -254,6 +278,12 @@ void PoolDashboard::processInput() {
                 addLog("Cannot execute: no verified nodes eligible for payout.");
             } else if (rpcUser.empty()) {
                 addLog("Cannot execute: rpcuser not set in pool.cfg (needed for wallet RPC).");
+            } else if (periodHours > 0 && lastPayout > 0 &&
+                       (now - lastPayout) < (int64_t) periodHours * 3600) {
+                int64_t remain = (int64_t) periodHours * 3600 - (now - lastPayout);
+                addLog("Cannot execute: last payout was " + formatDuration(now - lastPayout) +
+                       " ago. Next allowed in " + formatDuration(remain) +
+                       " (poolpayoutperiodhours=" + std::to_string(periodHours) + ").");
             } else {
                 double perNode = spend / (double) targets.size();
                 char buf[64]; snprintf(buf, sizeof(buf), "%.8f", perNode);
@@ -273,10 +303,10 @@ void PoolDashboard::processInput() {
         } else if (ch == 'h' || ch == 'H' || ch == '?') {
             addLog("--- Help ---");
             addLog("Q = Quit   N = Node count   A = Asset count   H = This help");
-            addLog("P = Pending payouts (Phase 3 TBD)   E = Execute payout (Phase 3 TBD)");
+            addLog("P = Preview payouts (read-only)   E = Execute payout (asks Y/N to confirm)");
             addLog("Verified row: nodes that passed the dial-back swarm/connect probe.");
             addLog("Failed out: nodes with 3+ consecutive probe failures (excluded from /nodes.json).");
-            addLog("Payouts: 'disabled' until poolpayouts=1 is set in pool.cfg + Phase 3 ships.");
+            addLog("Payouts: 'disabled' until poolpayouts=1 is set in pool.cfg.");
         }
     }
 #endif

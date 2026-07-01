@@ -1,0 +1,152 @@
+# DigiAssetPoolServer
+
+An optional companion executable (`DigiAssetPoolServer.exe`) that lets an
+operator run their **own** Permanent Storage Pool server for the Windows fork,
+instead of depending on `ipfs.digiassetx.com` (which has returned HTTP 500 on
+payout-related endpoints since ~July 2024). It re-implements mctrivia's pool
+wire protocol: serving the permanent-asset list, accepting node registrations,
+verifying that registered nodes actually host the content, and — if the
+operator opts in — paying verified nodes in DGB.
+
+There are two roles:
+
+- **Pool operator** — runs `DigiAssetPoolServer.exe`, owns the DGB wallet, and
+  decides whether/when to pay.
+- **Node operator** — runs `DigiAssetCore` + an IPFS (kubo) node, points it at a
+  pool via `psp1server=`, and registers a payout address to earn DGB for hosting.
+
+> New here? Read the [architecture overview](../readme.md#how-it-works-architecture)
+> in the top-level readme first — it explains how DigiByte Core, IPFS, and
+> DigiAssetCore fit together. This file covers only the pool server on top.
+
+### How the pieces talk
+
+```
+  Node operators (many)                        Pool operator (one)
+  ─────────────────────                        ───────────────────
+  DigiAssetCore.exe                            DigiAssetPoolServer.exe
+    │  register peerId + payout addr  ──POST /list──►  records node in pool.db
+    │  keepalive                      ──POST /keepalive►
+    │  fetch asset list              ◄─GET /permanent◄  serves canonical CIDs
+  IPFS (kubo)                                    │
+    ▲   pins the pool's CIDs                     │ verify: dial peer, else
+    └────────────────────────────────────────────┘ findprovs + bitswap
+                                                 │
+                                                 │ [E] pay verified nodes
+                                                 ▼
+                              DigiByte Core wallet ──sendtoaddress──► node payout addrs
+```
+
+The pool never holds anyone's coins in escrow: it reads its own DigiByte Core
+wallet and sends DGB directly to each verified node's registered address when the
+operator presses `[E]`.
+
+---
+
+## ⚠️ Node operators: forward IPFS port 4001 (strongly recommended)
+
+**This is the most common reason a node is slow to start earning — forward the
+port and you remove all doubt.**
+
+Before paying anyone, the pool **verifies** each registered node two ways:
+
+1. **Direct dial** (`swarm/connect`) — the strongest proof. Works when your node
+   is reachable.
+2. **Provider-record fallback** — if the dial fails, the pool checks the DHT
+   (`findprovs`) to see whether your peerId is announced as a provider of the
+   permanent-list content you should be pinning, and confirms that content is
+   actually fetchable. This is **NAT-tolerant**, so a node behind a home router
+   can still verify and get paid.
+
+A node passes if **either** check succeeds, so port-forwarding is **not strictly
+required** — but it is strongly recommended, because the fallback depends on the
+DHT having propagated your provider records (which can lag on home routers) and
+is a weaker signal overall. **Forwarding the port makes you verify immediately
+and reliably.**
+
+To be reliably verifiable:
+
+1. **Forward TCP port 4001** (IPFS swarm port) on your router to the machine
+   running kubo. If you changed kubo's `Addresses.Swarm` port, forward that one.
+2. **Announce a reachable address** — set `Addresses.Announce` in your kubo
+   config to your public `/ip4/<WAN-IP>/tcp/4001` (the DigiAssetCore dashboard's
+   `[F]` key will do this for you when it detects port-open-but-not-announced).
+
+If you are behind CGNAT and cannot open a port, you may still earn via the
+provider-record fallback, but verification will be less reliable — expect delays
+and occasional missed periods until your provider records propagate.
+
+**Check your reachability:**
+
+- In the DigiAssetCore dashboard, press `[P]` (runs an `ifconfig.co/port/4001`
+  reachability check) — it should report the port as open.
+- From another machine: `ipfs swarm connect /ip4/<your-WAN-IP>/tcp/4001/p2p/<your-peerId>`
+  should succeed.
+
+> Pool operators: please still advertise the port-4001 recommendation wherever
+> you promote your pool (Discord/Twitter/website). Forwarded nodes verify
+> instantly; NAT'd nodes work but are less reliable.
+
+---
+
+## Pool operator setup
+
+Build produces `build/pool/Release/DigiAssetPoolServer.exe`. It reads `pool.cfg`
+from the working directory. Keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `poolport` | `14028` | TCP port the pool server listens on |
+| `pooldbpath` | `pool.db` | sqlite file for pool state |
+| `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
+| `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
+| `poolspendperperiod` | *(unset)* | Total DGB budget paid out **per period**, split equally across verified nodes. Required before `[E]` will run. |
+| `poolpayoutperiodhours` | `24` | Minimum hours between payouts. The `[E]` key refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
+| `rpcuser` | *(unset)* | DigiByte Core RPC username — required for the wallet `sendtoaddress` call. Copy from your DigiByte Core config. |
+| `rpcpassword` | *(unset)* | DigiByte Core RPC password. |
+| `rpcport` | `14022` | DigiByte Core RPC port. |
+
+The pool talks to a **local** DigiByte Core over RPC at `127.0.0.1:<rpcport>`
+using these credentials, so DigiByte Core must be running with `server=1` and a
+matching `rpcuser`/`rpcpassword`, and its wallet must be funded and **unlocked**.
+
+### Payout flow
+
+- `[P]` — **preview** (read-only): shows the eligible verified nodes, the
+  per-node amount (`poolspendperperiod / N`), and totals paid to date.
+- `[E]` — **execute**: validates config, then asks `Y/N` to confirm before
+  sending. Refuses if `poolpayouts=0`, no budget is set, no verified nodes are
+  eligible, `rpcuser` is missing, or the last payout was within
+  `poolpayoutperiodhours`.
+
+A node is **eligible for payout** only if it was verified (reachable) within the
+last 24h, has fewer than 3 consecutive verification failures, and was seen in
+the last 7 days.
+
+---
+
+## Node operator setup (earning DGB)
+
+1. Run kubo (IPFS) and `DigiAssetCore` as usual.
+2. **Forward TCP port 4001** — see the requirement section above. Without this
+   you will register but never verify, and never get paid.
+3. Point the node at the pool by adding to `config.cfg`:
+   ```
+   psp1server=http://<pool-host>:14028
+   ```
+4. The node auto-generates a payout address and registers it with the pool via
+   `/list`. Watch the DigiAssetCore dashboard's Payment row: `registered (no
+   payouts yet)` means the pool hasn't enabled payouts; `active` means it has.
+
+---
+
+## Notes / current limitations
+
+- **Verification is hybrid** — direct dial first, then a DHT provider-record +
+  bitswap-fetch fallback for NAT'd nodes (see the port-4001 section). The
+  fallback proves the node *announced* and the content is *retrievable*, not
+  that this specific node served the bytes; a determined actor could game it, so
+  it's a reasonable v1 for an operator-approved pool but not Sybil-proof.
+- **Reward is a flat split** of `poolspendperperiod` across verified nodes — no
+  weighting by bytes served or uptime yet.
+- The pool exe is **Windows-only** for now (`if(WIN32 AND MSVC)` in CMake).

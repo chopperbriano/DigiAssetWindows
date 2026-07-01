@@ -328,6 +328,18 @@ unsigned int PoolDatabase::getPaidCount() {
     return count;
 }
 
+int64_t PoolDatabase::getLastPayoutAt() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql = "SELECT COALESCE(MAX(paidAt), 0) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";
+    sqlite3_stmt* stmt = nullptr;
+    int64_t last = 0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) last = sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    return last;
+}
+
 void PoolDatabase::insertPermanentAsset(const std::string& assetId,
                                         const std::string& txHash,
                                         const std::string& cid,
@@ -351,6 +363,24 @@ void PoolDatabase::insertPermanentAsset(const std::string& assetId,
     sqlite3_bind_int64(stmt, 5, now);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+}
+
+std::vector<std::string> PoolDatabase::getSampleCids(unsigned int limit) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<std::string> out;
+    const char* sql =
+        "SELECT cid FROM permanent_assets WHERE cid IS NOT NULL AND cid != '' "
+        "ORDER BY RANDOM() LIMIT ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, (int) limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* c = sqlite3_column_text(stmt, 0);
+            if (c) out.emplace_back((const char*) c);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
 }
 
 void PoolDatabase::setPermanentPageDone(unsigned int page, bool done, const std::string& daily) {
