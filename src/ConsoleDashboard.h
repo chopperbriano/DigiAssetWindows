@@ -155,6 +155,14 @@ private:
     // node) can confirm our announced multiaddrs are actually dialable.
     void printSwarmConnectCommands();
 
+    // [N] handler: fetch the configured pool's /nodes.json, list the peerIds it
+    // reports online, and self-check whether our own node is among them.
+    void listPoolNodes();
+
+    // Resolve the configured pool base URL (psp1server) with a sane default and
+    // no trailing slash. Shared by checkPspRegistration() and listPoolNodes().
+    std::string getConfiguredPoolBase();
+
     // Console dimensions
     int _width = 80;
     int _height = 25;

@@ -6,6 +6,7 @@
 #include "AppMain.h"
 #include "Config.h"
 #include "CurlHandler.h"
+#include "IPFS.h"
 #include "Log.h"
 #include "NodeStats.h"
 #include "PermanentStoragePool/pools/mctrivia.h"
@@ -186,6 +187,16 @@ void ConsoleDashboard::processInput() {
                     std::thread([this]() { printSwarmConnectCommands(); }).detach();
                 }
                 break;
+            case 'n':
+            case 'N':
+                // List the nodes the pool sees online and self-check whether
+                // OUR node is among them.
+                {
+                    Log* log = Log::GetInstance();
+                    log->addMessage("Fetching pool node list...");
+                    std::thread([this]() { listPoolNodes(); }).detach();
+                }
+                break;
             case 'h':
             case 'H':
             case '?':
@@ -277,7 +288,7 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("--- Keyboard Shortcuts ---");
                     log->addMessage("Q = Quit       A = Asset count    P = Port check");
                     log->addMessage("L = Log level  V = Verify IPFS    F = Fix IPFS announce");
-                    log->addMessage("H = Help menu  1-6 = Help sections");
+                    log->addMessage("N = Pool nodes + self-check       H = Help menu  1-6 = Help sections");
                 }
                 break;
             default:
@@ -1180,24 +1191,37 @@ void ConsoleDashboard::checkPermanentCoverage() {
     NodeStats::instance().setCoverage(tracked, have);
 }
 
+std::string ConsoleDashboard::getConfiguredPoolBase() {
+    std::string base;
+    try {
+        Config config("config.cfg");
+        base = config.getString("psp1server", "https://pool.digistamp.co");
+    } catch (...) {
+        base = "https://pool.digistamp.co";
+    }
+    if (base.empty()) base = "https://pool.digistamp.co";
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    return base;
+}
+
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
 
-    // map.json is anonymized geo data — entries are {version,country,region,city,
-    // longitude,latitude} only, no payout addresses or peer IDs. So all we can
-    // tell from it is "the pool server is up" and "how many nodes it sees online".
-    // Anything stronger (am I registered, am I being paid) requires a per-node
-    // endpoint mctrivia hasn't exposed.
+    // Count the nodes the CONFIGURED pool (psp1server) reports online. We use
+    // /nodes.json (array of {id: peerId}) so the count reflects the pool this
+    // node actually uses — not a hardcoded server. Press [N] to list them and
+    // self-check whether our node is included.
     //
     // Do the HTTP fetch OUTSIDE the lock so we don't block render() for 5s on a
     // slow network. Only grab the lock when committing the result.
     try {
-        std::string mapResponse = CurlHandler::get("https://ipfs.digiassetx.com/map.json", 5000);
+        std::string url = getConfiguredPoolBase() + "/nodes.json";
+        std::string resp = CurlHandler::get(url, 5000);
         int nodeCount = 0;
         size_t pos = 0;
-        while ((pos = mapResponse.find("\"version\"", pos)) != std::string::npos) {
+        while ((pos = resp.find("\"id\"", pos)) != std::string::npos) {
             nodeCount++;
-            pos++;
+            pos += 4;
         }
         std::lock_guard<std::mutex> lock(_pspStatusMutex);
         _pspNodeCount = nodeCount;
@@ -1207,6 +1231,78 @@ void ConsoleDashboard::checkPspRegistration() {
         std::lock_guard<std::mutex> lock(_pspStatusMutex);
         _pspStatus = "Pool unreachable";
         // don't cache failure — retry next refresh
+    }
+}
+
+void ConsoleDashboard::listPoolNodes() {
+    Log* log = Log::GetInstance();
+
+    // Normalize any peerId or multiaddr to the bare peerId (the final
+    // /p2p/<id> segment), so we can compare our own id against the pool's list
+    // regardless of which form each side stored.
+    auto barePeer = [](std::string s) -> std::string {
+        size_t p = s.rfind("/p2p/");
+        if (p != std::string::npos) s = s.substr(p + 5);
+        size_t slash = s.find('/');
+        if (slash != std::string::npos) s = s.substr(0, slash);
+        return s;
+    };
+
+    // Our own peerId (for the self-check).
+    std::string myId;
+    try {
+        IPFS* ipfs = AppMain::GetInstance()->getIPFSIfSet();
+        if (ipfs) myId = barePeer(ipfs->getPeerId());
+    } catch (...) {}
+
+    std::string base = getConfiguredPoolBase();
+    std::string url = base + "/nodes.json";
+    log->addMessage("--- Pool Nodes (" + url + ") ---");
+
+    std::string resp;
+    try {
+        resp = CurlHandler::get(url, 8000);
+    } catch (...) {
+        log->addMessage("  Could not reach the pool's /nodes.json. Is psp1server correct and the pool up?");
+        return;
+    }
+
+    // Parse each "id":"<value>" entry.
+    std::vector<std::string> ids;
+    size_t pos = 0;
+    while ((pos = resp.find("\"id\"", pos)) != std::string::npos) {
+        size_t colon = resp.find(':', pos + 4);
+        if (colon == std::string::npos) break;
+        size_t q1 = resp.find('"', colon + 1);
+        if (q1 == std::string::npos) break;
+        size_t q2 = resp.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        ids.push_back(resp.substr(q1 + 1, q2 - q1 - 1));
+        pos = q2 + 1;
+    }
+
+    if (ids.empty()) {
+        log->addMessage("  The pool reports 0 nodes online.");
+    } else {
+        log->addMessage("  " + std::to_string(ids.size()) + " node(s) online:");
+    }
+
+    bool foundSelf = false;
+    for (const auto& id : ids) {
+        std::string bare = barePeer(id);
+        bool isSelf = (!myId.empty() && bare == myId);
+        if (isSelf) foundSelf = true;
+        log->addMessage("   " + bare + (isSelf ? "   <-- YOU" : ""));
+    }
+
+    // Self-check summary.
+    if (myId.empty()) {
+        log->addMessage("  Self-check: could not read your own peerId (is IPFS running?).");
+    } else if (foundSelf) {
+        log->addMessage("  Self-check: OK - your node IS registered and visible in this pool.");
+    } else {
+        log->addMessage("  Self-check: your node is NOT listed. Your peerId: " + myId);
+        log->addMessage("    Registration can take a few minutes; forwarding IPFS port 4001 helps.");
     }
 }
 
