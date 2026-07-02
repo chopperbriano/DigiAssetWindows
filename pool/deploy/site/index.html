@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DigiStamp Permanent Storage Pool</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="alternate icon" href="favicon.svg">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -181,6 +183,36 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
           '<tr><td colspan="4" class="muted">Stats temporarily unavailable.</td></tr>';
       });
   }
+  // Copy-address button (wired once). Uses the async Clipboard API on HTTPS,
+  // with an execCommand fallback for older browsers / non-secure contexts.
+  var copyBtn = document.getElementById("copyBtn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", function () {
+      var addr = (document.getElementById("donateAddr").textContent || "").trim();
+      if (!addr || addr.charAt(0) === "(" || addr.indexOf("loading") === 0) return;
+      var feedback = function (ok) {
+        copyBtn.textContent = ok ? "Copied!" : "Copy failed";
+        setTimeout(function () { copyBtn.textContent = "Copy address"; }, 1500);
+      };
+      var fallback = function () {
+        try {
+          var ta = document.createElement("textarea");
+          ta.value = addr;
+          ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          var ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+          feedback(ok);
+        } catch (e) { feedback(false); }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(addr).then(function () { feedback(true); }, fallback);
+      } else {
+        fallback();
+      }
+    });
+  }
+
   load();
   setInterval(load, 60000); // refresh once a minute
 })();
