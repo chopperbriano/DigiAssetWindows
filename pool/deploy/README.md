@@ -80,6 +80,52 @@ Edit `site/index.html` here, re-run `setup-caddy.ps1` (it re-copies `site/`), or
 copy the file straight into `<InstallDir>\site\`. Caddy serves changes
 immediately — no restart needed.
 
+## Starting the stack + backups
+
+Two helper scripts (also in this folder) run the day-to-day operations. Copy them
+next to your data, or run them in place with a `-Root` pointing at the data
+folder (default `C:\DigiAssetWindows`).
+
+### `start-digistamp.ps1` — start everything after a reboot
+
+You start the **DigiByte Core Windows client (wallet) yourself**. Then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
+```
+
+It waits for DigiByte Core's RPC to respond, checks the IPFS API is up, launches
+`DigiAssetCore.exe` and `DigiAssetPoolServer.exe` (each in its own window, from
+the data folder so they read their configs), and makes sure the `DigiStampCaddy`
+website task is running. It skips anything already running, so it's safe to
+re-run.
+
+### `backup-digistamp.ps1` — rotated data backup
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\backup-digistamp.ps1
+```
+
+Copies the small, precious data (`pool.db` ledger/registrations, `config.cfg`,
+`pool.cfg`, `local.db`) to `<Root>\backups\backup-<timestamp>\`, backs up the
+DigiByte wallet via the `backupwallet` RPC, and keeps the newest 7 (`-Keep N`).
+The big re-syncable `chain.db` is excluded unless you pass `-IncludeChain`.
+
+**Best run while the apps are stopped** (SQLite snapshot is cleanest then) — so
+the natural pattern is: **on boot, back up first, then start.** Register a
+"backup then start" at logon with Task Scheduler:
+
+```powershell
+$backup = 'powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\backup-digistamp.ps1'
+$start  = 'powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\start-digistamp.ps1'
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-Command `"& {$backup; $start}`""
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName DigiStampBoot -Action $action -Trigger $trigger -RunLevel Highest -Force
+```
+
+(You still launch the DigiByte Core wallet manually; `start-digistamp.ps1` waits
+for it, so ordering is fine either way.)
+
 ## Adapting to Linux
 
 The `Caddyfile` itself is cross-platform. On Linux, install Caddy from the
