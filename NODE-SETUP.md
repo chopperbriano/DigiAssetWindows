@@ -9,6 +9,25 @@ DigiByte Core (wallet)  →  DigiAsset Core (this)  →  IPFS (file storage)
    you install once          installer sets up          installer sets up
 ```
 
+## Be realistic about earnings 🙂
+
+Please don't do this to get rich — do it to help keep DigiByte's asset data
+alive. A few honest points so there are no surprises:
+
+- **The amounts are small.** This is a tip jar for hosting, not a salary.
+- **You're only paid when there's DGB to pay out.** The pool pays from a shared
+  treasury funded by asset-creation fees and donations. When the treasury has
+  funds, they're split among all verified nodes; when it's empty, nobody is paid
+  that period — the pool never pays money it doesn't have.
+- **It's a share, not a fixed rate.** What you receive depends on how much is in
+  the treasury and how many nodes are sharing it.
+- **You must be verified** (reachable — see the port-4001 step) to be included at
+  all.
+
+Think of it as: contribute a little storage, help the network, and earn a bit of
+DGB when the pool has it to give. You can watch the live treasury balance and
+every payout at https://pool.digistamp.co.
+
 ## 1. One-click install
 
 Open **PowerShell as Administrator** and paste this single line:

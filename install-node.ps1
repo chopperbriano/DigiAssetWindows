@@ -63,6 +63,10 @@ checks for it and guides you), and you will forward port 4001 on your home
 router. This does NOT spend money or touch your wallet's coins - it only sets up
 hosting so the pool can pay you.
 
+Heads up: payouts are SMALL, and you're only paid when the pool has DGB to give
+(it's a shared tip jar funded by asset fees + donations, split among verified
+nodes). Do this to help the network, not to get rich.
+
 "@ -ForegroundColor Gray
 $go = Read-Host "Press Enter to continue, or type N then Enter to cancel"
 if ($go -match '^[Nn]') { Write-Host "Cancelled - nothing was changed."; return }
