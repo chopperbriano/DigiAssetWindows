@@ -1175,9 +1175,11 @@ void ConsoleDashboard::checkPermanentCoverage() {
             log->addMessage("  missing asset: " + missing[i], Log::DEBUG);
         }
     } else if (tracked > 0) {
+        // Steady-state "all good" line fires every ~10 min; DEBUG so it doesn't
+        // spam INFO. The missing-coverage branch above stays WARNING.
         log->addMessage("Permanent-list coverage: " + std::to_string(have) +
                                 "/" + std::to_string(tracked) + " (100%)",
-                        Log::INFO);
+                        Log::DEBUG);
     }
 
     {

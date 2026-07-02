@@ -372,7 +372,7 @@ void ChainAnalyzer::phaseSync() {
             log->addMessage("PERF: " + to_string(_processTransactionRunCount) + " txs"
                 + " rpc=" + to_string(_processTransactionRunTime/1000) + "ms"
                 + " db=" + to_string(_saveTransactionRunTime/1000) + "ms"
-                + " tx/blk=" + to_string(_processTransactionRunCount/500));
+                + " tx/blk=" + to_string(_processTransactionRunCount/500), Log::DEBUG);
             _processTransactionRunTime = 0; _processTransactionRunCount = 0;
             _saveTransactionRunTime = 0; _saveTransactionRunCount = 0;
         }
@@ -389,13 +389,13 @@ void ChainAnalyzer::phaseSync() {
                 } else {
                     ss << std::fixed << std::setprecision(1) << msRemaining / (double)msPerMinute << " minutes left to sync";
                 }
-                log->addMessage(ss.str());
+                log->addMessage(ss.str(), Log::DEBUG);
                 ss.str(""); ss.clear();
             }
         } else {
             chrono::steady_clock::time_point endTime = chrono::steady_clock::now();
             ss << " in " << setw(6) << chrono::duration_cast<chrono::milliseconds>(endTime - beginTime).count() << " ms per block";
-            log->addMessage(ss.str());
+            log->addMessage(ss.str(), Log::DEBUG);
             ss.str(""); ss.clear();
         }
 

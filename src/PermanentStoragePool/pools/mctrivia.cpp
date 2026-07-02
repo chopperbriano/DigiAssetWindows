@@ -561,7 +561,7 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
             // Use _baseUrl, not the hardcoded ipfs.digiassetx.com, so users
             // running their own DigiAssetPoolServer see it reflected here.
             log->addMessage("Reported online to " + _baseUrl + " (server id: " +
-                            peerId + ")");
+                            peerId + ")", Log::DEBUG);
         } else {
             log->addMessage("PSP keepalive returned UNEXPECTED response: " + response,
                             Log::WARNING);
