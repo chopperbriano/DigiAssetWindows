@@ -2,6 +2,10 @@
 
 > **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
 
+> **Just want to run a node and earn DGB?** Skip the build steps — see
+> **[NODE-SETUP.md](NODE-SETUP.md)** for a one-click PowerShell installer
+> (DigiAsset Core + IPFS + firewall + a reachability test).
+
 ## Table of Contents
 1. [How It Works (Architecture)](#how-it-works-architecture)
 2. [Build on Windows](#build-on-windows)
