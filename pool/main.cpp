@@ -281,6 +281,18 @@ int main(int /*argc*/, char** /*argv*/) {
     try {
         server = new PoolServer(*db, (unsigned int) port);
         server->setPayoutsEnabled(payoutsEnabled);
+
+        // Donation/treasury stats page (GET /pool/stats.json). Optional — if
+        // the donation address or RPC creds are unset the endpoint reports
+        // zeros. Uses the SAME DigiByte Core RPC creds the payout path uses.
+        std::string donationAddr = cfg.count("pooldonationaddress") ? cfg["pooldonationaddress"] : "";
+        std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+        std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+        int rpcPort = readConfigInt(cfg, "rpcport", 14022);
+        std::string explorerPrefix = cfg.count("poolexplorertxprefix")
+                                         ? cfg["poolexplorertxprefix"]
+                                         : "https://digiexplorer.info/tx/";
+        server->setWalletInfo(donationAddr, rpcUser, rpcPass, rpcPort, explorerPrefix);
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;

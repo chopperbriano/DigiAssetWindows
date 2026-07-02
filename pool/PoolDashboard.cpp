@@ -132,6 +132,62 @@ namespace {
         if (q2 == std::string::npos) return "ERROR: " + respBody;
         return respBody.substr(rv + 1, q2 - rv - 1); // the txid
     }
+
+    // Wallet spendable balance via DigiByte Core RPC. Negative sentinel on any
+    // failure so callers can tell "0 DGB" from "couldn't reach core".
+    double getWalletBalance(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
+        if (rpcUser.empty()) return -1.0;
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"getbalance\",\"params\":[]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string resp;
+        long status = 0;
+        try { status = CurlHandler::postJson(url, body, resp, 15000); }
+        catch (...) { return -1.0; }
+        if (status < 200 || status >= 300) return -1.0;
+        size_t rpos = resp.find("\"result\"");
+        if (rpos == std::string::npos) return -1.0;
+        size_t colon = resp.find(':', rpos + 8);
+        if (colon == std::string::npos) return -1.0;
+        size_t start = resp.find_first_not_of(" \t", colon + 1);
+        if (start == std::string::npos) return -1.0;
+        try { return std::stod(resp.substr(start)); } catch (...) { return -1.0; }
+    }
+
+    // Read a cfg key (map is const) with a default.
+    std::string cfgGet(const std::map<std::string, std::string>& cfg,
+                       const std::string& key, const std::string& def = "") {
+        auto it = cfg.find(key);
+        return it == cfg.end() ? def : it->second;
+    }
+
+    // Decide this period's total payout budget (DGB). If poolpayoutpercent is
+    // set (>0, interpreted as a percent, e.g. 10 = 10%) the budget is that share
+    // of the wallet's spendable balance — balance-derived, so it can never
+    // overspend an empty wallet and auto-scales with donations. Otherwise fall
+    // back to the fixed poolspendperperiod. `mode` is set for display; returns a
+    // negative sentinel if a balance-derived budget was requested but the RPC
+    // balance couldn't be read.
+    double computeBudget(const std::map<std::string, std::string>& cfg, std::string& mode) {
+        double percent = 0.0;
+        try { percent = std::stod(cfgGet(cfg, "poolpayoutpercent", "0")); } catch (...) { percent = 0.0; }
+        if (percent > 0.0) {
+            if (percent > 100.0) percent = 100.0;
+            std::string rpcUser = cfgGet(cfg, "rpcuser");
+            std::string rpcPass = cfgGet(cfg, "rpcpassword");
+            int rpcPort = 14022;
+            try { rpcPort = std::stoi(cfgGet(cfg, "rpcport", "14022")); } catch (...) {}
+            double bal = getWalletBalance(rpcUser, rpcPass, rpcPort);
+            if (bal < 0.0) { mode = "balance unavailable (RPC error)"; return -1.0; }
+            char m[96];
+            snprintf(m, sizeof(m), "%.1f%% of %.4f DGB available", percent, bal);
+            mode = m;
+            return bal * (percent / 100.0);
+        }
+        double spend = 0.0;
+        try { spend = std::stod(cfgGet(cfg, "poolspendperperiod", "0")); } catch (...) { spend = 0.0; }
+        mode = "poolspendperperiod (fixed)";
+        return spend;
+    }
 }
 
 PoolDashboard::~PoolDashboard() {
@@ -196,9 +252,9 @@ void PoolDashboard::processInput() {
                 try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
 
                 auto targets = _db.getVerifiedPayoutTargets();
-                double spend = 0.0;
-                try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
-                double perNode = (targets.empty() || spend <= 0) ? 0.0 : spend / (double) targets.size();
+                // Use the per-node amount computed and shown at [E] time so the
+                // send matches exactly what the operator confirmed.
+                double perNode = _pendingPerNode;
                 int64_t perNodeSat = (int64_t)(perNode * 100000000.0);
 
                 int success = 0;
@@ -225,18 +281,19 @@ void PoolDashboard::processInput() {
             // Payout preview (read-only).
             auto cfg = readPoolConfig(_configPath);
             auto targets = _db.getVerifiedPayoutTargets();
-            double spend = 0.0;
-            try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
+            std::string budgetMode;
+            double spend = computeBudget(cfg, budgetMode);
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
 
             addLog("--- Payout Preview ---");
             addLog("Verified nodes: " + std::to_string(targets.size()));
-            char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend);
-            addLog("Budget: " + std::string(buf) + " DGB (poolspendperperiod)");
+            char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend < 0 ? 0.0 : spend);
+            addLog("Budget: " + std::string(buf) + " DGB (" + budgetMode + ")");
             if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
             if (targets.empty()) addLog("No eligible nodes. Nodes must be verified within 24h.");
-            else if (spend <= 0) addLog("No budget set. Add poolspendperperiod=<DGB> to pool.cfg.");
+            else if (spend < 0) addLog("Could not read wallet balance (check rpcuser/rpcpassword/rpcport).");
+            else if (spend == 0) addLog("No budget. Set poolpayoutpercent=<%> (balance-based) or poolspendperperiod=<DGB>.");
             else {
                 double perNode = spend / (double) targets.size();
                 char perBuf[64]; snprintf(perBuf, sizeof(perBuf), "%.8f", perNode);
@@ -254,14 +311,12 @@ void PoolDashboard::processInput() {
             auto cfg = readPoolConfig(_configPath);
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
-            double spend = 0.0;
-            try { if (cfg.count("poolspendperperiod")) spend = std::stod(cfg["poolspendperperiod"]); } catch (...) {}
             std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
 
-            // Once-per-period spend guard: poolspendperperiod is a *per period*
-            // budget, so refuse a second payout until the period has elapsed.
-            // This stops a double [E] press (or an itchy operator) from paying
-            // the full budget twice in a row. Default period is 24h.
+            // Once-per-period spend guard: the budget is a *per period* amount,
+            // so refuse a second payout until the period has elapsed. This stops
+            // a double [E] press (or an itchy operator) from paying twice in a
+            // row. Default period is 24h.
             int periodHours = 24;
             try { if (cfg.count("poolpayoutperiodhours")) periodHours = std::stoi(cfg["poolpayoutperiodhours"]); } catch (...) {}
             int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
@@ -270,10 +325,10 @@ void PoolDashboard::processInput() {
 
             auto targets = _db.getVerifiedPayoutTargets();
 
+            // Cheap guards first; only compute the (RPC-backed) budget once we
+            // know we'd actually pay.
             if (!enabled) {
                 addLog("Cannot execute: poolpayouts=0 in pool.cfg. Set to 1 first.");
-            } else if (spend <= 0) {
-                addLog("Cannot execute: poolspendperperiod not set or zero in pool.cfg.");
             } else if (targets.empty()) {
                 addLog("Cannot execute: no verified nodes eligible for payout.");
             } else if (rpcUser.empty()) {
@@ -285,15 +340,25 @@ void PoolDashboard::processInput() {
                        " ago. Next allowed in " + formatDuration(remain) +
                        " (poolpayoutperiodhours=" + std::to_string(periodHours) + ").");
             } else {
-                double perNode = spend / (double) targets.size();
-                char buf[64]; snprintf(buf, sizeof(buf), "%.8f", perNode);
-                addLog("--- CONFIRM PAYOUT ---");
-                addLog("Sending " + std::string(buf) + " DGB to each of " +
-                        std::to_string(targets.size()) + " verified node(s)");
-                char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.8f", spend);
-                addLog("Total: " + std::string(totalBuf) + " DGB from your wallet");
-                addLog("Press Y to confirm, any other key to cancel");
-                _awaitingPayoutConfirm.store(true);
+                std::string budgetMode;
+                double spend = computeBudget(cfg, budgetMode);
+                if (spend < 0) {
+                    addLog("Cannot execute: could not read wallet balance (RPC error). Check rpcuser/rpcpassword/rpcport.");
+                } else if (spend == 0) {
+                    addLog("Cannot execute: no budget. Set poolpayoutpercent=<%> (balance-based) or poolspendperperiod=<DGB>.");
+                } else {
+                    double perNode = spend / (double) targets.size();
+                    _pendingPerNode = perNode;
+                    char buf[64]; snprintf(buf, sizeof(buf), "%.8f", perNode);
+                    addLog("--- CONFIRM PAYOUT ---");
+                    addLog("Budget: " + budgetMode);
+                    addLog("Sending " + std::string(buf) + " DGB to each of " +
+                            std::to_string(targets.size()) + " verified node(s)");
+                    char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.8f", spend);
+                    addLog("Total: " + std::string(totalBuf) + " DGB from your wallet");
+                    addLog("Press Y to confirm, any other key to cancel");
+                    _awaitingPayoutConfirm.store(true);
+                }
             }
         } else if (ch == 'n' || ch == 'N') {
             addLog("Registered nodes: " + std::to_string(_db.countTotalNodes()));

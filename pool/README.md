@@ -100,11 +100,14 @@ from the working directory. Keys:
 | `pooldbpath` | `pool.db` | sqlite file for pool state |
 | `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
-| `poolspendperperiod` | *(unset)* | Total DGB budget paid out **per period**, split equally across verified nodes. Required before `[E]` will run. |
-| `poolpayoutperiodhours` | `24` | Minimum hours between payouts. The `[E]` key refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
-| `rpcuser` | *(unset)* | DigiByte Core RPC username — required for the wallet `sendtoaddress` call. Copy from your DigiByte Core config. |
+| `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split equally across verified nodes. Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
+| `poolspendperperiod` | *(unset)* | Fixed DGB budget per period, split equally across verified nodes. Used only when `poolpayoutpercent` is unset. |
+| `poolpayoutperiodhours` | `24` | Minimum hours between payouts. `[E]` refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
+| `rpcuser` | *(unset)* | DigiByte Core RPC username — required for wallet `sendtoaddress`, `getbalance`, and the stats page. Copy from your DigiByte Core config. |
 | `rpcpassword` | *(unset)* | DigiByte Core RPC password. |
 | `rpcport` | `14022` | DigiByte Core RPC port. |
+| `pooldonationaddress` | *(unset)* | DGB address published on the pool web page for donations, and whose received total is shown. Generate one **in the pool wallet** (`getnewaddress "digistamp_pool_donations"`) so donations directly fund payouts. |
+| `poolexplorertxprefix` | `https://digiexplorer.info/tx/` | Base URL the web ledger links payout txids to. |
 
 The pool talks to a **local** DigiByte Core over RPC at `127.0.0.1:<rpcport>`
 using these credentials, so DigiByte Core must be running with `server=1` and a
@@ -112,12 +115,21 @@ matching `rpcuser`/`rpcpassword`, and its wallet must be funded and **unlocked**
 
 ### Payout flow
 
-- `[P]` — **preview** (read-only): shows the eligible verified nodes, the
-  per-node amount (`poolspendperperiod / N`), and totals paid to date.
-- `[E]` — **execute**: validates config, then asks `Y/N` to confirm before
-  sending. Refuses if `poolpayouts=0`, no budget is set, no verified nodes are
-  eligible, `rpcuser` is missing, or the last payout was within
-  `poolpayoutperiodhours`.
+- `[P]` — **preview** (read-only): shows the eligible verified nodes, the budget
+  (balance-derived or fixed), the per-node amount, and totals paid to date.
+- `[E]` — **execute**: validates config, computes the budget, then asks `Y/N` to
+  confirm before sending. Refuses if `poolpayouts=0`, no verified nodes are
+  eligible, `rpcuser` is missing, the wallet balance can't be read, the budget is
+  zero, or the last payout was within `poolpayoutperiodhours`.
+
+### Public donation / treasury page (`GET /pool/stats.json`)
+
+The pool exe serves a read-only JSON endpoint with `{donationAddress,
+receivedTotal, available, paidToHosts, verifiedNodes, recentPayouts[...]}`,
+sourced from the wallet (RPC, cached ~30s) and `pool.db`. The Caddy landing page
+([deploy/](deploy/README.md)) renders it as a live donation QR + treasury
+balances + a public payout ledger. DigiByte Core's RPC port is **never** exposed
+— only this computed JSON is, through Caddy.
 
 A node is **eligible for payout** only if it was verified (reachable) within the
 last 24h, has fewer than 3 consecutive verification failures, and was seen in

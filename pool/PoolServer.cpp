@@ -1,10 +1,13 @@
 #include "PoolServer.h"
 #include "PoolDatabase.h"
+#include "CurlHandler.h"
 #include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -99,6 +102,58 @@ namespace {
             end++;
         }
         return body.substr(pos, end - pos);
+    }
+
+    // --- DigiByte Core JSON-RPC (read-only, for the stats page) ------------
+    // Returns the numeric "result" of an RPC call, or a negative sentinel on
+    // any failure so callers can tell "0 balance" from "couldn't reach core".
+    double rpcNumber(const std::string& rpcUser, const std::string& rpcPass,
+                     int rpcPort, const std::string& method,
+                     const std::string& paramsJson) {
+        if (rpcUser.empty()) return -1.0;
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"poolstats\",\"method\":\"" +
+                           method + "\",\"params\":" + paramsJson + "}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" +
+                          std::to_string(rpcPort);
+        std::string resp;
+        long status = 0;
+        try {
+            status = CurlHandler::postJson(url, body, resp, 8000);
+        } catch (...) {
+            return -1.0;
+        }
+        if (status < 200 || status >= 300) return -1.0;
+        std::string val = jsonField(resp, "result");
+        if (val.empty() || val == "null") return -1.0;
+        try {
+            return std::stod(val);
+        } catch (...) {
+            return -1.0;
+        }
+    }
+
+    // Minimal JSON string escaper for building the stats response by hand.
+    std::string jsonEscape(const std::string& s) {
+        std::string out;
+        out.reserve(s.size() + 8);
+        for (char c: s) {
+            switch (c) {
+                case '"':  out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\n': out += "\\n";  break;
+                case '\r': out += "\\r";  break;
+                case '\t': out += "\\t";  break;
+                default:
+                    if ((unsigned char) c < 0x20) {
+                        char b[8];
+                        snprintf(b, sizeof(b), "\\u%04x", (unsigned char) c);
+                        out += b;
+                    } else {
+                        out += c;
+                    }
+            }
+        }
+        return out;
     }
 
     // --- HTTP response builder ---------------------------------------------
@@ -327,9 +382,91 @@ void PoolServer::handleRequest(const std::string& method,
         return;
     }
 
+    // --- GET /pool/stats.json ----------------------------------------------
+    // Public donation/treasury stats for the pool web page.
+    if (method == "GET" && path == "/pool/stats.json") {
+        handleStats(outBody);
+        return;
+    }
+
     // --- Fallback ----------------------------------------------------------
     outStatus = 404;
     outBody = "{\"error\":\"not found\"}";
+}
+
+void PoolServer::setWalletInfo(const std::string& donationAddress,
+                               const std::string& rpcUser,
+                               const std::string& rpcPass,
+                               int rpcPort,
+                               const std::string& explorerTxPrefix) {
+    std::lock_guard<std::mutex> lk(_statsMutex);
+    _donationAddress = donationAddress;
+    _rpcUser = rpcUser;
+    _rpcPass = rpcPass;
+    _rpcPort = rpcPort;
+    _explorerTxPrefix = explorerTxPrefix;
+    _statsCacheTime = 0; // force a refresh on next stats request
+}
+
+void PoolServer::handleStats(std::string& outBody) {
+    // Snapshot the wallet config + refresh the cached balances if stale. The
+    // RPC calls are rate-limited to once per 30s so this public endpoint can't
+    // be used to hammer DigiByte Core.
+    std::string donationAddress, explorerPrefix;
+    double available = 0.0, received = 0.0;
+    {
+        std::lock_guard<std::mutex> lk(_statsMutex);
+        int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+        if (now - _statsCacheTime > 30 && !_rpcUser.empty()) {
+            double bal = rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getbalance", "[]");
+            if (bal >= 0) _cachedAvailable = bal;
+            if (!_donationAddress.empty()) {
+                std::string params = "[\"" + _donationAddress + "\",1]";
+                double rec = rpcNumber(_rpcUser, _rpcPass, _rpcPort,
+                                       "getreceivedbyaddress", params);
+                if (rec >= 0) _cachedReceived = rec;
+            }
+            _statsCacheTime = now;
+        }
+        donationAddress = _donationAddress;
+        explorerPrefix = _explorerTxPrefix;
+        available = _cachedAvailable;
+        received = _cachedReceived;
+    }
+
+    double paidToHosts = _db.getPaidTotalDgb();
+    unsigned int paidCount = _db.getPaidCount();
+    int64_t hourAgo = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count() - 3600;
+    unsigned int verifiedNodes = _db.countVerifiedSince(hourAgo);
+    unsigned int totalNodes = _db.countTotalNodes();
+    auto recent = _db.getRecentPayouts(15);
+
+    std::ostringstream js;
+    js.setf(std::ios::fixed);
+    js.precision(8);
+    js << "{"
+       << "\"donationAddress\":\"" << jsonEscape(donationAddress) << "\","
+       << "\"payoutsEnabled\":" << (_payoutsEnabled.load() ? "true" : "false") << ","
+       << "\"receivedTotal\":" << received << ","
+       << "\"available\":" << available << ","
+       << "\"paidToHosts\":" << paidToHosts << ","
+       << "\"payoutCount\":" << paidCount << ","
+       << "\"verifiedNodes\":" << verifiedNodes << ","
+       << "\"totalNodes\":" << totalNodes << ","
+       << "\"explorerTxPrefix\":\"" << jsonEscape(explorerPrefix) << "\","
+       << "\"recentPayouts\":[";
+    for (size_t i = 0; i < recent.size(); i++) {
+        const auto& r = recent[i];
+        if (i) js << ",";
+        js << "{\"address\":\"" << jsonEscape(r.payoutAddress) << "\","
+           << "\"amount\":" << (r.amountDgbSat / 100000000.0) << ","
+           << "\"paidAt\":" << r.paidAt << ","
+           << "\"txid\":\"" << jsonEscape(r.txid) << "\"}";
+    }
+    js << "]}";
+    outBody = js.str();
 }
 
 void PoolServer::handlePermanent(const std::string& path, int& outStatus, std::string& outBody) {

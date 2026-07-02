@@ -33,6 +33,19 @@
     background: #238636; color: #fff; border-radius: 8px; text-decoration: none; font-weight: 600;
   }
   footer { margin-top: 56px; color: #8b949e; font-size: .85rem; border-top: 1px solid #30363d; padding-top: 20px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 4px 0 20px; }
+  .stat { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; text-align: center; }
+  .stat .num { font-size: 1.25rem; font-weight: 700; color: #7ee787; font-family: ui-monospace, monospace; }
+  .stat .lbl { font-size: .75rem; color: #8b949e; margin-top: 4px; }
+  .donate { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  #qr { width: 148px; height: 148px; background: #fff; border-radius: 8px; padding: 8px; }
+  #qr img, #qr canvas { display: block; }
+  .addrbox code { display: inline-block; word-break: break-all; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-weight: 600; }
+  td code { background: none; padding: 0; }
+  @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
 <body>
@@ -56,6 +69,40 @@
       <li>Pays verified node operators DGB to their chosen address.</li>
     </ul>
     <p class="muted">It is not a wallet or an explorer. It talks to DigiAsset Core nodes, not to browsers.</p>
+  </div>
+
+  <h2>Support the pool &mdash; donate DGB</h2>
+  <div class="card">
+    <p class="muted" style="margin-top:0">
+      This pool pays hosts straight from a public DigiByte wallet funded by
+      donations. Every DGB you send goes to the operators keeping DigiAsset
+      content alive. Balances and payouts below are live and on-chain &mdash;
+      fully auditable.
+    </p>
+    <div id="treasury">
+      <div class="stats">
+        <div class="stat"><div class="num" id="statReceived">&mdash;</div><div class="lbl">Donated in</div></div>
+        <div class="stat"><div class="num" id="statPaid">&mdash;</div><div class="lbl">Paid to hosts</div></div>
+        <div class="stat"><div class="num" id="statAvail">&mdash;</div><div class="lbl">Available</div></div>
+        <div class="stat"><div class="num" id="statNodes">&mdash;</div><div class="lbl">Verified nodes</div></div>
+      </div>
+      <div class="donate">
+        <div id="qr" aria-label="Donation address QR code"></div>
+        <div class="addrbox">
+          <div class="muted">Send DGB to:</div>
+          <code id="donateAddr">loading&hellip;</code>
+          <button id="copyBtn" class="btn" style="background:#30363d;padding:6px 12px;margin-top:10px">Copy address</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Recent payouts <span class="muted" style="font-weight:400;font-size:.8rem">(on-chain, newest first)</span></h2>
+  <div class="card">
+    <table id="ledger">
+      <thead><tr><th>When</th><th>Amount</th><th>To</th><th>Tx</th></tr></thead>
+      <tbody id="payoutRows"><tr><td colspan="4" class="muted">loading&hellip;</td></tr></tbody>
+    </table>
   </div>
 
   <h2>Run a node and get paid</h2>
@@ -83,5 +130,61 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     a Windows port of <a href="https://github.com/DigiAsset-Core/DigiAsset_Core">DigiAsset Core</a> by mctrivia.
   </footer>
 </div>
+
+<!-- QR generator (graceful fallback: if it fails to load, the address text still shows). -->
+<script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs@04f46c6/qrcode.min.js"></script>
+<script>
+(function () {
+  var fmt = function (n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }) + " DGB"; };
+  var shorten = function (s, head, tail) { return s && s.length > head + tail + 1 ? s.slice(0, head) + "…" + s.slice(-tail) : (s || ""); };
+
+  function render(d) {
+    document.getElementById("statReceived").textContent = fmt(d.receivedTotal);
+    document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
+    document.getElementById("statAvail").textContent    = fmt(d.available);
+    document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + (d.totalNodes || 0);
+
+    var addr = d.donationAddress || "";
+    var addrEl = document.getElementById("donateAddr");
+    if (addr) {
+      addrEl.textContent = addr;
+      var qr = document.getElementById("qr");
+      qr.innerHTML = "";
+      if (window.QRCode) {
+        try { new QRCode(qr, { text: "digibyte:" + addr, width: 132, height: 132, correctLevel: QRCode.CorrectLevel.M }); }
+        catch (e) { qr.style.display = "none"; }
+      } else { qr.style.display = "none"; }
+    } else {
+      addrEl.textContent = "(donation address not configured yet)";
+      document.getElementById("qr").style.display = "none";
+    }
+
+    var tbody = document.getElementById("payoutRows");
+    var rows = d.recentPayouts || [];
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="4" class="muted">No payouts yet.</td></tr>'; return; }
+    var prefix = d.explorerTxPrefix || "";
+    tbody.innerHTML = rows.map(function (r) {
+      var when = r.paidAt ? new Date(r.paidAt * 1000).toISOString().slice(0, 10) : "";
+      var tx = r.txid || "";
+      var txCell = tx ? (prefix ? '<a href="' + prefix + tx + '" target="_blank" rel="noopener"><code>' + shorten(tx, 8, 6) + "</code></a>"
+                                : "<code>" + shorten(tx, 8, 6) + "</code>") : "";
+      return "<tr><td>" + when + "</td><td>" + fmt(r.amount) + "</td><td><code>" +
+             shorten(r.address, 6, 6) + "</code></td><td>" + txCell + "</td></tr>";
+    }).join("");
+  }
+
+  function load() {
+    fetch("/pool/stats.json", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function () {
+        document.getElementById("payoutRows").innerHTML =
+          '<tr><td colspan="4" class="muted">Stats temporarily unavailable.</td></tr>';
+      });
+  }
+  load();
+  setInterval(load, 60000); // refresh once a minute
+})();
+</script>
 </body>
 </html>

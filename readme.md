@@ -208,12 +208,19 @@ This will create config.cfg — the wizard creates only the basic config. For a 
 
 Make sure DigiAsset Core is running correctly and then press ctrl+c to stop it and continue with instructions.
 
-NOTE: You will also need to open up two firewall ports:
+NOTE: For peer connectivity and pool payout verification, forward these inbound
+ports to this machine:
 
 ```bash
-Inbound TCP:5001
-Inbound TCP:12024
+Inbound TCP:4001    # IPFS swarm — lets peers (and the pool) reach your node
+Inbound TCP:12024   # DigiByte P2P — inbound blockchain peers (optional)
 ```
+
+⚠️ **Do NOT expose port 5001 to the internet.** 5001 is the IPFS HTTP API and is
+**unauthenticated** — anyone who can reach it controls your IPFS node (add/remove
+pins, read files, reconfigure it). Keep 5001 bound to localhost only. The port
+that needs to be reachable for hosting/payouts is **4001** (the IPFS swarm port),
+not 5001.
 
 ## Permanent Storage Pools & Getting Paid
 

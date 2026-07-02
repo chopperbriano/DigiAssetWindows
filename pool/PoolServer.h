@@ -56,6 +56,16 @@ public:
     void setPayoutsEnabled(bool enabled) { _payoutsEnabled.store(enabled); }
     bool getPayoutsEnabled() const { return _payoutsEnabled.load(); }
 
+    // Info needed to serve GET /pool/stats.json (the public donation/balance
+    // page). The donation address is published on the web page; the RPC creds
+    // let the server read the wallet balance + amount received. All optional —
+    // if unset, the stats endpoint reports zeros and no address.
+    void setWalletInfo(const std::string& donationAddress,
+                       const std::string& rpcUser,
+                       const std::string& rpcPass,
+                       int rpcPort,
+                       const std::string& explorerTxPrefix);
+
 private:
     PoolDatabase& _db;
     unsigned int _port;
@@ -68,6 +78,19 @@ private:
     std::atomic<bool> _running{false};
     std::atomic<uint64_t> _requestCount{0};
     std::atomic<bool> _payoutsEnabled{false};
+
+    // Donation/stats state. Guarded by _statsMutex; the balance is cached and
+    // only refreshed via RPC at most every ~30s so a public endpoint can't be
+    // used to hammer DigiByte Core.
+    std::string _donationAddress;
+    std::string _rpcUser;
+    std::string _rpcPass;
+    int _rpcPort = 14022;
+    std::string _explorerTxPrefix;
+    std::mutex _statsMutex;
+    double _cachedAvailable = 0.0;
+    double _cachedReceived = 0.0;
+    int64_t _statsCacheTime = 0;
 
     void acceptLoop();
     void handleConnection(boost::asio::ip::tcp::socket socket, uint64_t id);
@@ -87,6 +110,7 @@ private:
     void handleNodes(std::string& outBody);
     void handleMap(std::string& outBody);
     void handleBad(std::string& outBody);
+    void handleStats(std::string& outBody);
 };
 
 #endif // DIGIASSET_POOL_SERVER_H

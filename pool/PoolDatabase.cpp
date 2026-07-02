@@ -365,6 +365,30 @@ void PoolDatabase::insertPermanentAsset(const std::string& assetId,
     sqlite3_finalize(stmt);
 }
 
+std::vector<PoolDatabase::PayoutRow> PoolDatabase::getRecentPayouts(unsigned int limit) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<PayoutRow> out;
+    const char* sql =
+        "SELECT payoutAddress, amountDgbSat, paidAt, paidTxid FROM payouts_ledger "
+        "WHERE paidTxid IS NOT NULL ORDER BY paidAt DESC LIMIT ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, (int) limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            PayoutRow r;
+            const unsigned char* a = sqlite3_column_text(stmt, 0);
+            if (a) r.payoutAddress = (const char*) a;
+            r.amountDgbSat = sqlite3_column_int64(stmt, 1);
+            r.paidAt = sqlite3_column_int64(stmt, 2);
+            const unsigned char* t = sqlite3_column_text(stmt, 3);
+            if (t) r.txid = (const char*) t;
+            out.push_back(r);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
 std::vector<std::string> PoolDatabase::getSampleCids(unsigned int limit) {
     std::lock_guard<std::mutex> lk(_mutex);
     std::vector<std::string> out;

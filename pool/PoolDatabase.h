@@ -106,6 +106,15 @@ public:
     // succession can't double-pay.
     int64_t getLastPayoutAt();
 
+    // Recent payouts for the public ledger on the pool web page. Newest first.
+    struct PayoutRow {
+        std::string payoutAddress;
+        int64_t amountDgbSat = 0;
+        int64_t paidAt = 0;
+        std::string txid;
+    };
+    std::vector<PayoutRow> getRecentPayouts(unsigned int limit);
+
     // Pool-local config key/value store (separate from the operator's
     // editable pool.cfg; this is runtime state like "last snapshot time").
     void setConfig(const std::string& key, const std::string& value);

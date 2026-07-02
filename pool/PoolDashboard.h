@@ -49,6 +49,10 @@ private:
     std::string _configPath;
     std::atomic<bool> _running{false};
     std::atomic<bool> _awaitingPayoutConfirm{false};
+    // Per-node amount (DGB) computed at [E] time and reused on Y confirm, so the
+    // amount actually sent matches what the operator was shown. Only touched on
+    // the single dashboard thread.
+    double _pendingPerNode{0.0};
     std::atomic<bool> _quit{false};
     std::thread _thread;
     std::chrono::system_clock::time_point _startTime;
