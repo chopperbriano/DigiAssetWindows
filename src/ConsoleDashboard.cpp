@@ -206,6 +206,7 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("--- Help: press a number for details ---");
                     log->addMessage("[1] Block Sync   [2] Assets & Coverage   [3] Serving");
                     log->addMessage("[4] Pool & Payment   [5] Services & Config   [6] Keys");
+                    log->addMessage("[N] List pool nodes (IP + peerId) and self-check your node");
                 }
                 break;
             case '1':
@@ -264,6 +265,7 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("  registered (yellow) = pool accepted you but payouts not enabled");
                     log->addMessage("  unavailable (red) = pool /list endpoint is broken or unreachable");
                     log->addMessage("  checking (dim) = first probe hasn't finished yet");
+                    log->addMessage("Press N to list the pool's online nodes (IP + peerId) + self-check.");
                     log->addMessage("Set psp1server=http://... in config.cfg to use a different pool.");
                 }
                 break;
@@ -1248,6 +1250,17 @@ void ConsoleDashboard::listPoolNodes() {
         return s;
     };
 
+    // Pull the IPv4/IPv6 address out of a multiaddr like
+    // /ip4/1.2.3.4/tcp/4001/p2p/<id> for display. Empty if none present.
+    auto extractIp = [](const std::string& s) -> std::string {
+        size_t p = s.find("/ip4/");
+        if (p == std::string::npos) p = s.find("/ip6/");
+        if (p == std::string::npos) return "";
+        p += 5;
+        size_t e = s.find('/', p);
+        return s.substr(p, (e == std::string::npos ? s.size() : e) - p);
+    };
+
     // Our own peerId (for the self-check).
     std::string myId;
     try {
@@ -1287,12 +1300,30 @@ void ConsoleDashboard::listPoolNodes() {
         log->addMessage("  " + std::to_string(ids.size()) + " node(s) online:");
     }
 
+    // Cap the console dump so a large pool doesn't flood the log area; the
+    // self-check below still scans ALL nodes. The full list is always on the
+    // pool's /nodes.json.
+    const size_t MAX_SHOW = 30;
     bool foundSelf = false;
-    for (const auto& id : ids) {
-        std::string bare = barePeer(id);
+    for (size_t i = 0; i < ids.size(); i++) {
+        std::string bare = barePeer(ids[i]);
         bool isSelf = (!myId.empty() && bare == myId);
         if (isSelf) foundSelf = true;
-        log->addMessage("   " + bare + (isSelf ? "   <-- YOU" : ""));
+        if (i >= MAX_SHOW) continue;
+
+        // Show IP (left, padded) + a shortened peerId so nodes are easy to tell
+        // apart. The full peerId of our own node is printed in the summary line.
+        std::string ip = extractIp(ids[i]);
+        std::string ipCol = ip.empty() ? "(unknown IP)" : ip;
+        if (ipCol.size() < 16) ipCol += std::string(16 - ipCol.size(), ' ');
+        std::string shortId = bare.size() > 21
+                                  ? bare.substr(0, 12) + ".." + bare.substr(bare.size() - 6)
+                                  : bare;
+        log->addMessage("   " + ipCol + " " + shortId + (isSelf ? "   <-- YOU" : ""));
+    }
+    if (ids.size() > MAX_SHOW) {
+        log->addMessage("   ...and " + std::to_string(ids.size() - MAX_SHOW) +
+                        " more. Full list: " + base + "/nodes.json");
     }
 
     // Self-check summary.
