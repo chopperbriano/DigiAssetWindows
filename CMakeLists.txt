@@ -39,8 +39,11 @@ SET(MINOR_VERSION 3)
 SET(PATCH_VERSION 0)
 SET(SO_VERSION    0)
 
-# Windows port build number (increment for each Windows-specific release)
-SET(WIN_BUILD 33)
+# Windows port build number (increment for each Windows-specific release).
+# This is the SOURCE OF TRUTH for the version — it is substituted into
+# src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
+# match the win.<N> tag on every release; do NOT hand-edit the generated header.
+SET(WIN_BUILD 38)
 
 # Add source directory
 include_directories(src)
