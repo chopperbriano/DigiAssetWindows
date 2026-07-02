@@ -64,7 +64,8 @@ public:
                        const std::string& rpcUser,
                        const std::string& rpcPass,
                        int rpcPort,
-                       const std::string& explorerTxPrefix);
+                       const std::string& explorerTxPrefix,
+                       const std::string& addrApiPrefix);
 
 private:
     PoolDatabase& _db;
@@ -87,9 +88,16 @@ private:
     std::string _rpcPass;
     int _rpcPort = 14022;
     std::string _explorerTxPrefix;
+    // The treasury/donation address lives in an external wallet, so its balance
+    // and received total come from a public Esplora-style explorer API
+    // (GET <addrApiPrefix><address>), not the local pool wallet's RPC. The
+    // local wallet's getbalance still gives "available to pay" (what payouts
+    // draw from) — the operator funds it by sweeping from the treasury.
+    std::string _addrApiPrefix;
     std::mutex _statsMutex;
-    double _cachedAvailable = 0.0;
-    double _cachedReceived = 0.0;
+    double _cachedAvailable = 0.0;        // local pool wallet, ready to pay
+    double _cachedReceived = 0.0;         // treasury all-time received (explorer)
+    double _cachedTreasuryBalance = 0.0;  // treasury current balance (explorer)
     int64_t _statsCacheTime = 0;
 
     void acceptLoop();

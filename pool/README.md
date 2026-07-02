@@ -106,7 +106,8 @@ from the working directory. Keys:
 | `rpcuser` | *(unset)* | DigiByte Core RPC username — required for wallet `sendtoaddress`, `getbalance`, and the stats page. Copy from your DigiByte Core config. |
 | `rpcpassword` | *(unset)* | DigiByte Core RPC password. |
 | `rpcport` | `14022` | DigiByte Core RPC port. |
-| `pooldonationaddress` | *(unset)* | DGB address published on the pool web page for donations, and whose received total is shown. Generate one **in the pool wallet** (`getnewaddress "digistamp_pool_donations"`) so donations directly fund payouts. |
+| `pooldonationaddress` | *(unset)* | DGB address published on the pool web page for donations/fees. May live in **any** wallet (e.g. a separate treasury/cold wallet). Its balance + received total are read from a public explorer (see `pooladdrapiprefix`), so it does **not** need to be in the pool node's wallet. |
+| `pooladdrapiprefix` | `https://digiexplorer.info/api/address/` | Esplora-style address API used to read the treasury address's balance + received total for the stats page. Full URL is `<prefix><address>`. |
 | `poolexplorertxprefix` | `https://digiexplorer.info/tx/` | Base URL the web ledger links payout txids to. |
 
 The pool talks to a **local** DigiByte Core over RPC at `127.0.0.1:<rpcport>`
@@ -125,11 +126,26 @@ matching `rpcuser`/`rpcpassword`, and its wallet must be funded and **unlocked**
 ### Public donation / treasury page (`GET /pool/stats.json`)
 
 The pool exe serves a read-only JSON endpoint with `{donationAddress,
-receivedTotal, available, paidToHosts, verifiedNodes, recentPayouts[...]}`,
-sourced from the wallet (RPC, cached ~30s) and `pool.db`. The Caddy landing page
+receivedTotal, treasuryBalance, available, paidToHosts, verifiedNodes,
+totalNodes, recentPayouts[...]}`. The Caddy landing page
 ([deploy/](deploy/README.md)) renders it as a live donation QR + treasury
-balances + a public payout ledger. DigiByte Core's RPC port is **never** exposed
-— only this computed JSON is, through Caddy.
+balances + a public payout ledger, cached ~30s. DigiByte Core's RPC port is
+**never** exposed — only this computed JSON is, through Caddy.
+
+**Two pots (important):**
+
+- **Treasury** = the published `pooldonationaddress`, in whatever (possibly
+  external/cold) wallet you like. `receivedTotal` and `treasuryBalance` come from
+  the public explorer API, so this address does not need to be on the pool node.
+  This is where donations *and* product fees (ProofLink/SignalFire/tickets) land.
+- **Pool wallet** = the DigiByte Core wallet on the pool server that `[E]`
+  actually spends from. `available` is its `getbalance`, and balance-derived
+  payouts (`poolpayoutpercent`) draw from it.
+
+Because these are separate wallets, **you must periodically sweep DGB from the
+treasury into the pool wallet** to fund payouts — the pool can only pay from its
+own local balance. The page shows the whole funnel: `Donated in` → `In treasury`
+→ (you sweep) → `Paid to hosts`.
 
 A node is **eligible for payout** only if it was verified (reachable) within the
 last 24h, has fewer than 3 consecutive verification failures, and was seen in

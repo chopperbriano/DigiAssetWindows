@@ -292,7 +292,12 @@ int main(int /*argc*/, char** /*argv*/) {
         std::string explorerPrefix = cfg.count("poolexplorertxprefix")
                                          ? cfg["poolexplorertxprefix"]
                                          : "https://digiexplorer.info/tx/";
-        server->setWalletInfo(donationAddr, rpcUser, rpcPass, rpcPort, explorerPrefix);
+        // Esplora-style address API used to read the (external) treasury
+        // address balance + received total for the stats page.
+        std::string addrApiPrefix = cfg.count("pooladdrapiprefix")
+                                        ? cfg["pooladdrapiprefix"]
+                                        : "https://digiexplorer.info/api/address/";
+        server->setWalletInfo(donationAddr, rpcUser, rpcPass, rpcPort, explorerPrefix, addrApiPrefix);
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;

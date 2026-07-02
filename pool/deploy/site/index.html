@@ -74,16 +74,15 @@
   <h2>Support the pool &mdash; donate DGB</h2>
   <div class="card">
     <p class="muted" style="margin-top:0">
-      This pool pays hosts straight from a public DigiByte wallet funded by
-      donations. Every DGB you send goes to the operators keeping DigiAsset
-      content alive. Balances and payouts below are live and on-chain &mdash;
-      fully auditable.
+      Donations to the address below fund the DGB paid out to the operators who
+      keep DigiAsset content alive. The treasury total, current balance, and
+      every payout below are live and on-chain &mdash; fully auditable.
     </p>
     <div id="treasury">
       <div class="stats">
         <div class="stat"><div class="num" id="statReceived">&mdash;</div><div class="lbl">Donated in</div></div>
+        <div class="stat"><div class="num" id="statTreasury">&mdash;</div><div class="lbl">In treasury</div></div>
         <div class="stat"><div class="num" id="statPaid">&mdash;</div><div class="lbl">Paid to hosts</div></div>
-        <div class="stat"><div class="num" id="statAvail">&mdash;</div><div class="lbl">Available</div></div>
         <div class="stat"><div class="num" id="statNodes">&mdash;</div><div class="lbl">Verified nodes</div></div>
       </div>
       <div class="donate">
@@ -140,8 +139,8 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
 
   function render(d) {
     document.getElementById("statReceived").textContent = fmt(d.receivedTotal);
+    document.getElementById("statTreasury").textContent = fmt(d.treasuryBalance);
     document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
-    document.getElementById("statAvail").textContent    = fmt(d.available);
     document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + (d.totalNodes || 0);
 
     var addr = d.donationAddress || "";

@@ -132,6 +132,39 @@ namespace {
         }
     }
 
+    // Fetch an address's on-chain totals from an Esplora-style explorer API
+    // (GET <prefix><address>, as digiexplorer.info serves at /api/address/).
+    // Fills receivedDgb (all funded) and balanceDgb (funded - spent) from
+    // chain_stats. Returns false on any failure. Used because the treasury
+    // address lives in an external wallet the pool node can't query via RPC.
+    bool esploraAddress(const std::string& apiPrefix, const std::string& address,
+                        double& receivedDgb, double& balanceDgb) {
+        if (apiPrefix.empty() || address.empty()) return false;
+        std::string body;
+        try {
+            body = CurlHandler::get(apiPrefix + address, 8000);
+        } catch (...) {
+            return false;
+        }
+        // Scope parsing to chain_stats so we don't accidentally read the
+        // mempool_stats block, which repeats the same field names.
+        size_t cs = body.find("\"chain_stats\"");
+        if (cs == std::string::npos) return false;
+        std::string chain = body.substr(cs);
+        std::string fundedStr = jsonField(chain, "funded_txo_sum");
+        if (fundedStr.empty()) return false;
+        std::string spentStr = jsonField(chain, "spent_txo_sum");
+        try {
+            double funded = std::stod(fundedStr);
+            double spent = spentStr.empty() ? 0.0 : std::stod(spentStr);
+            receivedDgb = funded / 100000000.0;
+            balanceDgb = (funded - spent) / 100000000.0;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     // Minimal JSON string escaper for building the stats response by hand.
     std::string jsonEscape(const std::string& s) {
         std::string out;
@@ -398,13 +431,15 @@ void PoolServer::setWalletInfo(const std::string& donationAddress,
                                const std::string& rpcUser,
                                const std::string& rpcPass,
                                int rpcPort,
-                               const std::string& explorerTxPrefix) {
+                               const std::string& explorerTxPrefix,
+                               const std::string& addrApiPrefix) {
     std::lock_guard<std::mutex> lk(_statsMutex);
     _donationAddress = donationAddress;
     _rpcUser = rpcUser;
     _rpcPass = rpcPass;
     _rpcPort = rpcPort;
     _explorerTxPrefix = explorerTxPrefix;
+    _addrApiPrefix = addrApiPrefix;
     _statsCacheTime = 0; // force a refresh on next stats request
 }
 
@@ -413,19 +448,26 @@ void PoolServer::handleStats(std::string& outBody) {
     // RPC calls are rate-limited to once per 30s so this public endpoint can't
     // be used to hammer DigiByte Core.
     std::string donationAddress, explorerPrefix;
-    double available = 0.0, received = 0.0;
+    double available = 0.0, received = 0.0, treasuryBalance = 0.0;
     {
         std::lock_guard<std::mutex> lk(_statsMutex);
         int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
                           std::chrono::system_clock::now().time_since_epoch()).count();
-        if (now - _statsCacheTime > 30 && !_rpcUser.empty()) {
-            double bal = rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getbalance", "[]");
-            if (bal >= 0) _cachedAvailable = bal;
-            if (!_donationAddress.empty()) {
-                std::string params = "[\"" + _donationAddress + "\",1]";
-                double rec = rpcNumber(_rpcUser, _rpcPass, _rpcPort,
-                                       "getreceivedbyaddress", params);
-                if (rec >= 0) _cachedReceived = rec;
+        if (now - _statsCacheTime > 30) {
+            // Local pool wallet balance (what payouts actually draw from).
+            if (!_rpcUser.empty()) {
+                double bal = rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getbalance", "[]");
+                if (bal >= 0) _cachedAvailable = bal;
+            }
+            // Treasury received + balance from a public explorer, because the
+            // donation address lives in an external wallet this node can't
+            // query over RPC.
+            if (!_donationAddress.empty() && !_addrApiPrefix.empty()) {
+                double rec = 0.0, tbal = 0.0;
+                if (esploraAddress(_addrApiPrefix, _donationAddress, rec, tbal)) {
+                    _cachedReceived = rec;
+                    _cachedTreasuryBalance = tbal;
+                }
             }
             _statsCacheTime = now;
         }
@@ -433,6 +475,7 @@ void PoolServer::handleStats(std::string& outBody) {
         explorerPrefix = _explorerTxPrefix;
         available = _cachedAvailable;
         received = _cachedReceived;
+        treasuryBalance = _cachedTreasuryBalance;
     }
 
     double paidToHosts = _db.getPaidTotalDgb();
@@ -450,6 +493,7 @@ void PoolServer::handleStats(std::string& outBody) {
        << "\"donationAddress\":\"" << jsonEscape(donationAddress) << "\","
        << "\"payoutsEnabled\":" << (_payoutsEnabled.load() ? "true" : "false") << ","
        << "\"receivedTotal\":" << received << ","
+       << "\"treasuryBalance\":" << treasuryBalance << ","
        << "\"available\":" << available << ","
        << "\"paidToHosts\":" << paidToHosts << ","
        << "\"payoutCount\":" << paidCount << ","
