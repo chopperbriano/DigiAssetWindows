@@ -47,13 +47,36 @@ $repo = "chopperbriano/DigiAsset_Core_Windows"
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 
 Write-Host "===== DigiAsset Core for Windows - node installer =====" -ForegroundColor Green
+Write-Host @"
+
+This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
+pool. Here is exactly what it will do:
+
+  * Download DigiAsset Core into $Root
+  * Download + start IPFS (file storage), running automatically on boot
+  * Open your local Windows firewall for port 4001 (IPFS) and 12024 (DigiByte)
+  * Save a config pointed at the DigiStamp pool with YOUR payout address
+  * Test whether your node is reachable from the internet
+
+You will also need the DigiByte Core wallet installed + synced (this script
+checks for it and guides you), and you will forward port 4001 on your home
+router. This does NOT spend money or touch your wallet's coins - it only sets up
+hosting so the pool can pay you.
+
+"@ -ForegroundColor Gray
+$go = Read-Host "Press Enter to continue, or type N then Enter to cancel"
+if ($go -match '^[Nn]') { Write-Host "Cancelled - nothing was changed."; return }
+
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
 Write-Host "Install folder: $Root"
 
 # --- 0. Payout address -----------------------------------------------------
 if (-not $PayoutAddress) {
-    Write-Host "`nYou get paid in DGB for hosting. Enter the DigiByte address to receive payouts:"
-    $PayoutAddress = Read-Host "  Payout DGB address"
+    Write-Host "`n--- Your payout address ---" -ForegroundColor Cyan
+    Write-Host "This is the DigiByte address where the pool sends your hosting earnings."
+    Write-Host "Use an address from a wallet YOU control (your DigiByte Core wallet is fine)."
+    Write-Host "It can start with D..., S..., or dgb1..."
+    $PayoutAddress = Read-Host "  Paste your DGB payout address"
 }
 if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
     throw "That does not look like a DigiByte address. Re-run and paste a valid D..., S..., or dgb1... address."
