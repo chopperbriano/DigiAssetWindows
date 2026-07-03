@@ -1,12 +1,12 @@
 # Run a DigiAsset node on Windows and earn DGB
 
 Host DigiAsset files, get paid DGB from the DigiStamp pool. This is the simple
-version. There are three programs involved — the installer sets up two of them
-for you; the third (the DigiByte wallet) you install once.
+version. Three apps work together, and the installer sets up **all three** for you.
+They open as normal Windows apps — a wallet window, a tray icon, and a dashboard:
 
 ```
-DigiByte Core (wallet)  →  DigiAsset for Windows (this)  →  IPFS (file storage)
-   you install once             installer sets up             installer sets up
+DigiByte Core wallet  →  DigiAsset for Windows  →  IPFS Desktop
+   (GUI window)            (node + dashboard)        (tray icon)
 ```
 
 > Want to run the **pool server** (accept nodes and pay hosts) rather than just
@@ -43,26 +43,41 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setu
 It asks for **one thing — your DigiByte payout address** (where you want to be
 paid) — then does everything else automatically:
 
-- installs **DigiByte Core 9.26.4** into `C:\DigiByte` and writes its config,
-- installs the current **IPFS (kubo)** release into `C:\DigiAsset`,
+- installs the **DigiByte Core GUI wallet** into `C:\DigiByte` and writes its config,
+- installs **IPFS Desktop** (the tray app) for your user,
 - downloads the latest **DigiAsset for Windows** node into `C:\DigiAsset` and writes its config,
-- **opens your local firewall** for the right ports,
-- sets **all three to start automatically on boot**,
+- installs the **Visual C++ runtime** the node needs, if it's missing,
+- **opens your local firewall** and pre-approves the apps (so you don't get scary popups),
+- sets **all three to open when you log in**,
 - **tests** whether you're reachable from the internet and tells you what to forward,
 - installs a background **maintenance task** that, on every boot and every 6 hours,
-  **auto-updates all three components and self-heals** anything broken (restarts
-  crashed services, re-downloads missing files, re-opens the firewall) — logging to
-  `C:\DigiAsset\logs` and only alerting you if it can't fix something itself.
+  **auto-updates the components** and re-checks health — logging to `C:\DigiAsset\logs`
+  and alerting you only if something needs your attention.
 
 You do **not** edit any files by hand. The only manual step is one router port
 forward (next section).
 
+### Auto-start & running it unattended
+
+The apps open **when you log in**: a DigiByte wallet window, the DigiAsset node
+dashboard, and the IPFS Desktop tray icon. Because they're desktop apps, they run
+while you're **logged in**.
+
+For an always-on node that comes back by itself after a reboot (nobody at the
+keyboard), set Windows to auto-login using Microsoft's free, official
+**[Sysinternals Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**:
+download it, run it once, enter your Windows username + password, and every boot
+auto-logs-in and launches the apps for you.
+
+> Prefer to launch the apps yourself instead of at logon? Re-run the installer and
+> add `-NoStartOnLogon`.
+
 ## 2. Let it sync (the one wait)
 
-DigiByte's blockchain is large, so the first sync takes **several hours**, running
-quietly in the background. You don't have to babysit it — just leave the PC on.
-Check progress any time with the monitor (see section 4). Once DigiByte is synced,
-DigiAsset for Windows registers with the pool on its own.
+DigiByte's blockchain is large, so the first sync takes **many hours — sometimes a
+day or two** (it's a big chain 🙂). Watch progress right in the **DigiByte wallet
+window**, or with the monitor (section 4). Just leave the PC on and logged in. Once
+DigiByte is synced, DigiAsset for Windows registers with the pool on its own.
 
 > Already had DigiByte Core installed? The installer detects it and just adds the
 > settings — restart DigiByte Core once if it says it wrote a new `digibyte.conf`.
@@ -111,10 +126,10 @@ Other quick checks:
 
 ## What "working" looks like
 
-- IPFS is running (installed as a boot task).
-- DigiByte Core is synced.
-- `DigiAssetWindows.exe` dashboard shows **PSP Pool: Hosting pool files** and, once
-  the pool has you verified, the **Payment** row goes active.
+- The **DigiByte wallet** window is open and synced.
+- **IPFS Desktop** is running (tray icon).
+- The **DigiAsset dashboard** shows **PSP Pool: Hosting pool files** and, once the
+  pool has you verified, the **Payment** row goes active.
 - Port 4001 tests as **open**.
 
 That's it — leave it running and you'll be paid from the pool for the content you host.
@@ -129,19 +144,27 @@ powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -DisableAuto
 powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -Uninstall         # stop + remove boot tasks/firewall + delete C:\DigiAsset
 ```
 
-It shuts DigiByte + IPFS down cleanly (not a hard kill). `-Uninstall` deletes
-`C:\DigiAsset` but leaves DigiByte Core and its blockchain in `C:\DigiByte` — delete
-that folder (or use the DigiByte uninstaller in Windows "Apps") if you want it gone too.
+It shuts the wallet, IPFS Desktop, and the node down cleanly (not a hard kill).
+`-Uninstall` deletes `C:\DigiAsset` but leaves the DigiByte wallet (`C:\DigiByte` +
+its blockchain) and IPFS Desktop installed — remove those from **Settings > Apps**
+if you want them gone too.
 
 ## Troubleshooting
 
+- **"Do you want to allow this app through the firewall?" popup:** expected the
+  first time DigiByte/IPFS/the node listens — click **Allow** (both networks). The
+  installer pre-approves them, but click Allow if one still appears.
+- **`MSVCP140.dll was not found`:** the node needs the Visual C++ x64 runtime. The
+  installer installs it automatically; if you still see this, re-run the one-liner.
 - **Windows blue "unknown publisher" / SmartScreen box:** the apps aren't
   code-signed yet, so Windows warns on first run. Click **More info → Run anyway**.
   If your antivirus quarantines `DigiAssetWindows.exe`, allow/restore it.
 - **Payment row not active / not verified:** almost always port 4001 isn't
   forwarded on the router. Fix the forward, then press `P` in the app.
-- **"DigiByte Core not responding":** it hasn't finished syncing yet (check with
-  `monitor-node.ps1`), or you had an old wallet running with different settings —
-  restart it once.
+- **"DigiByte Core not responding":** the DigiByte wallet hasn't finished syncing
+  yet (check with `monitor-node.ps1`), or it isn't open — open the DigiByte wallet.
+- **Apps didn't come back after a reboot:** they open at **logon**, so either log
+  in, or set up **[Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**
+  (see section 1) so the PC logs in and launches them automatically.
 - **PowerShell blocked / "cannot be loaded":** make sure you opened PowerShell
   **as Administrator**; the one-liner already passes `-ExecutionPolicy Bypass`.

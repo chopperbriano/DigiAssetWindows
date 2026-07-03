@@ -41,8 +41,11 @@ them (plus a node of your own) is the standard one-line installer. In an
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
 ```
 
-That installs DigiByte Core → `C:\DigiByte`, IPFS → `C:\DigiAsset`, and a node,
-all auto-starting on boot. Let DigiByte finish syncing before you enable payouts.
+That installs the **DigiByte wallet**, **IPFS Desktop**, and a **node** as GUI apps
+that open when you log in. For an always-on pool box, set the machine to auto-login
+with **[Sysinternals Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**
+(see [NODE-SETUP.md](NODE-SETUP.md#auto-start--running-it-unattended)). Let DigiByte
+finish syncing before you enable payouts.
 
 ## 2. Get `DigiAssetPoolServer.exe`
 

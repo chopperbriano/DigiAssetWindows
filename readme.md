@@ -13,10 +13,13 @@ administrator*) and paste this single line:
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
 ```
 
-It installs and auto-starts the whole stack — **DigiByte Core**, **IPFS**, and the
-**DigiAsset node** — writes every config, opens the firewall, and adds a background
-task that **auto-updates and self-heals on every boot**. It asks only for your DGB
-payout address. Full walkthrough: **[NODE-SETUP.md](NODE-SETUP.md)**.
+It installs the whole stack as **GUI apps** — the **DigiByte wallet**, **IPFS
+Desktop** (tray icon), and the **DigiAsset node dashboard** — writes every config,
+installs the VC++ runtime, opens the firewall, and adds a background task that
+**auto-updates** and re-checks health. The apps open when you log in (set up
+[Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon) for an
+always-on box). It asks only for your DGB payout address. Full walkthrough:
+**[NODE-SETUP.md](NODE-SETUP.md)**.
 
 > Building from source is **only for developers** — see [Build on Windows](#build-on-windows)
 > below. If you just want to run a node and earn DGB, use the one line above.
