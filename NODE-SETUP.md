@@ -28,24 +28,28 @@ Think of it as: contribute a little storage, help the network, and earn a bit of
 DGB when the pool has it to give. You can watch the live treasury balance and
 every payout at https://pool.digistamp.co.
 
-## 1. One-click install
+## 1. One-line install (recommended)
 
-Open **PowerShell as Administrator** and paste this single line:
+Open **PowerShell as Administrator** (click Start, type `PowerShell`, right-click
+**Windows PowerShell**, choose *Run as administrator*) and paste this single line:
 
 ```powershell
-$s="$env:TEMP\install-node.ps1"; iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-node.ps1 -OutFile $s; Start-Process powershell "-ExecutionPolicy Bypass -File `"$s`"" -Verb RunAs
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
 ```
 
 It asks for **one thing — your DigiByte payout address** (where you want to be
 paid) — then does everything else automatically:
 
-- downloads **DigiAsset for Windows**,
-- downloads + installs **DigiByte Core** (the wallet, latest version) and writes its config,
-- downloads + starts **IPFS**,
+- installs **DigiByte Core 9.26.4** into `C:\DigiByte` and writes its config,
+- installs **IPFS (kubo) 0.49** into `C:\DigiAsset`,
+- downloads the latest **DigiAsset for Windows** node into `C:\DigiAsset` and writes its config,
 - **opens your local firewall** for the right ports,
-- writes the config (pointed at `pool.digistamp.co` with your payout address),
 - sets **all three to start automatically on boot**,
-- **tests** whether you're reachable from the internet and tells you what to forward.
+- **tests** whether you're reachable from the internet and tells you what to forward,
+- installs a background **maintenance task** that, on every boot and every 6 hours,
+  **auto-updates all three components and self-heals** anything broken (restarts
+  crashed services, re-downloads missing files, re-opens the firewall) — logging to
+  `C:\DigiAsset\logs` and only alerting you if it can't fix something itself.
 
 You do **not** edit any files by hand. The only manual step is one router port
 forward (next section).
