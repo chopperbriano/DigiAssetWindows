@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.0.0'
+$SCRIPT_VERSION = '2.1.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -617,20 +617,39 @@ function Start-Node {
 # ---------------------------------------------------------------------------
 function Write-DigiByteConf {
     Ensure-Dir $DgbData
+    # Feature settings the node needs (DigiDollar + block/bloom filter indexes),
+    # and seed peers. Applied to a fresh conf; missing ones appended to an
+    # existing conf on re-run.
+    $features = @('digidollar=1','blockfilterindex=1','peerblockfilters=1','peerbloomfilters=1')
+    $addnodes = @(
+        '191.81.59.115','175.45.182.173','45.76.235.153','24.74.186.115','24.101.88.154',
+        '8.214.25.169','47.75.38.245','64.182.71.30','64.182.71.55','64.182.71.56'
+    )
     $cfg = Read-Conf $DgbConf
     $rpcUser = $cfg['rpcuser']; $rpcPass = $cfg['rpcpassword']
     if (-not $rpcUser -or -not $rpcPass) {
         $rpcUser = 'digiasset'; $rpcPass = New-Password 32
-        $addnodes = @('191.81.59.115','175.45.182.173','45.76.235.153','24.74.186.115','24.101.88.154','8.214.25.169','47.75.38.245')
         $lines = @(
             "rpcuser=$rpcUser","rpcpassword=$rpcPass","rpcbind=127.0.0.1","rpcport=$RpcPort",
             "rpcallowip=127.0.0.1","whitelist=127.0.0.1","listen=1","server=1","txindex=1","deprecatedrpc=addresses"
         )
+        $lines += $features
         $lines += ($addnodes | ForEach-Object { "addnode=$_" })
         Set-Content -Path $DgbConf -Value $lines -Encoding ASCII
-        Log '  wrote digibyte.conf with fresh RPC credentials.'
+        Log '  wrote digibyte.conf with fresh RPC credentials + node settings.'
     } else {
-        Log '  digibyte.conf already has RPC credentials - leaving it.'
+        # Existing conf: append any required feature settings + addnodes it is missing.
+        $raw = ''; if (Test-Path $DgbConf) { $raw = (Get-Content $DgbConf -Raw) }
+        $added = @()
+        foreach ($f in $features) {
+            $key = ($f -split '=')[0]
+            if (-not $cfg.ContainsKey($key)) { Add-Content -Path $DgbConf -Value $f -Encoding ASCII; $added += $key }
+        }
+        foreach ($ip in $addnodes) {
+            if ($raw -notmatch [regex]::Escape("addnode=$ip")) { Add-Content -Path $DgbConf -Value "addnode=$ip" -Encoding ASCII; $added += "addnode=$ip" }
+        }
+        if ($added.Count -gt 0) { Log ("  added missing digibyte.conf settings: {0}" -f ($added -join ', ')) }
+        else { Log '  digibyte.conf already has all settings - leaving it.' }
     }
     return @{ user = $rpcUser; pass = (Read-Conf $DgbConf)['rpcpassword'] }
 }
@@ -713,8 +732,10 @@ function Invoke-Install {
     Write-Host ""
     Write-Host "  Do NOT forward 5001, 14022, or 8090 - those must stay PRIVATE (local only)." -ForegroundColor Red
     Write-Host ""
-    Write-Host "If Windows asks to allow 'digibyted', IPFS, or the node through the firewall," -ForegroundColor Yellow
-    Write-Host "click ALLOW (both networks) - it's expected and safe." -ForegroundColor Yellow
+    Write-Host "Windows will show a few security popups during install - please APPROVE them all:" -ForegroundColor Yellow
+    Write-Host "  * 'Do you want to allow this app to make changes to your device?' (UAC)  -> YES" -ForegroundColor Yellow
+    Write-Host "  * 'Allow this app through the firewall?' (DigiByte / IPFS / node)  -> ALLOW (both networks)" -ForegroundColor Yellow
+    Write-Host "  They're expected and safe - the install can't finish without them." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Heads up: DigiByte's first sync can take many HOURS - sometimes a DAY or two." -ForegroundColor Yellow
     Write-Host "It's a big blockchain :)  Just leave the PC on and logged in while it catches up." -ForegroundColor Yellow

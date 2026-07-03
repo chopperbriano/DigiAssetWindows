@@ -151,9 +151,11 @@ if you want them gone too.
 
 ## Troubleshooting
 
-- **"Do you want to allow this app through the firewall?" popup:** expected the
-  first time DigiByte/IPFS/the node listens — click **Allow** (both networks). The
-  installer pre-approves them, but click Allow if one still appears.
+- **Security popups during install (UAC + firewall):** expected — approve them all.
+  - **"Do you want to allow this app to make changes to your device?"** (UAC) → **Yes**.
+  - **"Allow this app through the firewall?"** (DigiByte / IPFS / node) → **Allow**
+    (both Private + Public). The installer pre-approves where it can, but click Allow
+    if one still appears. The install can't finish without them.
 - **`MSVCP140.dll was not found`:** the node needs the Visual C++ x64 runtime. The
   installer installs it automatically; if you still see this, re-run the one-liner.
 - **Windows blue "unknown publisher" / SmartScreen box:** the apps aren't
