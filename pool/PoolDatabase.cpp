@@ -389,6 +389,22 @@ std::vector<PoolDatabase::PayoutRow> PoolDatabase::getRecentPayouts(unsigned int
     return out;
 }
 
+std::vector<std::string> PoolDatabase::getActiveNodePeerIds(int64_t sinceUnix) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<std::string> out;
+    const char* sql = "SELECT peerId FROM nodes WHERE lastSeen >= ? ORDER BY peerId;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, sinceUnix);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* p = sqlite3_column_text(stmt, 0);
+            if (p) out.emplace_back((const char*) p);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
 std::vector<std::string> PoolDatabase::getSampleCids(unsigned int limit) {
     std::lock_guard<std::mutex> lk(_mutex);
     std::vector<std::string> out;

@@ -6,6 +6,9 @@
 <title>DigiStamp Permanent Storage Pool</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="alternate icon" href="favicon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -35,6 +38,10 @@
     background: #238636; color: #fff; border-radius: 8px; text-decoration: none; font-weight: 600;
   }
   footer { margin-top: 56px; color: #8b949e; font-size: .85rem; border-top: 1px solid #30363d; padding-top: 20px; }
+  #nodeMap { height: 380px; border-radius: 10px; overflow: hidden; border: 1px solid #30363d; background: #0d1117; }
+  .leaflet-container { background: #0d1117; }
+  .node-pin { background: none; border: none; }
+  .maphint { color: #8b949e; font-size: .85rem; margin: 8px 0 0; }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 4px 0 20px; }
   .stat { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; text-align: center; }
   .stat .num { font-size: 1.25rem; font-weight: 700; color: #7ee787; font-family: ui-monospace, monospace; }
@@ -71,6 +78,12 @@
       <li>Pays verified node operators DGB to their chosen address.</li>
     </ul>
     <p class="muted">It is not a wallet or an explorer. It talks to DigiAsset Core nodes, not to browsers.</p>
+  </div>
+
+  <h2>Nodes around the world</h2>
+  <div class="card">
+    <div id="nodeMap"></div>
+    <p class="maphint" id="mapHint">Each pin is a node hosting DigiAsset content. Nearby nodes group into a count.</p>
   </div>
 
   <h2>Support the pool &mdash; donate DGB</h2>
@@ -144,6 +157,7 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     document.getElementById("statTreasury").textContent = fmt(d.treasuryBalance);
     document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
     document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + (d.totalNodes || 0);
+    if (window._plotNodes) window._plotNodes(d.nodes);
 
     var addr = d.donationAddress || "";
     var addrEl = document.getElementById("donateAddr");
@@ -215,6 +229,53 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
 
   load();
   setInterval(load, 60000); // refresh once a minute
+})();
+</script>
+<!-- World map (Leaflet + marker clustering). Degrades gracefully if it can't load. -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script>
+(function () {
+  var el = document.getElementById("nodeMap");
+  if (!el || !window.L) {
+    if (el) { el.style.display = "none"; document.getElementById("mapHint").textContent = "Map unavailable."; }
+    return;
+  }
+  var map = L.map("nodeMap", { worldCopyJump: true, minZoom: 1, attributionControl: true }).setView([25, 5], 2);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "&copy; OpenStreetMap &copy; CARTO", subdomains: "abcd", maxZoom: 19
+  }).addTo(map);
+
+  var pin = '<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">' +
+            '<path d="M13 0C6 0 0 5.4 0 12.6 0 22 13 34 13 34s13-12 13-21.4C26 5.4 20 0 13 0z" fill="#1f6feb" stroke="#0d1117" stroke-width="1.5"/>' +
+            '<circle cx="13" cy="12.5" r="7.3" fill="#0d1117"/>' +
+            '<text x="13" y="16.3" font-size="10" font-weight="700" fill="#7ee787" text-anchor="middle" font-family="system-ui,sans-serif">D</text></svg>';
+  var icon = L.divIcon({ className: "node-pin", html: pin, iconSize: [26, 34], iconAnchor: [13, 34], popupAnchor: [0, -30] });
+
+  var cluster = window.L.markerClusterGroup ? L.markerClusterGroup({ maxClusterRadius: 40 }) : null;
+  if (cluster) cluster.addTo(map);
+
+  window._plotNodes = function (nodes) {
+    if (cluster) cluster.clearLayers();
+    var n = 0;
+    (nodes || []).forEach(function (x) {
+      if (typeof x.lat !== "number" || typeof x.lon !== "number") return;
+      var m = L.marker([x.lat, x.lon], { icon: icon });
+      var label = (x.city ? x.city + ", " : "") + (x.country || "");
+      if (label) m.bindPopup(label);
+      if (cluster) cluster.addLayer(m); else m.addTo(map);
+      n++;
+    });
+    var hint = document.getElementById("mapHint");
+    if (hint) hint.textContent = n ? (n + " node" + (n === 1 ? "" : "s") + " on the map. Nearby nodes group into a count; click a pin for its location.")
+                                   : "No nodes are being located yet — as operators join, their pins appear here.";
+  };
+
+  // Initial load (the stats refresh loop also calls _plotNodes every minute).
+  fetch("/pool/stats.json", { cache: "no-store" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { window._plotNodes(d.nodes); })
+    .catch(function () {});
 })();
 </script>
 </body>

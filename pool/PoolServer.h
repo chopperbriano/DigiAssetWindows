@@ -20,6 +20,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -99,6 +100,11 @@ private:
     double _cachedReceived = 0.0;         // treasury all-time received (explorer)
     double _cachedTreasuryBalance = 0.0;  // treasury current balance (explorer)
     int64_t _statsCacheTime = 0;
+    // Node geolocation for the world map. _geoCache maps a node IP to a JSON
+    // fragment ("lat":..,"lon":..,"city":..,"country":..); _cachedNodesJson is
+    // the assembled [{...}] array rebuilt on the stats refresh cycle.
+    std::map<std::string, std::string> _geoCache;
+    std::string _cachedNodesJson = "[]";
 
     void acceptLoop();
     void handleConnection(boost::asio::ip::tcp::socket socket, uint64_t id);

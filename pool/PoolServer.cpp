@@ -189,6 +189,57 @@ namespace {
         return out;
     }
 
+    // Pull the IPv4/IPv6 address out of a multiaddr like /ip4/1.2.3.4/tcp/...
+    std::string extractIpFromMultiaddr(const std::string& s) {
+        size_t p = s.find("/ip4/");
+        if (p == std::string::npos) p = s.find("/ip6/");
+        if (p == std::string::npos) return "";
+        p += 5;
+        size_t e = s.find('/', p);
+        return s.substr(p, (e == std::string::npos ? s.size() : e) - p);
+    }
+
+    // Geolocate a batch of IPs via ip-api.com (free, no key, server-side only).
+    // Returns IP -> JSON fragment ("lat":..,"lon":..,"city":..,"country":..).
+    std::map<std::string, std::string> geolocateBatch(const std::vector<std::string>& ips) {
+        std::map<std::string, std::string> out;
+        if (ips.empty()) return out;
+        std::string body = "[";
+        for (size_t i = 0; i < ips.size(); i++) {
+            if (i) body += ",";
+            body += "{\"query\":\"" + ips[i] + "\"}";
+        }
+        body += "]";
+        std::string resp;
+        long status = 0;
+        try {
+            status = CurlHandler::postJson(
+                "http://ip-api.com/batch?fields=status,lat,lon,city,country,query",
+                body, resp, 12000);
+        } catch (...) { return out; }
+        if (status < 200 || status >= 300) return out;
+
+        // ip-api returns a flat array of objects; walk them one {..} at a time.
+        size_t pos = 0;
+        while (true) {
+            size_t ob = resp.find('{', pos);
+            if (ob == std::string::npos) break;
+            size_t cb = resp.find('}', ob);
+            if (cb == std::string::npos) break;
+            std::string obj = resp.substr(ob, cb - ob + 1);
+            pos = cb + 1;
+            if (jsonField(obj, "status") != "success") continue;
+            std::string q = jsonField(obj, "query");
+            std::string lat = jsonField(obj, "lat");
+            std::string lon = jsonField(obj, "lon");
+            if (q.empty() || lat.empty() || lon.empty()) continue;
+            out[q] = "\"lat\":" + lat + ",\"lon\":" + lon +
+                     ",\"city\":\"" + jsonEscape(jsonField(obj, "city")) + "\"," +
+                     "\"country\":\"" + jsonEscape(jsonField(obj, "country")) + "\"";
+        }
+        return out;
+    }
+
     // --- HTTP response builder ---------------------------------------------
     std::string buildResponse(int status,
                               const std::string& contentType,
@@ -447,7 +498,7 @@ void PoolServer::handleStats(std::string& outBody) {
     // Snapshot the wallet config + refresh the cached balances if stale. The
     // RPC calls are rate-limited to once per 30s so this public endpoint can't
     // be used to hammer DigiByte Core.
-    std::string donationAddress, explorerPrefix;
+    std::string donationAddress, explorerPrefix, nodesJson;
     double available = 0.0, received = 0.0, treasuryBalance = 0.0;
     {
         std::lock_guard<std::mutex> lk(_statsMutex);
@@ -469,6 +520,37 @@ void PoolServer::handleStats(std::string& outBody) {
                     _cachedTreasuryBalance = tbal;
                 }
             }
+            // Node geolocation for the world map. Per-IP cached, so only new
+            // IPs hit ip-api; the nodes array is rebuilt each refresh.
+            {
+                int64_t weekAgo = now - 7 * 24 * 3600;
+                auto peerIds = _db.getActiveNodePeerIds(weekAgo);
+                std::vector<std::string> ips, uncached;
+                for (const auto& pid : peerIds) {
+                    std::string ip = extractIpFromMultiaddr(pid);
+                    if (ip.empty()) continue;
+                    ips.push_back(ip);
+                    if (!_geoCache.count(ip) &&
+                        std::find(uncached.begin(), uncached.end(), ip) == uncached.end()) {
+                        uncached.push_back(ip);
+                    }
+                }
+                if (!uncached.empty()) {
+                    auto geo = geolocateBatch(uncached);
+                    for (const auto& kv : geo) _geoCache[kv.first] = kv.second;
+                }
+                std::string arr = "[";
+                bool firstNode = true;
+                for (const auto& ip : ips) {
+                    auto it = _geoCache.find(ip);
+                    if (it == _geoCache.end()) continue;
+                    if (!firstNode) arr += ",";
+                    firstNode = false;
+                    arr += "{" + it->second + "}";
+                }
+                arr += "]";
+                _cachedNodesJson = arr;
+            }
             _statsCacheTime = now;
         }
         donationAddress = _donationAddress;
@@ -476,6 +558,7 @@ void PoolServer::handleStats(std::string& outBody) {
         available = _cachedAvailable;
         received = _cachedReceived;
         treasuryBalance = _cachedTreasuryBalance;
+        nodesJson = _cachedNodesJson;
     }
 
     double paidToHosts = _db.getPaidTotalDgb();
@@ -499,6 +582,7 @@ void PoolServer::handleStats(std::string& outBody) {
        << "\"payoutCount\":" << paidCount << ","
        << "\"verifiedNodes\":" << verifiedNodes << ","
        << "\"totalNodes\":" << totalNodes << ","
+       << "\"nodes\":" << nodesJson << ","
        << "\"explorerTxPrefix\":\"" << jsonEscape(explorerPrefix) << "\","
        << "\"recentPayouts\":[";
     for (size_t i = 0; i < recent.size(); i++) {

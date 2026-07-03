@@ -115,6 +115,11 @@ public:
     };
     std::vector<PayoutRow> getRecentPayouts(unsigned int limit);
 
+    // peerId (multiaddr, contains the node's IP) for every node seen since the
+    // given unix time. Used to geolocate nodes for the world map on the pool
+    // web page.
+    std::vector<std::string> getActiveNodePeerIds(int64_t sinceUnix);
+
     // Pool-local config key/value store (separate from the operator's
     // editable pool.cfg; this is runtime state like "last snapshot time").
     void setConfig(const std::string& key, const std::string& value);
