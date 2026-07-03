@@ -205,16 +205,35 @@ int main() {
         } catch (const Config::exceptionConfigFileInvalid& e) {
             log->addMessage("DigiByte Core config values wrong in config file", Log::CRITICAL);
             return -1;
+        } catch (const std::exception& e) {
+            //Any other startup hiccup (wallet still coming up, momentary RPC
+            //error) - keep waiting rather than aborting the node.
+            log->addMessage("DigiByte Core not ready yet (" + string(e.what()) + ") try again in 30 sec");
+            online = false;
+            this_thread::sleep_for(chrono::seconds(30));
         }
+        if (g_shutdown != 0) return 0; //allow Ctrl+C while waiting for the wallet
     }
     main->setDigiByteCore(&dgb);
 
-    //make sure if we predownloaded data from ipfs that the wallet is synced past the point image was syned to
+    //make sure if we predownloaded data from ipfs that the wallet is synced past
+    //the point the image was synced to.  A FRESH wallet can take a WEEK to get
+    //there, so this loop must (a) tolerate transient RPC errors instead of
+    //crashing, and (b) stay responsive to a shutdown request.
     if (pauseHeight > 0) {
-        while (dgb.getBlockCount() < pauseHeight) {
-            log->addMessage("DigiByte Core Syncing try again in 2 minutes");
-            this_thread::sleep_for(chrono::minutes(2)); //Don't hammer wallet
+        while (g_shutdown == 0) {
+            unsigned int height = 0;
+            try {
+                height = dgb.getBlockCount();
+            } catch (const std::exception& e) {
+                log->addMessage("DigiByte Core not ready while waiting to reach bootstrap height (" + string(e.what()) + ")");
+                height = 0;
+            }
+            if (height >= pauseHeight) break;
+            log->addMessage("DigiByte Core Syncing (" + to_string(height) + "/" + to_string(pauseHeight) + ") - checking again in 2 minutes");
+            for (int i = 0; i < 120 && g_shutdown == 0; i++) this_thread::sleep_for(chrono::seconds(1)); //sleep ~2 min, but wake on shutdown
         }
+        if (g_shutdown != 0) return 0;
     }
 
     /**
