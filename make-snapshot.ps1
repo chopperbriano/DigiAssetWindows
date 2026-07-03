@@ -31,6 +31,9 @@ param(
     # The actual DigiByte data directory (the folder containing blocks\ and
     # chainstate\). Leave blank to auto-detect C:\DigiByte\data or %APPDATA%\DigiByte.
     [string]$DataDir      = '',
+    # Block height of the DigiByte snapshot. Only needed if DigiByte has no RPC
+    # (a plain wallet) so we can't read it - look at DigiByte-Qt's status bar.
+    [int]   $Height       = 0,
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
     [string]$BaseUrl      = ''
 )
@@ -45,7 +48,7 @@ function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 # --- Elevate --------------------------------------------------------------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`""; return }
+    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`""; return }
     else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
 
@@ -65,43 +68,52 @@ function Read-Cfg($path){ $h=@{}; if(Test-Path $path){ foreach($l in Get-Content
 
 # --- DigiByte component ---------------------------------------------------
 function New-DigiByteArchive {
-    if (-not (Test-Path (Join-Path $DgbData 'blocks'))) { throw "No DigiByte blockchain at $DgbData (no blocks\ folder). Pass -DataDir <your DigiByte data folder>." }
-    $cfg = Read-Cfg $DgbConf
-    $authPair = $null
-    if ($cfg['rpcuser']) { $authPair = "$($cfg['rpcuser']):$($cfg['rpcpassword'])" }
-    else { $ck = Join-Path $DgbData '.cookie'; if (Test-Path $ck) { $authPair = (Get-Content $ck -Raw).Trim() } }
-    if (-not $authPair) { throw "No RPC auth for DigiByte in $DgbData (need rpcuser/rpcpassword in digibyte.conf, or a .cookie from a running node with server=1)." }
-    $port = 14022; if ($cfg['rpcport']) { try { $port=[int]$cfg['rpcport'] } catch {} }
-    function Dgb($m){ $b64=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($authPair)); Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 15 -Body ('{"jsonrpc":"1.0","id":"s","method":"'+$m+'","params":[]}') }
-    Say "`nChecking DigiByte sync..." 'Cyan'
-    $height=0; $ver='unknown'
-    try {
-        $info=(Dgb 'getblockchaininfo').result; $height=[int]$info.blocks
-        $pct=[math]::Round([double]$info.verificationprogress*100,2)
-        try { $ver=((Dgb 'getnetworkinfo').result.subversion) -replace '[^0-9\.]','' } catch {}
-        Say ("  height {0:N0}   synced {1}%   version {2}" -f $height,$pct,$ver) 'White'
-        if ($pct -lt 99.9) { Say "  WARNING: DigiByte is NOT fully synced." 'Yellow'; if((Read-Host "  Continue? (y/N)") -notmatch '^[Yy]'){ return } }
-    } catch { Say "  Could not reach DigiByte RPC (is the wallet running?)." 'Yellow'; if((Read-Host "  Continue anyway? (y/N)") -notmatch '^[Yy]'){ return } }
-    Say "`nStopping DigiByte (clean shutdown) to make a non-corrupt copy..." 'Cyan'
-    try { Dgb 'stop' | Out-Null } catch {}
-    for($i=0;$i -lt 60 -and (Get-Process digibyte-qt,digibyted -EA SilentlyContinue);$i++){ Start-Sleep -Seconds 1 }
-    Get-Process digibyte-qt,digibyted -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-    Start-Sleep -Seconds 3
+    if (-not (Test-Path (Join-Path $DgbData 'blocks'))) { throw "No DigiByte blockchain at $DgbData (no blocks\ folder). Pass -DataDir <folder with blocks\ + chainstate\>." }
+    Say "`nDigiByte data: $DgbData" 'White'
+    $h = if ($Height -gt 0) { $Height } else { 0 }
+    $ver = 'unknown'
+    $qtPath  = (Get-Process digibyte-qt -ErrorAction SilentlyContinue | Select-Object -First 1).Path
+    $running = [bool](Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue)
+    if ($running) {
+        # Try RPC (needs server=1 + creds/cookie) for the height and a clean stop.
+        $cfg = Read-Cfg $DgbConf
+        $authPair = $null
+        if ($cfg['rpcuser']) { $authPair = "$($cfg['rpcuser']):$($cfg['rpcpassword'])" }
+        else { $ck = Join-Path $DgbData '.cookie'; if (Test-Path $ck) { $authPair = (Get-Content $ck -Raw).Trim() } }
+        $port = 14022; if ($cfg['rpcport']) { try { $port=[int]$cfg['rpcport'] } catch {} }
+        if ($authPair) {
+            function Dgb($m){ $b64=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($authPair)); Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 15 -Body ('{"jsonrpc":"1.0","id":"s","method":"'+$m+'","params":[]}') }
+            try {
+                $info=(Dgb 'getblockchaininfo').result; $h=[int]$info.blocks
+                $pct=[math]::Round([double]$info.verificationprogress*100,2)
+                try { $ver=((Dgb 'getnetworkinfo').result.subversion) -replace '[^0-9\.]','' } catch {}
+                Say ("  height {0:N0}   synced {1}%   version {2}" -f $h,$pct,$ver) 'White'
+                if ($pct -lt 99.9) { Say "  WARNING: DigiByte is NOT fully synced." 'Yellow'; if((Read-Host "  Continue? (y/N)") -notmatch '^[Yy]'){ return } }
+                Say "Stopping DigiByte cleanly (via RPC)..." 'Cyan'; try { Dgb 'stop' | Out-Null } catch {}
+            } catch { Say "  RPC not answering (server=1 not enabled?)." 'Yellow' }
+        } else { Say "  DigiByte is running but has no RPC access (no server=1 / creds)." 'Yellow' }
+        for($i=0;$i -lt 60 -and (Get-Process digibyte-qt,digibyted -EA SilentlyContinue);$i++){ Start-Sleep -Seconds 1 }
+        if (Get-Process digibyte-qt,digibyted -EA SilentlyContinue) {
+            throw "DigiByte is still running and I couldn't stop it cleanly. Please CLOSE DigiByte yourself (File > Exit, or right-click the tray icon > Exit), wait ~10s for it to fully close, then re-run this. Do NOT force-kill it - that can corrupt the data."
+        }
+    } else {
+        Say "  DigiByte is not running - good, its data is already flushed to disk." 'Green'
+    }
+    if ($h -le 0) { Say "  NOTE: block height unknown - the manifest height-check will be skipped. (Pass -Height <N> from DigiByte-Qt's status bar to record it.)" 'Yellow' }
+    Start-Sleep -Seconds 2
     $dgbDirs = @('blocks','chainstate','indexes') | Where-Object { Test-Path (Join-Path $DgbData $_) }
-    if ($dgbDirs -notcontains 'blocks' -or $dgbDirs -notcontains 'chainstate') { throw "blocks/ or chainstate/ missing under $DgbData." }
-    $archive = Join-Path $OutDir "digibyte-$height.tar.gz"
+    if ($dgbDirs -notcontains 'blocks' -or $dgbDirs -notcontains 'chainstate') { throw "blocks\ or chainstate\ missing under $DgbData." }
+    $archive = Join-Path $OutDir "digibyte-$h.tar.gz"
     Say "Archiving the DigiByte blockchain (big - be patient)..." 'Cyan'
     & tar.exe -czf "$archive" -C "$DgbData" $dgbDirs
     if ($LASTEXITCODE -ne 0) { throw "tar failed (exit $LASTEXITCODE)." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
     Say "Computing SHA256..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-    $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$height; version=$ver; sizeBytes=(Get-Item $archive).Length }
+    $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$h; version=$ver; sizeBytes=(Get-Item $archive).Length }
     ($part|ConvertTo-Json) | Set-Content -Path (Join-Path $OutDir 'digibyte-part.json') -Encoding UTF8
     Say "  + digibyte-part.json" 'Green'
-    Say "Restarting DigiByte..." 'Cyan'
-    $qt=Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyte-qt.exe' -EA SilentlyContinue | Select-Object -First 1
-    if($qt){ Start-Process $qt.FullName -ArgumentList "-datadir=$DgbData" }
+    if ($running -and $qtPath) { Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`"" }
 }
 
 # --- chain.db component ---------------------------------------------------
@@ -144,7 +156,7 @@ function New-Manifest {
     $c = Load-Part 'chaindb-part.json'
     if (-not $d) { throw "digibyte-part.json not found locally or at $base - run/upload the digibyte component first." }
     if (-not $c) { throw "chaindb-part.json not found locally or at $base - run/upload the chaindb component first." }
-    if ([int]$c.height -gt [int]$d.height -and [int]$c.height -gt 0) {
+    if ([int]$d.height -gt 0 -and [int]$c.height -gt 0 -and [int]$c.height -gt [int]$d.height) {
         Say "`n  WARNING: chain.db height ($($c.height)) is AHEAD of the DigiByte snapshot ($($d.height))." 'Red'
         Say "  That is unsafe - the node would have analysis for blocks the wallet doesn't have yet." 'Red'
         Say "  Use a DigiByte snapshot at >= the chain.db height (regenerate the DigiByte part)." 'Red'
