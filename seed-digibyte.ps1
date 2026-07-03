@@ -23,8 +23,41 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
+
+# Resumable BITS download with live %/speed/ETA; falls back to a plain download.
+function Get-DL($u,$d){
+    Import-Module BitsTransfer -ErrorAction SilentlyContinue
+    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+        try {
+            $j = Get-BitsTransfer -Name 'DigiByteSeed' -ErrorAction SilentlyContinue | Where-Object { $_.FileList.RemoteName -eq $u } | Select-Object -First 1
+            if (-not $j) { Get-BitsTransfer -Name 'DigiByteSeed' -ErrorAction SilentlyContinue | Remove-BitsTransfer -ErrorAction SilentlyContinue; $j = Start-BitsTransfer -Source $u -Destination $d -DisplayName 'DigiByteSeed' -Asynchronous -Priority Foreground -ErrorAction Stop }
+            $lb=0; $lt=Get-Date
+            while ($j.JobState -in 'Connecting','Transferring','Queued','TransientError') {
+                if ($j.JobState -eq 'TransientError') { try { $j | Resume-BitsTransfer -Asynchronous -ErrorAction SilentlyContinue } catch {} }
+                $bt=$j.BytesTransferred; $tot=$j.BytesTotal; $now=Get-Date; $s=($now-$lt).TotalSeconds
+                $spd = if ($s -ge 1) { ($bt-$lb)/$s } else { $null }; if ($spd) { $lb=$bt; $lt=$now }
+                if ($tot -gt 0) { $pct=[int](($bt/$tot)*100); $eta = if ($spd -and $spd -gt 0) { [TimeSpan]::FromSeconds([int](($tot-$bt)/$spd)).ToString() } else { '--:--:--' }
+                    Write-Progress -Activity "Downloading DigiByte snapshot" -PercentComplete $pct -Status ("{0:N1}/{1:N1} GB  {2}%  {3:N1} MB/s  ETA {4}" -f ($bt/1GB),($tot/1GB),$pct,(($(if($spd){$spd}else{0}))/1MB),$eta) }
+                Start-Sleep -Seconds 2
+            }
+            Write-Progress -Activity "Downloading DigiByte snapshot" -Completed
+            if ($j.JobState -eq 'Transferred') { Complete-BitsTransfer -BitsJob $j; return $true }
+            $j | Remove-BitsTransfer -ErrorAction SilentlyContinue; return $false
+        } catch {}
+    }
+    try { Invoke-WebRequest -Uri $u -OutFile $d -UseBasicParsing -TimeoutSec 0; return (Test-Path $d) } catch { return $false }
+}
+# Extract with a heartbeat (tar is silent for minutes on a huge archive).
+function Expand-DL($a,$dst){
+    $drv=(Split-Path $dst -Qualifier).TrimEnd(':'); $fb=try{(Get-PSDrive -Name $drv).Free}catch{0}
+    Say "Extracting into $dst - heavy disk activity for several minutes; this is NORMAL, not frozen." 'Yellow'
+    $p=Start-Process tar.exe -ArgumentList @('-xzf',"$a",'-C',"$dst") -PassThru -WindowStyle Hidden; $t0=Get-Date
+    while (-not $p.HasExited) { Start-Sleep -Seconds 5; $w=0; try{$w=[math]::Max(0,$fb-(Get-PSDrive -Name $drv).Free)}catch{}
+        Write-Progress -Activity "Extracting" -Status ("~{0:N1} GB written  elapsed {1}  (working...)" -f ($w/1GB),(((Get-Date)-$t0).ToString('hh\:mm\:ss'))) }
+    Write-Progress -Activity "Extracting" -Completed; return ($p.ExitCode -eq 0)
+}
 
 # Elevate (writing into the datadir / stopping DigiByte may need admin).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -60,20 +93,15 @@ New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 $tmp = Join-Path $env:TEMP $m.digibyte.file
 if (Test-Path $tmp) { Remove-Item $tmp -Force }
 
-Say "Downloading (large - resumable, please wait)..." 'Cyan'
-$got = $false
-try { Import-Module BitsTransfer -ErrorAction SilentlyContinue; Start-BitsTransfer -Source $url -Destination $tmp -ErrorAction Stop; $got = $true } catch {}
-if (-not $got) { try { Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 0; $got = (Test-Path $tmp) } catch {} }
-if (-not $got) { throw "Download failed: $url" }
+Say "Downloading (large; resumable - safe to leave running)..." 'Cyan'
+if (-not (Get-DL $url $tmp)) { throw "Download failed: $url" }
 
-Say "Verifying SHA256..." 'Cyan'
+Say "Verifying SHA256 (reads the whole file, ~a minute)..." 'Cyan'
 $h = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
 if ($h -ne ("$($m.digibyte.sha256)").ToLower()) { Remove-Item $tmp -Force; throw 'Checksum MISMATCH - refusing to use this file.' }
 Say "  checksum OK." 'Green'
 
-Say "Extracting into $DataDir ..." 'Cyan'
-& tar.exe -xzf "$tmp" -C "$DataDir"
-if ($LASTEXITCODE -ne 0) { throw "tar extract failed (exit $LASTEXITCODE)." }
+if (-not (Expand-DL $tmp $DataDir)) { throw 'tar extract failed.' }
 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 
 Say "`n===== Done =====" 'Green'
