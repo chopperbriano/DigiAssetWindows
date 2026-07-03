@@ -1,12 +1,47 @@
-cmake-build-debug
-.idea
+# ---- Build output ----
+build/
+cmake-build-debug/
 bin/*
 bin/cache/*
 bin/stream/*
-build
-build/*
+!*/.gitkeep
+
+# ---- Generated ----
 src/Version.h
-*/_*
+
+# ---- IDE / editor ----
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+
+# ---- Local agent / tooling config ----
+.claude/
+
+# ---- NuGet / vendored restore (re-downloadable) ----
+packages/
+nuget.exe
+
+# ---- Local build helpers & logs ----
+_build_now.bat
+setup_and_build.bat
+_build_log.txt
+build_output.txt
+build_output.log
+debug.log
+*.log
+
+# ---- Local runtime config & data (use example.cfg as the template) ----
+config.cfg
+*.db
+_testFunc_*.db
 tests/testFiles/assetTest.*
 tests/testFiles/rpcTest.db
-!*/.gitkeep
+
+# ---- Historical boost stub / orphan stubs (kept local, never published) ----
+src/boost/
+src/sqlite3_stubs.cpp
+
+# ---- Legacy: underscore-prefixed scratch files in subdirs ----
+*/_*

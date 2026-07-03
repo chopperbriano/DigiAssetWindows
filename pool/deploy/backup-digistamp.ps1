@@ -20,13 +20,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root       = "C:\DigiAssetWindows",
-    [string]$BackupRoot = "C:\DigiAssetWindows\backups",
+    # Prefer the current layout (C:\DigiAsset); fall back to the old folder if
+    # that is where this box's data actually lives, so an existing pool keeps working.
+    [string]$Root       = $(if (Test-Path 'C:\DigiAsset\config.cfg') { 'C:\DigiAsset' } elseif (Test-Path 'C:\DigiAssetWindows\config.cfg') { 'C:\DigiAssetWindows' } else { 'C:\DigiAsset' }),
+    [string]$BackupRoot = "",
     [int]   $Keep       = 7,
     [switch]$IncludeChain,
     [switch]$SkipWallet
 )
 $ErrorActionPreference = "Stop"
+if (-not $BackupRoot) { $BackupRoot = Join-Path $Root "backups" }
 
 function Read-Cfg([string]$path) {
     $h = @{}

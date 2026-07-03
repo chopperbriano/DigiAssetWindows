@@ -83,8 +83,9 @@ immediately — no restart needed.
 ## Starting the stack + backups
 
 Two helper scripts (also in this folder) run the day-to-day operations. Copy them
-next to your data, or run them in place with a `-Root` pointing at the data
-folder (default `C:\DigiAssetWindows`).
+next to your data, or run them in place with a `-Root` pointing at the data folder
+(default `C:\DigiAsset`, auto-falling-back to `C:\DigiAssetWindows` if that is where
+this box's data already lives).
 
 ### `start-digistamp.ps1` — start everything after a reboot
 
@@ -116,8 +117,8 @@ the natural pattern is: **on boot, back up first, then start.** Register a
 "backup then start" at logon with Task Scheduler:
 
 ```powershell
-$backup = 'powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\backup-digistamp.ps1'
-$start  = 'powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\start-digistamp.ps1'
+$backup = 'powershell -ExecutionPolicy Bypass -File C:\DigiAsset\backup-digistamp.ps1'
+$start  = 'powershell -ExecutionPolicy Bypass -File C:\DigiAsset\start-digistamp.ps1'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-Command `"& {$backup; $start}`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName DigiStampBoot -Action $action -Trigger $trigger -RunLevel Highest -Force
