@@ -112,10 +112,29 @@ Other quick checks:
 
 That's it — leave it running and you'll be paid from the pool for the content you host.
 
+## Stopping or removing it
+
+Grab `stop-node.ps1` (repo root) and, from an Administrator PowerShell:
+
+```powershell
+.\stop-node.ps1                     # stop everything now (restarts on next boot)
+.\stop-node.ps1 -DisableAutostart   # stop + don't restart on boot
+.\stop-node.ps1 -Uninstall          # stop, remove boot tasks/firewall rules, delete the node files
+```
+
+It shuts DigiByte + IPFS down cleanly (not a hard kill). `-Uninstall` leaves
+DigiByte Core and its blockchain in place — remove those from Windows "Apps" if
+you want them gone too.
+
 ## Troubleshooting
 
+- **Windows blue "unknown publisher" / SmartScreen box:** the apps aren't
+  code-signed yet, so Windows warns on first run. Click **More info → Run anyway**.
+  If your antivirus quarantines `DigiAssetCore.exe`, allow/restore it.
 - **Payment row not active / not verified:** almost always port 4001 isn't
   forwarded on the router. Fix the forward, then press `P` in the app.
-- **"DigiByte Core not responding":** the wallet isn't running or hasn't finished
-  syncing, or you didn't restart it after the config was written.
-- **`gh`/PowerShell blocked:** make sure you opened PowerShell **as Administrator**.
+- **"DigiByte Core not responding":** it hasn't finished syncing yet (check with
+  `monitor-node.ps1`), or you had an old wallet running with different settings —
+  restart it once.
+- **PowerShell blocked / "cannot be loaded":** make sure you opened PowerShell
+  **as Administrator**; the one-liner already passes `-ExecutionPolicy Bypass`.

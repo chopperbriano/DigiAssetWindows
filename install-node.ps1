@@ -54,9 +54,12 @@ function Register-DaemonTask($name, $exe, $arguments) {
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2) -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 }
-function Register-VisibleTask($name, $exe, $workdir) {
-    # Runs in the user's session (visible window) at logon.
-    $a = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $workdir
+function Register-GuardedLogonTask($name, $exe, $workdir, $procName) {
+    # Runs in the user's session (visible window) at logon, but only launches if
+    # the process isn't already running - so a manual start + the logon task
+    # can't produce two windows.
+    $guard = "if (-not (Get-Process '$procName' -ErrorAction SilentlyContinue)) { Start-Process -FilePath '$exe' -WorkingDirectory '$workdir' }"
+    $a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$guard`""
     $t = New-ScheduledTaskTrigger -AtLogOn
     $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
@@ -174,7 +177,16 @@ if (-not (Test-Path $ipfsExe)) {
     $ver = ($versions | Where-Object { $_ -and ($_ -notmatch "rc") } | Select-Object -Last 1).Trim()
     Write-Host "  downloading kubo $ver ..."
     $zip = Join-Path $env:TEMP "kubo.zip"
-    Invoke-WebRequest "https://dist.ipfs.tech/kubo/$ver/kubo_${ver}_windows-amd64.zip" -OutFile $zip -UseBasicParsing
+    $zipUrl = "https://dist.ipfs.tech/kubo/$ver/kubo_${ver}_windows-amd64.zip"
+    Invoke-WebRequest $zipUrl -OutFile $zip -UseBasicParsing
+    # Verify SHA-512 against the published sidecar; abort on a real mismatch.
+    $expected = $null
+    try { $expected = ((Invoke-WebRequest "$zipUrl.sha512" -UseBasicParsing -TimeoutSec 15).Content -split '\s+')[0].Trim().ToLower() } catch {}
+    if ($expected) {
+        $actual = (Get-FileHash $zip -Algorithm SHA512).Hash.ToLower()
+        if ($actual -ne $expected) { Remove-Item $zip -Force; throw "IPFS download failed checksum verification - aborting for safety." }
+        Write-Host "  IPFS checksum verified (SHA-512)."
+    } else { Write-Host "  (could not fetch IPFS checksum; proceeding over HTTPS)" -ForegroundColor Yellow }
     $tmp = Join-Path $env:TEMP "kubo_extract"
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
     Expand-Archive $zip -DestinationPath $tmp -Force
@@ -226,7 +238,7 @@ if (Test-Path $cfg) {
 # --- 6. DigiAsset Core: run + restart on boot -----------------------------
 Step 6 "Setting DigiAsset Core to start on boot..."
 $coreExe = Join-Path $Root "DigiAssetCore.exe"
-Register-VisibleTask "DigiStampNode" $coreExe $Root
+Register-GuardedLogonTask "DigiStampNode" $coreExe $Root "DigiAssetCore"
 if (-not (Get-Process DigiAssetCore -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath $coreExe -WorkingDirectory $Root
 }
