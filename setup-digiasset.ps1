@@ -204,8 +204,15 @@ function Read-Conf([string]$path) {
     return $h
 }
 
-function New-Password([int]$len = 24) {
-    -join ((48..57)+(65..90)+(97..122) | Get-Random -Count $len | ForEach-Object { [char]$_ })
+function New-Password([int]$len = 32) {
+    # Cryptographically-strong RPC password. Alphanumeric only: DigiByte forbids
+    # '@' in rpcuser/rpcpassword, and symbols can trip the key=value config
+    # parsing on both sides. 62-char alphabet x 32 => ~190 bits of entropy.
+    $chars = foreach ($c in (48..57)+(65..90)+(97..122)) { [char]$c }   # 0-9 A-Z a-z
+    $bytes = New-Object 'System.Byte[]' $len
+    $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    -join ($bytes | ForEach-Object { $chars[$_ % $chars.Count] })
 }
 
 function Test-PortOpen4001 {
@@ -475,7 +482,7 @@ function Write-DigiByteConf {
     $cfg = Read-Conf $DgbConf
     $rpcUser = $cfg['rpcuser']; $rpcPass = $cfg['rpcpassword']
     if (-not $rpcUser -or -not $rpcPass) {
-        $rpcUser = 'digiasset'; $rpcPass = New-Password 24
+        $rpcUser = 'digiasset'; $rpcPass = New-Password 32
         $addnodes = @('191.81.59.115','175.45.182.173','45.76.235.153','24.74.186.115','24.101.88.154','8.214.25.169','47.75.38.245')
         $lines = @(
             "rpcuser=$rpcUser","rpcpassword=$rpcPass","rpcbind=127.0.0.1","rpcport=$RpcPort",
