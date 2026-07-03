@@ -1,22 +1,23 @@
 <#
 .SYNOPSIS
     One-click setup for a DigiAsset Core for Windows node that earns DGB from the
-    DigiStamp Permanent Storage Pool.
+    DigiStamp Permanent Storage Pool. Installs and auto-starts the WHOLE stack.
 
-.WHAT IT DOES
+.WHAT IT DOES (all automatic)
     1. Downloads DigiAsset Core (node + cli) from the latest GitHub release.
-    2. Installs IPFS (kubo): downloads it, initialises it, and runs it as a
-       background service that starts on boot.
-    3. Opens the LOCAL Windows firewall for the ports that must be reachable.
-    4. Writes config.cfg (pool = pool.digistamp.co, your payout address) and, if
-       needed, a digibyte.conf with matching RPC credentials.
-    5. Tests whether your node is reachable from the internet (port 4001) and
-       tells you exactly what to forward on your HOME ROUTER.
+    2. Installs DigiByte Core (the wallet) if missing, writes digibyte.conf, and
+       runs it in the background - starting on every boot.
+    3. Installs IPFS (kubo) and runs it in the background - starting on every boot.
+    4. Opens the LOCAL Windows firewall for the ports that must be reachable.
+    5. Writes config.cfg (pool = pool.digistamp.co, your payout address).
+    6. Sets DigiAsset Core to start (with its dashboard) at every logon.
+    7. Tests whether your node is reachable from the internet and tells you what
+       to forward on your home router.
 
-.WHAT YOU STILL NEED
-    DigiByte Core (the wallet) must be installed and synced - it's a big download
-    the script can't do for you. The script detects it and gives you the exact
-    steps + a ready-made digibyte.conf if it's missing.
+.NOTE
+    DigiByte's blockchain sync takes hours the first time - that runs in the
+    background after this script finishes. Re-running the script is safe; it
+    skips anything already done.
 
 .USAGE
     Right-click > Run with PowerShell (as Administrator), or:
@@ -26,46 +27,62 @@
 param(
     [string]$Root = "C:\DigiAssetWindows",
     [string]$PayoutAddress = "",
-    [string]$PoolServer = "https://pool.digistamp.co"
+    [string]$PoolServer = "https://pool.digistamp.co",
+    [switch]$SkipDigiByte
 )
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# --- Self-elevate to Administrator (needed for firewall + services) --------
+# --- Self-elevate to Administrator (needed for firewall + boot tasks) ------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
     if ($PSCommandPath) {
         Write-Host "Elevating to Administrator..." -ForegroundColor Yellow
         Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
         return
-    } else {
-        throw "Please run this in an ELEVATED (Administrator) PowerShell window."
-    }
+    } else { throw "Please run this in an ELEVATED (Administrator) PowerShell window." }
 }
 
 $repo = "chopperbriano/DigiAsset_Core_Windows"
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 
+function Register-DaemonTask($name, $exe, $arguments) {
+    # Background service: runs as SYSTEM (hidden), starts at boot, auto-restarts.
+    $a = New-ScheduledTaskAction -Execute $exe -Argument $arguments
+    $t = New-ScheduledTaskTrigger -AtStartup
+    $p = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+}
+function Register-VisibleTask($name, $exe, $workdir) {
+    # Runs in the user's session (visible window) at logon.
+    $a = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $workdir
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+}
+
 Write-Host "===== DigiAsset Core for Windows - node installer =====" -ForegroundColor Green
 Write-Host @"
 
 This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
-pool. Here is exactly what it will do:
+pool. It installs and auto-starts everything:
 
-  * Download DigiAsset Core into $Root
-  * Download + start IPFS (file storage), running automatically on boot
-  * Open your local Windows firewall for port 4001 (IPFS) and 12024 (DigiByte)
-  * Save a config pointed at the DigiStamp pool with YOUR payout address
-  * Test whether your node is reachable from the internet
+  * DigiAsset Core (the node)        -> into $Root
+  * DigiByte Core (the wallet)       -> runs in the background, starts on boot
+  * IPFS (file storage)              -> runs in the background, starts on boot
+  * Opens your local firewall for port 4001 (IPFS) and 12024 (DigiByte)
+  * Saves a config pointed at the pool with YOUR payout address
+  * Tests whether your node is reachable from the internet
 
-You will also need the DigiByte Core wallet installed + synced (this script
-checks for it and guides you), and you will forward port 4001 on your home
-router. This does NOT spend money or touch your wallet's coins - it only sets up
-hosting so the pool can pay you.
+You will forward ONE port (4001) on your home router - the script shows you how.
+DigiByte's blockchain sync takes hours the first time and runs in the background.
 
 Heads up: payouts are SMALL, and you're only paid when the pool has DGB to give
-(it's a shared tip jar funded by asset fees + donations, split among verified
-nodes). Do this to help the network, not to get rich.
+(a shared tip jar funded by asset fees + donations, split among verified nodes).
+Do this to help the network, not to get rich. Nothing here spends your coins.
 
 "@ -ForegroundColor Gray
 $go = Read-Host "Press Enter to continue, or type N then Enter to cancel"
@@ -77,9 +94,8 @@ Write-Host "Install folder: $Root"
 # --- 0. Payout address -----------------------------------------------------
 if (-not $PayoutAddress) {
     Write-Host "`n--- Your payout address ---" -ForegroundColor Cyan
-    Write-Host "This is the DigiByte address where the pool sends your hosting earnings."
-    Write-Host "Use an address from a wallet YOU control (your DigiByte Core wallet is fine)."
-    Write-Host "It can start with D..., S..., or dgb1..."
+    Write-Host "The DigiByte address where the pool sends your hosting earnings."
+    Write-Host "Use an address from a wallet YOU control. It can start D..., S..., or dgb1..."
     $PayoutAddress = Read-Host "  Paste your DGB payout address"
 }
 if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
@@ -89,13 +105,68 @@ if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
 # --- 1. DigiAsset Core binaries -------------------------------------------
 Step 1 "Downloading DigiAsset Core (latest release)..."
 foreach ($f in "DigiAssetCore.exe", "DigiAssetCore-cli.exe") {
-    $url = "https://github.com/$repo/releases/latest/download/$f"
-    Invoke-WebRequest -Uri $url -OutFile (Join-Path $Root $f) -UseBasicParsing
+    Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest/download/$f" -OutFile (Join-Path $Root $f) -UseBasicParsing
     Write-Host "  + $f"
 }
 
-# --- 2. IPFS (kubo) --------------------------------------------------------
-Step 2 "Installing IPFS (kubo)..."
+# --- 2. DigiByte Core (wallet) --------------------------------------------
+Step 2 "DigiByte Core..."
+$dgbData = Join-Path $env:APPDATA "DigiByte"
+$dgbConf = Join-Path $dgbData "digibyte.conf"
+$digibyted = Get-ChildItem "C:\Program Files\DigiByte" -Recurse -Filter "digibyted.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if (-not $digibyted -and -not $SkipDigiByte) {
+    try {
+        Write-Host "  fetching latest DigiByte Core release..."
+        $rel = Invoke-RestMethod "https://api.github.com/repos/DigiByte-Core/digibyte/releases/latest" -Headers @{ "User-Agent" = "digistamp-installer" }
+        $asset = $rel.assets | Where-Object { $_.name -like "*win64-setup.exe" } | Select-Object -First 1
+        if (-not $asset) { throw "no win64 setup asset found" }
+        $inst = Join-Path $env:TEMP $asset.name
+        Write-Host "  downloading $($asset.name) ..."
+        Invoke-WebRequest $asset.browser_download_url -OutFile $inst -UseBasicParsing
+        Write-Host "  installing silently (this can take a minute)..."
+        Start-Process $inst -ArgumentList "/S" -Wait
+        Start-Sleep -Seconds 5
+        $digibyted = Get-ChildItem "C:\Program Files\DigiByte" -Recurse -Filter "digibyted.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+    } catch {
+        Write-Host "  Could not auto-install DigiByte Core: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  Install it from https://github.com/DigiByte-Core/digibyte/releases and re-run." -ForegroundColor Yellow
+    }
+}
+
+# Ensure digibyte.conf exists with RPC credentials (read existing or generate).
+New-Item -ItemType Directory -Force -Path $dgbData | Out-Null
+$rpcUser = ""; $rpcPass = ""
+if (Test-Path $dgbConf) {
+    foreach ($line in Get-Content $dgbConf) {
+        if ($line -match '^\s*rpcuser\s*=\s*(.+)$')     { $rpcUser = $Matches[1].Trim() }
+        if ($line -match '^\s*rpcpassword\s*=\s*(.+)$') { $rpcPass = $Matches[1].Trim() }
+    }
+}
+if (-not $rpcUser -or -not $rpcPass) {
+    $rpcUser = "digiasset"
+    $rpcPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+    $addnodes = @("191.81.59.115","175.45.182.173","45.76.235.153","24.74.186.115","24.101.88.154","8.214.25.169","47.75.38.245")
+    $conf = @("rpcuser=$rpcUser","rpcpassword=$rpcPass","rpcbind=127.0.0.1","rpcport=14022","rpcallowip=127.0.0.1","whitelist=127.0.0.1","listen=1","server=1","txindex=1","deprecatedrpc=addresses")
+    $conf += ($addnodes | ForEach-Object { "addnode=$_" })
+    Set-Content -Path $dgbConf -Value $conf -Encoding ASCII
+    Write-Host "  wrote digibyte.conf with fresh RPC credentials."
+} else {
+    Write-Host "  digibyte.conf already has RPC credentials."
+}
+
+if ($digibyted) {
+    Register-DaemonTask "DigiStampDigiByte" $digibyted "-datadir=`"$dgbData`""
+    if (-not (Get-Process digibyted -ErrorAction SilentlyContinue)) {
+        Start-Process $digibyted -ArgumentList "-datadir=`"$dgbData`"" -WindowStyle Hidden
+    }
+    Write-Host "  DigiByte daemon running + set to start on boot. (Blockchain syncs in the background - hours.)" -ForegroundColor Green
+    Write-Host "  NOTE: don't also open the DigiByte-Qt wallet - this runs it headless for you."
+} else {
+    Write-Host "  DigiByte Core not present - install it, then re-run this script." -ForegroundColor Yellow
+}
+
+# --- 3. IPFS (kubo) --------------------------------------------------------
+Step 3 "Installing IPFS (kubo)..."
 $ipfsExe  = Join-Path $Root "ipfs.exe"
 $ipfsRepo = Join-Path $Root "ipfs-repo"
 if (-not (Test-Path $ipfsExe)) {
@@ -110,90 +181,31 @@ if (-not (Test-Path $ipfsExe)) {
     Copy-Item (Join-Path $tmp "kubo\ipfs.exe") -Destination $ipfsExe -Force
     Remove-Item $zip, $tmp -Recurse -Force
     Write-Host "  + ipfs.exe ($ver)"
-} else {
-    Write-Host "  ipfs.exe already present."
-}
+} else { Write-Host "  ipfs.exe already present." }
 
-# Point IPFS at a repo inside our folder (machine-wide so the service sees it).
 [Environment]::SetEnvironmentVariable("IPFS_PATH", $ipfsRepo, "Machine")
 $env:IPFS_PATH = $ipfsRepo
-if (-not (Test-Path (Join-Path $ipfsRepo "config"))) {
-    Write-Host "  initialising IPFS repo..."
-    & $ipfsExe init | Out-Null
-}
-
-# Announce our public IP so NAT'd nodes are still findable (best effort).
+if (-not (Test-Path (Join-Path $ipfsRepo "config"))) { & $ipfsExe init | Out-Null; Write-Host "  IPFS repo initialised." }
 try {
     $pubip = (Invoke-RestMethod "https://api.ipify.org" -TimeoutSec 10).Trim()
     if ($pubip) { & $ipfsExe config --json Addresses.Announce "[`"/ip4/$pubip/tcp/4001`"]" | Out-Null; Write-Host "  announce set to $pubip:4001" }
-} catch { Write-Host "  (could not auto-detect public IP; the app's [F] key can set this later)" }
+} catch { Write-Host "  (public IP not detected; the app's [F] key can set announce later)" }
+Register-DaemonTask "DigiStampIPFS" $ipfsExe "daemon --enable-gc"
+if (-not (Get-Process ipfs -ErrorAction SilentlyContinue)) { Start-Process -FilePath $ipfsExe -ArgumentList "daemon --enable-gc" -WindowStyle Hidden }
+Write-Host "  IPFS running + set to start on boot." -ForegroundColor Green
 
-# Run the IPFS daemon as a boot task, and start it now.
-$ipfsTask = "DigiStampIPFS"
-$act = New-ScheduledTaskAction -Execute $ipfsExe -Argument "daemon --enable-gc"
-$trg = New-ScheduledTaskTrigger -AtLogOn
-$prin = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
-$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $ipfsTask -Action $act -Trigger $trg -Principal $prin -Settings $set -Force | Out-Null
-if (-not (Get-Process ipfs -ErrorAction SilentlyContinue)) {
-    Start-Process -FilePath $ipfsExe -ArgumentList "daemon --enable-gc" -WindowStyle Hidden
-}
-Write-Host "  IPFS daemon running (boot task '$ipfsTask' registered)."
-
-# --- 3. Local Windows firewall --------------------------------------------
-Step 3 "Opening local Windows firewall for the ports that need it..."
+# --- 4. Local Windows firewall --------------------------------------------
+Step 4 "Opening local Windows firewall..."
 function Open-Port($name, $proto, $port) {
     if (-not (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow -Protocol $proto -LocalPort $port | Out-Null
-        Write-Host "  + allowed inbound $proto $port  ($name)"
-    } else { Write-Host "  $name already exists" }
+        Write-Host "  + allowed inbound $proto $port"
+    } else { Write-Host "  $proto $port already allowed" }
 }
 Open-Port "DigiStamp IPFS swarm (TCP 4001)" TCP 4001
 Open-Port "DigiStamp IPFS swarm (UDP 4001)" UDP 4001
 Open-Port "DigiByte P2P (TCP 12024)"        TCP 12024
-Write-Host "  (Ports 5001/14022/8090 are intentionally NOT opened - they stay localhost-only.)"
-
-# --- 4. DigiByte Core check + credentials ---------------------------------
-Step 4 "Checking DigiByte Core..."
-$dgbConfDir = Join-Path $env:APPDATA "DigiByte"
-$dgbConf    = Join-Path $dgbConfDir "digibyte.conf"
-$rpcUser = ""; $rpcPass = ""
-if (Test-Path $dgbConf) {
-    foreach ($line in Get-Content $dgbConf) {
-        if ($line -match '^\s*rpcuser\s*=\s*(.+)$')     { $rpcUser = $Matches[1].Trim() }
-        if ($line -match '^\s*rpcpassword\s*=\s*(.+)$') { $rpcPass = $Matches[1].Trim() }
-    }
-}
-if (-not $rpcUser -or -not $rpcPass) {
-    # Generate credentials and write a ready-to-use digibyte.conf.
-    $rpcUser = "digiasset"
-    $rpcPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
-    New-Item -ItemType Directory -Force -Path $dgbConfDir | Out-Null
-    $addnodes = @("191.81.59.115","175.45.182.173","45.76.235.153","24.74.186.115","24.101.88.154","8.214.25.169","47.75.38.245")
-    $conf = @("rpcuser=$rpcUser","rpcpassword=$rpcPass","rpcbind=127.0.0.1","rpcport=14022","rpcallowip=127.0.0.1","whitelist=127.0.0.1","listen=1","server=1","txindex=1","deprecatedrpc=addresses")
-    $conf += ($addnodes | ForEach-Object { "addnode=$_" })
-    Set-Content -Path $dgbConf -Value $conf -Encoding ASCII
-    Write-Host "  Wrote $dgbConf with fresh RPC credentials." -ForegroundColor Yellow
-    Write-Host "  You must (RE)START DigiByte Core for these to take effect." -ForegroundColor Yellow
-} else {
-    Write-Host "  Found existing RPC credentials in digibyte.conf."
-}
-
-# Is DigiByte Core actually responding?
-$coreUp = $false
-try {
-    $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${rpcUser}:${rpcPass}"))
-    $null = Invoke-RestMethod -Uri "http://127.0.0.1:14022" -Method Post -ContentType "text/plain" `
-        -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 6 `
-        -Body '{"jsonrpc":"1.0","id":"chk","method":"getblockchaininfo","params":[]}'
-    $coreUp = $true
-} catch { $coreUp = $false }
-if ($coreUp) { Write-Host "  DigiByte Core is running and reachable." -ForegroundColor Green }
-else {
-    Write-Host "  DigiByte Core is NOT responding yet." -ForegroundColor Yellow
-    Write-Host "  Install it from https://github.com/DigiByte-Core/digibyte/releases (win64 setup),"
-    Write-Host "  start it, let it sync, then re-run this script (it will pick up from here)."
-}
+Write-Host "  (5001 / 14022 / 8090 intentionally NOT opened - they stay local.)"
 
 # --- 5. config.cfg for DigiAsset Core -------------------------------------
 Step 5 "Writing config.cfg..."
@@ -202,43 +214,49 @@ if (Test-Path $cfg) {
     Write-Host "  config.cfg already exists - leaving it untouched."
 } else {
     $lines = @(
-        "rpcbind=127.0.0.1", "rpcport=14022", "rpcuser=$rpcUser", "rpcpassword=$rpcPass",
+        "rpcbind=127.0.0.1","rpcport=14022","rpcuser=$rpcUser","rpcpassword=$rpcPass",
         "ipfspath=http://localhost:5001/api/v0/",
-        "psp1server=$PoolServer", "psp1subscribe=1", "psp1payout=$PayoutAddress",
-        "pruneage=5760", "bootstrapchainstate=1"
+        "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
+        "pruneage=5760","bootstrapchainstate=1"
     )
     Set-Content -Path $cfg -Value $lines -Encoding ASCII
-    Write-Host "  + config.cfg (pool=$PoolServer, payout=$PayoutAddress, pruned+bootstrap)"
+    Write-Host "  + config.cfg (pool=$PoolServer, payout=$PayoutAddress)"
 }
 
-# --- 6. Reachability test (home router) -----------------------------------
-Step 6 "Testing whether port 4001 is reachable from the internet..."
+# --- 6. DigiAsset Core: run + restart on boot -----------------------------
+Step 6 "Setting DigiAsset Core to start on boot..."
+$coreExe = Join-Path $Root "DigiAssetCore.exe"
+Register-VisibleTask "DigiStampNode" $coreExe $Root
+if (-not (Get-Process DigiAssetCore -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath $coreExe -WorkingDirectory $Root
+}
+Write-Host "  DigiAsset Core started + will open at every logon (task 'DigiStampNode')." -ForegroundColor Green
+
+# --- 7. Reachability test -------------------------------------------------
+Step 7 "Testing whether port 4001 is reachable from the internet..."
 Start-Sleep -Seconds 2
 $reachable = $null
-try {
-    $r = Invoke-RestMethod "https://ifconfig.co/port/4001" -TimeoutSec 15
-    $reachable = $r.reachable
-} catch { Write-Host "  (could not run the online port test right now)" }
+try { $reachable = (Invoke-RestMethod "https://ifconfig.co/port/4001" -TimeoutSec 15).reachable } catch {}
 if ($reachable -eq $true) {
-    Write-Host "  SUCCESS: port 4001 is OPEN from the internet. You're set to be verified + paid." -ForegroundColor Green
+    Write-Host "  SUCCESS: port 4001 is OPEN. You're set to be verified + paid." -ForegroundColor Green
 } else {
-    Write-Host "  Port 4001 is NOT reachable from the internet yet." -ForegroundColor Yellow
-    Write-Host "  --> On your HOME ROUTER, forward TCP (and ideally UDP) port 4001 to this PC's local IP,"
-    Write-Host "      then re-run this script to re-test. Without it your node registers but may not verify."
+    Write-Host "  Port 4001 is NOT reachable yet - forward it on your router (below), then re-test." -ForegroundColor Yellow
 }
 
 # --- Summary ---------------------------------------------------------------
-Write-Host "`n===== Setup summary =====" -ForegroundColor Green
-Write-Host "Local firewall: opened TCP/UDP 4001 (IPFS) and TCP 12024 (DigiByte)."
-Write-Host "HOME ROUTER - forward to this PC:"
-Write-Host "   TCP 4001   (REQUIRED - IPFS swarm; how the pool verifies you)"
-Write-Host "   UDP 4001   (recommended - IPFS QUIC)"
-Write-Host "   TCP 12024  (optional  - more DigiByte peers)"
-Write-Host "Do NOT forward 5001 / 14022 / 8090 (keep them local)."
+Write-Host "`n===== Done =====" -ForegroundColor Green
+Write-Host "Everything is installed and set to start on boot."
 Write-Host ""
-Write-Host "Next:"
-if (-not $coreUp) { Write-Host "  1. Install + start + sync DigiByte Core, then re-run this script." }
-Write-Host "  * Start the node:  $Root\DigiAssetCore.exe"
-Write-Host "  * In its dashboard press [N] to confirm you're registered with the pool,"
-Write-Host "    and [P] to re-test port 4001. Watch the Payment row for your status."
-Write-Host "  * Track the pool + your earnings at $PoolServer"
+Write-Host "ON YOUR HOME ROUTER, forward to this PC:" -ForegroundColor Cyan
+Write-Host "   TCP 4001   (REQUIRED - how the pool verifies + pays you)"
+Write-Host "   UDP 4001   (recommended)"
+Write-Host "   TCP 12024  (optional - more DigiByte peers)"
+Write-Host "   Do NOT forward 5001 / 14022 / 8090."
+Write-Host ""
+Write-Host "WHAT HAPPENS NOW:" -ForegroundColor Cyan
+Write-Host "  * DigiByte is syncing the blockchain in the background (hours the first time)."
+Write-Host "  * Once synced, DigiAsset Core registers with the pool automatically."
+Write-Host "  * In the DigiAsset Core window: press [N] to see the pool nodes (you should"
+Write-Host "    appear), and [P] to re-test port 4001."
+Write-Host "  * Check status any time with:  monitor-node.ps1"
+Write-Host "  * Watch the pool + your earnings at $PoolServer"

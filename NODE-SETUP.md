@@ -36,22 +36,29 @@ Open **PowerShell as Administrator** and paste this single line:
 $s="$env:TEMP\install-node.ps1"; iwr https://raw.githubusercontent.com/chopperbriano/DigiAsset_Core_Windows/master/install-node.ps1 -OutFile $s; Start-Process powershell "-ExecutionPolicy Bypass -File `"$s`"" -Verb RunAs
 ```
 
-It will ask for **your DigiByte payout address** (where you want to be paid), then it:
+It asks for **one thing — your DigiByte payout address** (where you want to be
+paid) — then does everything else automatically:
 
-- downloads DigiAsset Core,
-- installs and starts **IPFS** (runs automatically on boot),
+- downloads **DigiAsset Core**,
+- downloads + installs **DigiByte Core** (the wallet, latest version) and writes its config,
+- downloads + starts **IPFS**,
 - **opens your local firewall** for the right ports,
 - writes the config (pointed at `pool.digistamp.co` with your payout address),
+- sets **all three to start automatically on boot**,
 - **tests** whether you're reachable from the internet and tells you what to forward.
 
-## 2. Install DigiByte Core (one time)
+You do **not** edit any files by hand. The only manual step is one router port
+forward (next section).
 
-The wallet is a big download the installer can't do for you:
+## 2. Let it sync (the one wait)
 
-1. Get the **win64 setup** from https://github.com/DigiByte-Core/digibyte/releases
-2. Install it, then start it and let it **sync** (this can take a while the first time).
-3. If the installer said it wrote a `digibyte.conf`, **restart** DigiByte Core so it picks up the settings.
-4. Re-run the one-click command above — it detects the wallet and finishes.
+DigiByte's blockchain is large, so the first sync takes **several hours**, running
+quietly in the background. You don't have to babysit it — just leave the PC on.
+Check progress any time with the monitor (see section 4). Once DigiByte is synced,
+DigiAsset Core registers with the pool on its own.
+
+> Already had DigiByte Core installed? The installer detects it and just adds the
+> settings — restart DigiByte Core once if it says it wrote a new `digibyte.conf`.
 
 ## 3. Open ports on your home router (important)
 
@@ -71,15 +78,29 @@ PC's local IP:
 > `192.168.1.1`), find **Port Forwarding**, and send TCP 4001 to this PC's local
 > IP (run `ipconfig` to find it — the "IPv4 Address").
 
-## 4. Test that it worked
+## 4. Check that it's working — the monitor
 
-The installer runs the test automatically, but you can re-check any time:
+The easiest way to see everything at a glance is the **monitor script**. From an
+Administrator PowerShell:
 
-- **In the app:** start `DigiAssetCore.exe`, press **`P`** — it reports whether
-  port 4001 is open. Press **`N`** to confirm your node shows up in the pool's
-  node list (marked `<-- YOU`).
-- **From anywhere:** visit https://pool.digistamp.co — your node appears in the
-  node count once it's registered and verified.
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\install-node.ps1  # (installer, if not run yet)
+powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1                    # one-time status
+powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Watch             # live, refreshes every 15s
+```
+
+(Get `monitor-node.ps1` the same way as the installer — it's in the repo root.)
+
+It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset
+Core**, **Port 4001** (open/closed), and **Pool** (are you registered?), plus a
+plain-English list of anything to fix.
+
+Other quick checks:
+
+- **In the app:** in the `DigiAssetCore.exe` window press **`P`** (re-tests port
+  4001) or **`N`** (lists pool nodes; yours is marked `<-- YOU`).
+- **From anywhere:** visit https://pool.digistamp.co — your node shows up in the
+  count once it's registered and verified.
 
 ## What "working" looks like
 
