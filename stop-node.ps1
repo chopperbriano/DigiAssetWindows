@@ -25,6 +25,7 @@ param(
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Continue"
+$ScriptVersion = '1.0.0'
 
 # Elevation (needed to stop SYSTEM tasks / remove firewall rules).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -49,7 +50,7 @@ function Read-Cfg([string]$path) {
 $tasks = "DigiStampNode", "DigiStampIPFS", "DigiStampDigiByte", "DigiStampMaintenance"
 $rules = "DigiStamp IPFS swarm (TCP 4001)", "DigiStamp IPFS swarm (UDP 4001)", "DigiByte P2P (TCP 12024)"
 
-Write-Host "=== Stopping DigiStamp node stack ===" -ForegroundColor Cyan
+Write-Host "=== Stopping DigiStamp node stack  (v$ScriptVersion) ===" -ForegroundColor Cyan
 
 # 1. Graceful stops -----------------------------------------------------
 # DigiByte: ask it to stop cleanly via RPC (a hard kill risks chainstate corruption).
@@ -59,11 +60,11 @@ if ($cfg["rpcuser"] -and $cfg["rpcpassword"]) {
     try {
         $b64=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($cfg['rpcuser']):$($cfg['rpcpassword'])"))
         Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType "text/plain" -Headers @{Authorization="Basic $b64"} -TimeoutSec 6 -Body '{"jsonrpc":"1.0","id":"stop","method":"stop","params":[]}' | Out-Null
-        Write-Host "  DigiByte Core: clean shutdown requested."
-    } catch { Write-Host "  DigiByte Core: RPC stop failed (may already be down)." }
+        Write-Host "  DigiByte Core: clean shutdown requested." -ForegroundColor Green
+    } catch { Write-Host "  DigiByte Core: RPC stop failed (may already be down)." -ForegroundColor Yellow }
 }
 # IPFS: graceful shutdown via API.
-try { Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/v0/shutdown" -Method Post -TimeoutSec 6 | Out-Null; Write-Host "  IPFS: shutdown requested." } catch {}
+try { Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/v0/shutdown" -Method Post -TimeoutSec 6 | Out-Null; Write-Host "  IPFS: shutdown requested." -ForegroundColor Green } catch {}
 Start-Sleep -Seconds 3
 
 # 2. Stop the scheduled tasks + any stragglers --------------------------
@@ -71,18 +72,18 @@ foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
 }
 foreach ($p in "DigiAssetWindows", "ipfs", "digibyted") {
-    Get-Process $p -ErrorAction SilentlyContinue | ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Host "  stopped $p" }
+    Get-Process $p -ErrorAction SilentlyContinue | ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Host "  stopped $p" -ForegroundColor Green }
 }
 
 if (-not $DisableAutostart -and -not $Uninstall) {
     Write-Host "`nStopped. Boot tasks are still in place - it will start again on next boot." -ForegroundColor Green
-    Write-Host "To also stop it restarting on boot, run with -DisableAutostart."
+    Write-Host "To also stop it restarting on boot, run with -DisableAutostart." -ForegroundColor Gray
     return
 }
 
 # 3. Remove boot tasks --------------------------------------------------
 foreach ($t in $tasks) {
-    if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $t -Confirm:$false; Write-Host "  removed boot task $t" }
+    if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $t -Confirm:$false; Write-Host "  removed boot task $t" -ForegroundColor Green }
 }
 
 if (-not $Uninstall) {
@@ -95,13 +96,13 @@ Write-Host "`n-Uninstall will DELETE $DigiAssetDir (DigiAsset node, IPFS, config
 Write-Host "and remove the firewall rules + boot tasks." -ForegroundColor Yellow
 Write-Host "DigiByte Core and its blockchain in $DigiByteDir are LEFT in place." -ForegroundColor Yellow
 $ans = Read-Host "Type DELETE to confirm"
-if ($ans -ne "DELETE") { Write-Host "Cancelled - nothing removed."; return }
+if ($ans -ne "DELETE") { Write-Host "Cancelled - nothing removed." -ForegroundColor Yellow; return }
 
 foreach ($r in $rules) {
-    if (Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue) { Remove-NetFirewallRule -DisplayName $r; Write-Host "  removed firewall rule: $r" }
+    if (Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue) { Remove-NetFirewallRule -DisplayName $r; Write-Host "  removed firewall rule: $r" -ForegroundColor Green }
 }
 [Environment]::SetEnvironmentVariable("IPFS_PATH", $null, "Machine")
-if (Test-Path $DigiAssetDir) { Remove-Item -LiteralPath $DigiAssetDir -Recurse -Force; Write-Host "  removed $DigiAssetDir" }
+if (Test-Path $DigiAssetDir) { Remove-Item -LiteralPath $DigiAssetDir -Recurse -Force; Write-Host "  removed $DigiAssetDir" -ForegroundColor Green }
 Write-Host "`nUninstalled the DigiAsset node." -ForegroundColor Green
-Write-Host "DigiByte Core is still installed in $DigiByteDir (blockchain in $DigiByteDir\data)."
-Write-Host "To remove it too: delete $DigiByteDir, or use its uninstaller in Windows 'Apps'."
+Write-Host "DigiByte Core is still installed in $DigiByteDir (blockchain in $DigiByteDir\data)." -ForegroundColor Gray
+Write-Host "To remove it too: delete $DigiByteDir, or use its uninstaller in Windows 'Apps'." -ForegroundColor Gray

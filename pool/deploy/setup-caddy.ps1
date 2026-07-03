@@ -28,6 +28,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ScriptVersion = '1.0.0'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Assert-Admin {
@@ -38,7 +39,7 @@ function Assert-Admin {
     }
 }
 
-Write-Host "=== DigiAssetPoolServer :: Caddy reverse-proxy setup ===" -ForegroundColor Cyan
+Write-Host "=== DigiAssetPoolServer :: Caddy reverse-proxy setup  (v$ScriptVersion) ===" -ForegroundColor Cyan
 Assert-Admin
 
 # --- 1. Layout ------------------------------------------------------------
@@ -47,22 +48,22 @@ $siteDir     = Join-Path $InstallDir "site"
 $caddyfile   = Join-Path $InstallDir "Caddyfile"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 New-Item -ItemType Directory -Force -Path $siteDir    | Out-Null
-Write-Host "Install dir: $InstallDir"
+Write-Host "Install dir: $InstallDir" -ForegroundColor Gray
 
 # --- 2. Download Caddy (official build endpoint) --------------------------
 if (Test-Path $caddyExe) {
-    Write-Host "Caddy already present, skipping download."
+    Write-Host "Caddy already present, skipping download." -ForegroundColor Gray
 } else {
-    Write-Host "Downloading Caddy for windows/amd64 ..."
+    Write-Host "Downloading Caddy for windows/amd64 ..." -ForegroundColor White
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri "https://caddyserver.com/api/download?os=windows&arch=amd64" `
                       -OutFile $caddyExe
-    Write-Host ("Caddy downloaded ({0:N0} bytes)." -f (Get-Item $caddyExe).Length)
+    Write-Host ("Caddy downloaded ({0:N0} bytes)." -f (Get-Item $caddyExe).Length) -ForegroundColor Green
 }
 
 # --- 3. Copy the landing page --------------------------------------------
 Copy-Item -Path (Join-Path $scriptDir "site\*") -Destination $siteDir -Recurse -Force
-Write-Host "Landing page copied to $siteDir"
+Write-Host "Landing page copied to $siteDir" -ForegroundColor Green
 
 # --- 4. Generate a resolved Caddyfile from the template -------------------
 $template = Get-Content (Join-Path $scriptDir "Caddyfile") -Raw
@@ -71,7 +72,7 @@ $resolved = $template.
     Replace('{$POOLPORT}', "$PoolPort").
     Replace('{$SITE_ROOT}', ($siteDir -replace '\\','/'))
 Set-Content -Path $caddyfile -Value $resolved -Encoding UTF8
-Write-Host "Caddyfile written: $caddyfile"
+Write-Host "Caddyfile written: $caddyfile" -ForegroundColor Green
 
 # Validate before we commit to running it.
 & $caddyExe validate --config $caddyfile --adapter caddyfile
@@ -84,7 +85,7 @@ foreach ($p in 80,443) {
     netsh advfirewall firewall show rule name="$rule" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         netsh advfirewall firewall add rule name="$rule" dir=in action=allow protocol=TCP localport=$p | Out-Null
-        Write-Host "Firewall rule added: $rule"
+        Write-Host "Firewall rule added: $rule" -ForegroundColor Green
     }
 }
 
@@ -97,17 +98,17 @@ $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccou
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
-Write-Host "Scheduled task '$taskName' registered (starts Caddy at boot)."
+Write-Host "Scheduled task '$taskName' registered (starts Caddy at boot)." -ForegroundColor Green
 
 # --- 7. Start it now ------------------------------------------------------
 Start-ScheduledTask -TaskName $taskName
 Write-Host ""
 Write-Host "Done. Caddy is starting." -ForegroundColor Green
-Write-Host "  Landing page : https://$Domain/"
-Write-Host "  Pool API     : proxied to 127.0.0.1:$PoolPort"
+Write-Host "  Landing page : https://$Domain/" -ForegroundColor Gray
+Write-Host "  Pool API     : proxied to 127.0.0.1:$PoolPort" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Reminders:" -ForegroundColor Yellow
-Write-Host "  * DNS: $Domain must resolve to THIS server's public IP."
-Write-Host "  * Ports 80 and 443 must be reachable from the internet for TLS to issue."
-Write-Host "  * Make sure DigiAssetPoolServer.exe is running on port $PoolPort."
-Write-Host "  * First HTTPS request may take ~10-30s while the certificate is obtained."
+Write-Host "  * DNS: $Domain must resolve to THIS server's public IP." -ForegroundColor White
+Write-Host "  * Ports 80 and 443 must be reachable from the internet for TLS to issue." -ForegroundColor White
+Write-Host "  * Make sure DigiAssetPoolServer.exe is running on port $PoolPort." -ForegroundColor White
+Write-Host "  * First HTTPS request may take ~10-30s while the certificate is obtained." -ForegroundColor White

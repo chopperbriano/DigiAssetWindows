@@ -16,6 +16,7 @@ param(
     [int]$Every = 15
 )
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ScriptVersion = '1.0.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -33,9 +34,9 @@ function Line($label, $state, $detail) {
     # state: OK / WARN / FAIL / --
     $color = switch ($state) { "OK" { "Green" } "WARN" { "Yellow" } "FAIL" { "Red" } default { "Gray" } }
     $tag = "[{0,-4}]" -f $state
-    Write-Host ("  {0,-22}" -f $label) -NoNewline
+    Write-Host ("  {0,-22}" -f $label) -ForegroundColor White -NoNewline
     Write-Host $tag -ForegroundColor $color -NoNewline
-    Write-Host ("  " + $detail)
+    Write-Host ("  " + $detail) -ForegroundColor Gray
 }
 function BarePeer([string]$s) {
     $p = $s.LastIndexOf("/p2p/")
@@ -55,7 +56,7 @@ function Show-Status {
     $issues = @()
 
     Clear-Host
-    Write-Host "===== DigiStamp Node Monitor =====  ($(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Cyan
+    Write-Host "===== DigiStamp Node Monitor  (v$ScriptVersion) =====  ($(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Cyan
     Write-Host ""
 
     # --- DigiByte Core ---
@@ -129,10 +130,10 @@ function Show-Status {
     if ($issues.Count -eq 0) { Write-Host "Everything looks healthy. Leave it running." -ForegroundColor Green }
     else {
         Write-Host "Things to fix:" -ForegroundColor Yellow
-        foreach ($i in $issues) { Write-Host "  - $i" }
+        foreach ($i in $issues) { Write-Host "  - $i" -ForegroundColor White }
     }
     Write-Host ""
-    Write-Host "Pool + earnings: $pool"
+    Write-Host "Pool + earnings: $pool" -ForegroundColor Gray
 }
 
 if ($Watch) {

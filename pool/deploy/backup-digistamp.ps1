@@ -29,6 +29,7 @@ param(
     [switch]$SkipWallet
 )
 $ErrorActionPreference = "Stop"
+$ScriptVersion = '1.0.0'
 if (-not $BackupRoot) { $BackupRoot = Join-Path $Root "backups" }
 
 function Read-Cfg([string]$path) {
@@ -49,7 +50,7 @@ if (-not (Test-Path $Root)) { throw "Data folder not found: $Root" }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $dest  = Join-Path $BackupRoot "backup-$stamp"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Write-Host "=== Backup to $dest ===" -ForegroundColor Cyan
+Write-Host "=== Backup to $dest  (v$ScriptVersion) ===" -ForegroundColor Cyan
 
 # --- 1. Copy data files ---------------------------------------------------
 $files = @("config.cfg", "pool.cfg", "pool.db", "pool.db-wal", "pool.db-shm", "local.db")
@@ -60,7 +61,7 @@ foreach ($f in $files) {
     $src = Join-Path $Root $f
     if (Test-Path $src) {
         Copy-Item -LiteralPath $src -Destination $dest -Force
-        Write-Host "  + $f"
+        Write-Host "  + $f" -ForegroundColor Green
         $copied++
     }
 }
@@ -80,7 +81,7 @@ if (-not $SkipWallet) {
             $b64  = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
             $null = Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -Body $body `
                         -Headers @{ Authorization = "Basic $b64" } -ContentType "text/plain" -TimeoutSec 30
-            Write-Host "  + wallet-backup.dat (via backupwallet RPC)"
+            Write-Host "  + wallet-backup.dat (via backupwallet RPC)" -ForegroundColor Green
         } catch {
             Write-Warning "Wallet backup skipped: DigiByte Core RPC not reachable (start the wallet, or pass -SkipWallet)."
         }
@@ -95,7 +96,7 @@ $all = Get-ChildItem -LiteralPath $BackupRoot -Directory -Filter "backup-*" -Err
 if ($all -and $all.Count -gt $Keep) {
     foreach ($old in ($all | Select-Object -Skip $Keep)) {
         Remove-Item -LiteralPath $old.FullName -Recurse -Force
-        Write-Host "  - pruned $($old.Name)"
+        Write-Host "  - pruned $($old.Name)" -ForegroundColor Gray
     }
 }
 

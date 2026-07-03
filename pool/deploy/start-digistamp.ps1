@@ -24,6 +24,7 @@ param(
     [int]   $WaitForCoreSeconds = 300
 )
 $ErrorActionPreference = "Stop"
+$ScriptVersion = '1.0.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -45,8 +46,8 @@ function Invoke-DgbRpc([string]$user, [string]$pass, [int]$port, [string]$method
         -Headers @{ Authorization = "Basic $b64" } -ContentType "text/plain" -TimeoutSec 6
 }
 
-Write-Host "=== Start DigiStamp stack ===" -ForegroundColor Cyan
-Write-Host "Data folder: $Root"
+Write-Host "=== Start DigiStamp stack  (v$ScriptVersion) ===" -ForegroundColor Cyan
+Write-Host "Data folder: $Root" -ForegroundColor Gray
 
 if (-not (Test-Path $Root)) { throw "Data folder not found: $Root" }
 
@@ -60,7 +61,7 @@ if ($cfg["rpcport"]) { try { $port = [int]$cfg["rpcport"] } catch {} }
 if (-not $user -or -not $pass) {
     Write-Warning "rpcuser/rpcpassword not found in config.cfg; cannot verify DigiByte Core. Make sure the wallet is running with server=1."
 } else {
-    Write-Host "Waiting for DigiByte Core RPC on 127.0.0.1:$port (up to $WaitForCoreSeconds s)..."
+    Write-Host "Waiting for DigiByte Core RPC on 127.0.0.1:$port (up to $WaitForCoreSeconds s)..." -ForegroundColor White
     $deadline = (Get-Date).AddSeconds($WaitForCoreSeconds)
     $ready = $false
     while ((Get-Date) -lt $deadline) {
@@ -88,7 +89,7 @@ function Start-Exe([string]$name) {
     if (-not (Test-Path $exe)) { Write-Warning "$name not found in $Root - skipping."; return }
     $proc = [IO.Path]::GetFileNameWithoutExtension($name)
     if (Get-Process -Name $proc -ErrorAction SilentlyContinue) {
-        Write-Host "$name already running."
+        Write-Host "$name already running." -ForegroundColor Gray
         return
     }
     Start-Process -FilePath $exe -WorkingDirectory $Root
@@ -104,7 +105,7 @@ if ($task) {
         Start-ScheduledTask -TaskName "DigiStampCaddy"
         Write-Host "Started Caddy website (DigiStampCaddy task)." -ForegroundColor Green
     } else {
-        Write-Host "Caddy website already running."
+        Write-Host "Caddy website already running." -ForegroundColor Gray
     }
 } else {
     Write-Warning "Caddy task 'DigiStampCaddy' not found. Run setup-caddy.ps1 once to install the website."
@@ -112,5 +113,5 @@ if ($task) {
 
 Write-Host ""
 Write-Host "DigiStamp stack started." -ForegroundColor Cyan
-Write-Host "  Node + pool dashboards opened in their own windows."
-Write-Host "  Website: https://pool.digistamp.co/"
+Write-Host "  Node + pool dashboards opened in their own windows." -ForegroundColor Gray
+Write-Host "  Website: https://pool.digistamp.co/" -ForegroundColor Gray

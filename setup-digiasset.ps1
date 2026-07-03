@@ -58,7 +58,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '1.0.0'
+$SCRIPT_VERSION = '1.1.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -610,21 +610,21 @@ function Invoke-Install {
     Write-Host "  (These router steps are shown again at the end.)" -ForegroundColor DarkGray
     Write-Host ""
     $go = Read-Host 'Press Enter to continue, or type N then Enter to cancel'
-    if ($go -match '^[Nn]') { Write-Host 'Cancelled - nothing was changed.'; return }
+    if ($go -match '^[Nn]') { Write-Host 'Cancelled - nothing was changed.' -ForegroundColor Yellow; return }
 
     # 0. Payout address ------------------------------------------------------
     $treasury = Get-TreasuryInfo   # pool's published treasury address + balance (may be $null if unreachable)
     if (-not $PayoutAddress) {
         Write-Host "`n--- Your payout address ---" -ForegroundColor Cyan
-        Write-Host 'The DigiByte address where the pool sends your hosting earnings.'
-        Write-Host 'Use an address from a wallet YOU control (starts with D, S, or dgb1).'
+        Write-Host 'The DigiByte address where the pool sends your hosting earnings.' -ForegroundColor White
+        Write-Host 'Use an address from a wallet YOU control (starts with D, S, or dgb1).' -ForegroundColor White
         Write-Host ''
         Write-Host 'Please be realistic about earnings:' -ForegroundColor Yellow
-        Write-Host '  * Payments are TINY - this is a tip jar for hosting, not a salary.'
-        Write-Host '  * You are ONLY paid when the pool TREASURY has funds. The treasury is'
-        Write-Host '    shared out among all verified nodes; when it is empty, nobody is paid'
-        Write-Host '    that period. The pool never pays money it does not have.'
-        Write-Host "  * See the live treasury balance + every payout at $PoolServer"
+        Write-Host '  * Payments are TINY - this is a tip jar for hosting, not a salary.' -ForegroundColor White
+        Write-Host '  * You are ONLY paid when the pool TREASURY has funds. The treasury is' -ForegroundColor White
+        Write-Host '    shared out among all verified nodes; when it is empty, nobody is paid' -ForegroundColor White
+        Write-Host '    that period. The pool never pays money it does not have.' -ForegroundColor White
+        Write-Host "  * See the live treasury balance + every payout at $PoolServer" -ForegroundColor White
         if ($treasury -and $treasury.donationAddress) {
             Write-Host "  * Pool treasury (donation) address: $($treasury.donationAddress)" -ForegroundColor Gray
         }
@@ -721,32 +721,32 @@ function Invoke-Install {
 
     # Summary ----------------------------------------------------------------
     Write-Host "`n===== Done =====" -ForegroundColor Green
-    Write-Host 'Everything is installed, auto-starting on boot, and self-updating.'
+    Write-Host 'Everything is installed, auto-starting on boot, and self-updating.' -ForegroundColor White
     Write-Host ''
     Write-Host 'HOSTING PORTS - your local Windows firewall is ALREADY open for these.' -ForegroundColor Cyan
-    Write-Host 'To accept incoming connections you must ALSO forward them on your home router:'
-    Write-Host '   TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)'
-    Write-Host '   UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)'
-    Write-Host '   TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)'
-    Write-Host '   Keep 5001 / 14022 / 8090 PRIVATE - never forward them (they are local-only).'
+    Write-Host 'To accept incoming connections you must ALSO forward them on your home router:' -ForegroundColor White
+    Write-Host '   TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)' -ForegroundColor White
+    Write-Host '   UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)' -ForegroundColor White
+    Write-Host '   TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)' -ForegroundColor White
+    Write-Host '   Keep 5001 / 14022 / 8090 PRIVATE - never forward them (they are local-only).' -ForegroundColor Red
     Write-Host ''
     Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
-    Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.'
+    Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.' -ForegroundColor White
     if ($treasury -and $treasury.donationAddress) {
-        Write-Host "  * Pool treasury address: $($treasury.donationAddress)"
+        Write-Host "  * Pool treasury address: $($treasury.donationAddress)" -ForegroundColor Gray
     }
-    Write-Host "  * See what is in the treasury any time at $PoolServer"
-    Write-Host "  * Saved for you: $treasuryNote"
+    Write-Host "  * See what is in the treasury any time at $PoolServer" -ForegroundColor White
+    Write-Host "  * Saved for you: $treasuryNote" -ForegroundColor Gray
     Write-Host ''
     Write-Host 'WHAT HAPPENS NOW:' -ForegroundColor Cyan
-    Write-Host '  * DigiByte is syncing the blockchain in the background (hours the first time).'
-    Write-Host '  * Once synced, the node registers with the pool automatically.'
-    Write-Host "  * Updates + health checks run on every boot and every 6 hours."
+    Write-Host '  * DigiByte is syncing the blockchain in the background (hours the first time).' -ForegroundColor White
+    Write-Host '  * Once synced, the node registers with the pool automatically.' -ForegroundColor White
+    Write-Host "  * Updates + health checks run on every boot and every 6 hours." -ForegroundColor White
     Write-Host ''
     Write-Host 'HANDY COMMANDS (Administrator PowerShell):' -ForegroundColor Cyan
-    Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1"
-    Write-Host "  * Stop / remove: powershell -ExecutionPolicy Bypass -File $DigiAssetDir\stop-node.ps1"
-    Write-Host "  * Logs         : $LogFile"
+    Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1" -ForegroundColor Gray
+    Write-Host "  * Stop / remove: powershell -ExecutionPolicy Bypass -File $DigiAssetDir\stop-node.ps1" -ForegroundColor Gray
+    Write-Host "  * Logs         : $LogFile" -ForegroundColor Gray
 }
 
 # ---------------------------------------------------------------------------
@@ -883,6 +883,6 @@ try {
 } catch {
     Log ("FATAL: $($_.Exception.Message)") 'ERROR'
     if ($Mode -eq 'Service') { Alert "maintenance run failed: $($_.Exception.Message)" }
-    else { Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red; Write-Host "See $LogFile" }
+    else { Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red; Write-Host "See $LogFile" -ForegroundColor Gray }
     exit 1
 }
