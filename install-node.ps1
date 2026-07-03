@@ -43,7 +43,7 @@ if (-not $admin) {
     } else { throw "Please run this in an ELEVATED (Administrator) PowerShell window." }
 }
 
-$repo = "chopperbriano/DigiAsset_Core_Windows"
+$repo = "chopperbriano/DigiAssetWindows"
 function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 
 function Register-DaemonTask($name, $exe, $arguments) {

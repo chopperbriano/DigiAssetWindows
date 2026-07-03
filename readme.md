@@ -34,7 +34,7 @@ optional** program (`DigiAssetPoolServer.exe`) that only pool operators need.
 | 3 | **DigiAsset Core** (this repo) | The chain analyzer, asset database, RPC server, web UI, and dashboard | The coordinator: reads the chain from DigiByte Core, decodes DigiAsset data, and pins the right files on IPFS. |
 
 DigiByte Core and IPFS are external programs you download and install. DigiAsset
-Core is what you build here (or download from [Releases](https://github.com/chopperbriano/DigiAsset_Core_Windows/releases)).
+Core is what you build here (or download from [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)).
 
 ### The executables this repo builds
 
@@ -75,7 +75,7 @@ This fork builds a Windows version with Visual Studio and MSVC in the main branc
 
 Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
 
-Note: If you want to skip building from source, download the pre-built binaries from the [Releases](https://github.com/chopperbriano/DigiAsset_Core_Windows/releases) page. You will still need to install IPFS Desktop and DigiByte Core wallet as described below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is built in (no separate exe needed).
+Note: If you want to skip building from source, download the pre-built binaries from the [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page. You will still need to install IPFS Desktop and DigiByte Core wallet as described below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is built in (no separate exe needed).
 
 ### Prerequisites
 
@@ -85,7 +85,7 @@ Note: If you want to skip building from source, download the pre-built binaries 
 ### Clone the Repository
 
 ```cmd
-git clone --recursive https://github.com/chopperbriano/DigiAsset_Core_Windows.git
+git clone --recursive https://github.com/chopperbriano/DigiAssetWindows.git
 cd DigiAsset_Core_Windows
 ```
 

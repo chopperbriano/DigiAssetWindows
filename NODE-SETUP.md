@@ -33,7 +33,7 @@ every payout at https://pool.digistamp.co.
 Open **PowerShell as Administrator** and paste this single line:
 
 ```powershell
-$s="$env:TEMP\install-node.ps1"; iwr https://raw.githubusercontent.com/chopperbriano/DigiAsset_Core_Windows/master/install-node.ps1 -OutFile $s; Start-Process powershell "-ExecutionPolicy Bypass -File `"$s`"" -Verb RunAs
+$s="$env:TEMP\install-node.ps1"; iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-node.ps1 -OutFile $s; Start-Process powershell "-ExecutionPolicy Bypass -File `"$s`"" -Verb RunAs
 ```
 
 It asks for **one thing — your DigiByte payout address** (where you want to be

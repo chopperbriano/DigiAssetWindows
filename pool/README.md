@@ -175,7 +175,7 @@ There is **no in-app pool discovery** — a node only finds your pool if you tel
 people the URL. Copy-paste this to Discord/Twitter/your site:
 
 > **Join the DigiStamp Permanent Storage Pool and earn DGB for hosting DigiAssets.**
-> 1. Install DigiAsset Core for Windows: https://github.com/chopperbriano/DigiAsset_Core_Windows
+> 1. Install DigiAsset Core for Windows: https://github.com/chopperbriano/DigiAssetWindows
 > 2. When the setup wizard asks for a pool, press Enter to accept the default
 >    (`https://pool.digistamp.co`) — or add `psp1server=https://pool.digistamp.co`
 >    to your `config.cfg`.
