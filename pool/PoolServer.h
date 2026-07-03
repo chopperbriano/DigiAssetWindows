@@ -114,13 +114,14 @@ private:
     void handleRequest(const std::string& method,
                        const std::string& path,
                        const std::string& body,
+                       const std::string& clientIp,
                        int& outStatus,
                        std::string& outContentType,
                        std::string& outBody);
 
     void handlePermanent(const std::string& path, int& outStatus, std::string& outBody);
-    void handleKeepalive(const std::string& body, std::string& outBody);
-    void handleList(const std::string& path, const std::string& body, int& outStatus, std::string& outBody);
+    void handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody);
+    void handleList(const std::string& path, const std::string& body, const std::string& clientIp, int& outStatus, std::string& outBody);
     void handleNodes(std::string& outBody);
     void handleMap(std::string& outBody);
     void handleBad(std::string& outBody);

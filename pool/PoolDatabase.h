@@ -26,8 +26,12 @@ public:
 
     // Node registration. Called on keepalive and /list requests.
     // First call inserts; subsequent calls update lastSeen and payoutAddress.
+    // observedIp is the node's public IP as seen at registration (used to
+    // geolocate it for the world map); a blank observedIp leaves any
+    // previously stored address untouched.
     void upsertNode(const std::string& peerId,
-                    const std::string& payoutAddress);
+                    const std::string& payoutAddress,
+                    const std::string& observedIp = "");
 
     // Dial-back verification state. The PoolVerifier thread calls these
     // after each probe attempt.
@@ -115,10 +119,11 @@ public:
     };
     std::vector<PayoutRow> getRecentPayouts(unsigned int limit);
 
-    // peerId (multiaddr, contains the node's IP) for every node seen since the
-    // given unix time. Used to geolocate nodes for the world map on the pool
-    // web page.
-    std::vector<std::string> getActiveNodePeerIds(int64_t sinceUnix);
+    // Observed public IP for every node seen since the given unix time (skips
+    // rows with no recorded address). Used to geolocate nodes for the world map
+    // on the pool web page. The IP is captured from the node's registration
+    // connection, not derived from its peerId.
+    std::vector<std::string> getActiveNodeIps(int64_t sinceUnix);
 
     // Pool-local config key/value store (separate from the operator's
     // editable pool.cfg; this is runtime state like "last snapshot time").

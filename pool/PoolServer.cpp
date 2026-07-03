@@ -189,14 +189,74 @@ namespace {
         return out;
     }
 
-    // Pull the IPv4/IPv6 address out of a multiaddr like /ip4/1.2.3.4/tcp/...
-    std::string extractIpFromMultiaddr(const std::string& s) {
-        size_t p = s.find("/ip4/");
-        if (p == std::string::npos) p = s.find("/ip6/");
+    // Case-insensitive lookup of a single HTTP header's value from the raw
+    // header block (everything before the blank line). Returns "" if absent.
+    std::string getHeaderValue(const std::string& headers, const std::string& name) {
+        std::string lc;
+        lc.reserve(headers.size());
+        for (char c : headers) lc += (char) std::tolower((unsigned char) c);
+        std::string key = name;
+        for (char& c : key) c = (char) std::tolower((unsigned char) c);
+        // Header lines are always preceded by a CRLF (the request line is
+        // first), so match "\r\n<key>:". lc and headers share offsets since
+        // lowercasing doesn't change length.
+        size_t p = lc.find("\r\n" + key + ":");
         if (p == std::string::npos) return "";
-        p += 5;
-        size_t e = s.find('/', p);
-        return s.substr(p, (e == std::string::npos ? s.size() : e) - p);
+        size_t valStart = p + 2 + key.size() + 1;
+        size_t valEnd = headers.find("\r\n", valStart);
+        std::string val = headers.substr(valStart,
+            valEnd == std::string::npos ? std::string::npos : valEnd - valStart);
+        size_t a = val.find_first_not_of(" \t");
+        size_t b = val.find_last_not_of(" \t");
+        if (a == std::string::npos) return "";
+        return val.substr(a, b - a + 1);
+    }
+
+    // Is this a routable public IP? We only plot public addresses on the map,
+    // so a loopback/LAN address (a test node on the same host, or a proxy hop
+    // leaking through) never geolocates to a bogus pin.
+    bool isPublicIp(const std::string& ip) {
+        if (ip.empty()) return false;
+        if (ip == "::1" || ip == "0.0.0.0") return false;
+        if (ip.rfind("127.", 0) == 0) return false;      // loopback
+        if (ip.rfind("10.", 0) == 0) return false;       // RFC1918
+        if (ip.rfind("192.168.", 0) == 0) return false;  // RFC1918
+        if (ip.rfind("169.254.", 0) == 0) return false;  // link-local
+        if (ip.rfind("172.", 0) == 0) {                  // 172.16-31.x = RFC1918
+            size_t dot = ip.find('.', 4);
+            if (dot != std::string::npos) {
+                try {
+                    int second = std::stoi(ip.substr(4, dot - 4));
+                    if (second >= 16 && second <= 31) return false;
+                } catch (...) {}
+            }
+        }
+        // IPv6 unique-local (fc00::/7) and link-local (fe80::/10).
+        std::string lc;
+        for (char c : ip) lc += (char) std::tolower((unsigned char) c);
+        if (lc.rfind("fc", 0) == 0 || lc.rfind("fd", 0) == 0) return false;
+        if (lc.rfind("fe80", 0) == 0) return false;
+        return true;
+    }
+
+    // Work out the registering node's real IP. Behind the Caddy reverse proxy
+    // every connection arrives from 127.0.0.1, so the true client address is in
+    // X-Forwarded-For (Caddy sets it) or X-Real-IP; fall back to the socket peer
+    // for direct connections. Returns "" if no public IP can be determined.
+    std::string resolveClientIp(const std::string& headers, const std::string& socketPeer) {
+        std::string xff = getHeaderValue(headers, "X-Forwarded-For");
+        if (!xff.empty()) {
+            // "client, proxy1, proxy2" — the left-most entry is the origin.
+            std::string first = xff.substr(0, xff.find(','));
+            size_t a = first.find_first_not_of(" \t");
+            size_t b = first.find_last_not_of(" \t");
+            if (a != std::string::npos) first = first.substr(a, b - a + 1);
+            if (isPublicIp(first)) return first;
+        }
+        std::string xrip = getHeaderValue(headers, "X-Real-IP");
+        if (isPublicIp(xrip)) return xrip;
+        if (isPublicIp(socketPeer)) return socketPeer;
+        return "";
     }
 
     // Geolocate a batch of IPs via ip-api.com (free, no key, server-side only).
@@ -405,11 +465,21 @@ void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t 
         }
         if (body.size() > contentLength) body.resize(contentLength);
 
+        // Resolve the registering node's real IP (X-Forwarded-For behind the
+        // proxy, else the socket peer) for the world-map geolocation.
+        std::string socketPeer;
+        {
+            boost::system::error_code pec;
+            auto rep = socket.remote_endpoint(pec);
+            if (!pec) socketPeer = rep.address().to_string();
+        }
+        std::string clientIp = resolveClientIp(headers, socketPeer);
+
         // Dispatch.
         int status = 200;
         std::string contentType = "application/json; charset=utf-8";
         std::string responseBody;
-        handleRequest(method, path, body, status, contentType, responseBody);
+        handleRequest(method, path, body, clientIp, status, contentType, responseBody);
 
         std::string raw = buildResponse(status, contentType, responseBody);
         boost::asio::write(socket, boost::asio::buffer(raw));
@@ -424,6 +494,7 @@ void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t 
 void PoolServer::handleRequest(const std::string& method,
                                const std::string& path,
                                const std::string& body,
+                               const std::string& clientIp,
                                int& outStatus,
                                std::string& outContentType,
                                std::string& outBody) {
@@ -438,13 +509,13 @@ void PoolServer::handleRequest(const std::string& method,
 
     // --- POST /keepalive ---------------------------------------------------
     if (method == "POST" && path == "/keepalive") {
-        handleKeepalive(body, outBody);
+        handleKeepalive(body, clientIp, outBody);
         return;
     }
 
     // --- POST /list/<floor>.json -------------------------------------------
     if (method == "POST" && path.rfind("/list/", 0) == 0) {
-        handleList(path, body, outStatus, outBody);
+        handleList(path, body, clientIp, outStatus, outBody);
         return;
     }
 
@@ -524,10 +595,9 @@ void PoolServer::handleStats(std::string& outBody) {
             // IPs hit ip-api; the nodes array is rebuilt each refresh.
             {
                 int64_t weekAgo = now - 7 * 24 * 3600;
-                auto peerIds = _db.getActiveNodePeerIds(weekAgo);
+                auto ipList = _db.getActiveNodeIps(weekAgo);
                 std::vector<std::string> ips, uncached;
-                for (const auto& pid : peerIds) {
-                    std::string ip = extractIpFromMultiaddr(pid);
+                for (const auto& ip : ipList) {
                     if (ip.empty()) continue;
                     ips.push_back(ip);
                     if (!_geoCache.count(ip) &&
@@ -618,7 +688,7 @@ void PoolServer::handlePermanent(const std::string& path, int& outStatus, std::s
     outBody = _db.buildPermanentPageJson(page);
 }
 
-void PoolServer::handleKeepalive(const std::string& body, std::string& outBody) {
+void PoolServer::handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody) {
     // The C++ client posts form-encoded: address=...&peerId=...&visible=v&secret=...
     auto form = parseFormBody(body);
     auto addrIt = form.find("address");
@@ -626,7 +696,7 @@ void PoolServer::handleKeepalive(const std::string& body, std::string& outBody) 
     if (addrIt != form.end() && peerIt != form.end()
         && !addrIt->second.empty() && !peerIt->second.empty()) {
         try {
-            _db.upsertNode(peerIt->second, addrIt->second);
+            _db.upsertNode(peerIt->second, addrIt->second, clientIp);
         } catch (...) {}
     }
     // Match mctrivia's server response exactly — existing clients parse it
@@ -634,13 +704,13 @@ void PoolServer::handleKeepalive(const std::string& body, std::string& outBody) 
     outBody = "{\"error\":\"unsubscribe failed will time out anyways\"}";
 }
 
-void PoolServer::handleList(const std::string& path, const std::string& body, int& outStatus, std::string& outBody) {
+void PoolServer::handleList(const std::string& path, const std::string& body, const std::string& clientIp, int& outStatus, std::string& outBody) {
     // Body is JSON: {"height":N,"version":V,"show":bool,"peerId":"...","payout":"..."}
     std::string peerId = jsonField(body, "peerId");
     std::string payout = jsonField(body, "payout");
     if (!peerId.empty() && !payout.empty()) {
         try {
-            _db.upsertNode(peerId, payout);
+            _db.upsertNode(peerId, payout, clientIp);
         } catch (...) {}
     }
 

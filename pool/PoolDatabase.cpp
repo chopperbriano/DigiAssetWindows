@@ -102,6 +102,9 @@ void PoolDatabase::buildSchema() {
     };
     tryAddColumn("ALTER TABLE nodes ADD COLUMN lastVerifyOk INTEGER NOT NULL DEFAULT 0;");
     tryAddColumn("ALTER TABLE nodes ADD COLUMN verifyFails  INTEGER NOT NULL DEFAULT 0;");
+    // win.43 records the node's public IP (seen at registration) so the pool
+    // web page can plot a world map of nodes.
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN lastAddr TEXT;");
 
     // permanent_assets rows are imported from the first-run snapshot of
     // mctrivia's /permanent/<page>.json or added later by the operator.
@@ -154,18 +157,23 @@ void PoolDatabase::buildSchema() {
 }
 
 void PoolDatabase::upsertNode(const std::string& peerId,
-                              const std::string& payoutAddress) {
+                              const std::string& payoutAddress,
+                              const std::string& observedIp) {
     std::lock_guard<std::mutex> lk(_mutex);
     int64_t now = nowUnix();
 
     // Use INSERT ... ON CONFLICT to atomic upsert. Keep firstSeen on
-    // conflict (preserve the original), update the rest.
+    // conflict (preserve the original), update the rest. lastAddr is only
+    // overwritten when we actually observed an IP this time: NULLIF(?, '')
+    // turns a blank observedIp into NULL, and COALESCE then preserves the
+    // previously stored address rather than wiping it.
     const char* sql =
-        "INSERT INTO nodes (peerId, payoutAddress, firstSeen, lastSeen) "
-        "VALUES (?, ?, ?, ?) "
+        "INSERT INTO nodes (peerId, payoutAddress, firstSeen, lastSeen, lastAddr) "
+        "VALUES (?, ?, ?, ?, NULLIF(?, '')) "
         "ON CONFLICT(peerId) DO UPDATE SET "
         " payoutAddress = excluded.payoutAddress, "
-        " lastSeen      = excluded.lastSeen;";
+        " lastSeen      = excluded.lastSeen, "
+        " lastAddr      = COALESCE(excluded.lastAddr, nodes.lastAddr);";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -176,6 +184,7 @@ void PoolDatabase::upsertNode(const std::string& peerId,
     sqlite3_bind_text(stmt, 2, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 3, now);
     sqlite3_bind_int64(stmt, 4, now);
+    sqlite3_bind_text(stmt, 5, observedIp.c_str(), -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE) {
@@ -389,10 +398,13 @@ std::vector<PoolDatabase::PayoutRow> PoolDatabase::getRecentPayouts(unsigned int
     return out;
 }
 
-std::vector<std::string> PoolDatabase::getActiveNodePeerIds(int64_t sinceUnix) {
+std::vector<std::string> PoolDatabase::getActiveNodeIps(int64_t sinceUnix) {
     std::lock_guard<std::mutex> lk(_mutex);
     std::vector<std::string> out;
-    const char* sql = "SELECT peerId FROM nodes WHERE lastSeen >= ? ORDER BY peerId;";
+    const char* sql =
+        "SELECT lastAddr FROM nodes "
+        "WHERE lastSeen >= ? AND lastAddr IS NOT NULL AND lastAddr <> '' "
+        "ORDER BY peerId;";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, sinceUnix);
