@@ -28,6 +28,9 @@ param(
     [ValidateSet('both','digibyte','chaindb','manifest')][string]$Component = 'both',
     [string]$DigiByteDir  = 'C:\DigiByte',
     [string]$DigiAssetDir = 'C:\DigiAsset',
+    # The actual DigiByte data directory (the folder containing blocks\ and
+    # chainstate\). Leave blank to auto-detect C:\DigiByte\data or %APPDATA%\DigiByte.
+    [string]$DataDir      = '',
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
     [string]$BaseUrl      = ''
 )
@@ -35,8 +38,6 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ScriptVersion = '2.0.0'
 
-$DgbData = Join-Path $DigiByteDir 'data'
-$DgbConf = Join-Path $DgbData 'digibyte.conf'
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
@@ -44,9 +45,18 @@ function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 # --- Elevate --------------------------------------------------------------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`""; return }
+    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`""; return }
     else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
+
+# Resolve the DigiByte data directory (the folder containing blocks\ + chainstate\).
+if (-not $DataDir) {
+    if     (Test-Path (Join-Path $DigiByteDir 'data\blocks'))     { $DataDir = Join-Path $DigiByteDir 'data' }
+    elseif (Test-Path (Join-Path $env:APPDATA 'DigiByte\blocks')) { $DataDir = Join-Path $env:APPDATA 'DigiByte' }
+    else   { $DataDir = Join-Path $DigiByteDir 'data' }
+}
+$DgbData = $DataDir
+$DgbConf = Join-Path $DgbData 'digibyte.conf'
 Say "=== Make DigiAsset fast-sync snapshot ($Component)  (v$ScriptVersion) ===" 'Cyan'
 if ($Component -ne 'manifest' -and -not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw "tar.exe not found (needs Windows 10 1803+ / Windows 11)." }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -55,11 +65,14 @@ function Read-Cfg($path){ $h=@{}; if(Test-Path $path){ foreach($l in Get-Content
 
 # --- DigiByte component ---------------------------------------------------
 function New-DigiByteArchive {
-    if (-not (Test-Path $DgbData)) { throw "DigiByte data not found at $DgbData" }
+    if (-not (Test-Path (Join-Path $DgbData 'blocks'))) { throw "No DigiByte blockchain at $DgbData (no blocks\ folder). Pass -DataDir <your DigiByte data folder>." }
     $cfg = Read-Cfg $DgbConf
-    if (-not $cfg['rpcuser']) { throw "Could not read RPC credentials from $DgbConf" }
+    $authPair = $null
+    if ($cfg['rpcuser']) { $authPair = "$($cfg['rpcuser']):$($cfg['rpcpassword'])" }
+    else { $ck = Join-Path $DgbData '.cookie'; if (Test-Path $ck) { $authPair = (Get-Content $ck -Raw).Trim() } }
+    if (-not $authPair) { throw "No RPC auth for DigiByte in $DgbData (need rpcuser/rpcpassword in digibyte.conf, or a .cookie from a running node with server=1)." }
     $port = 14022; if ($cfg['rpcport']) { try { $port=[int]$cfg['rpcport'] } catch {} }
-    function Dgb($m){ $b64=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($cfg['rpcuser']):$($cfg['rpcpassword'])")); Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 15 -Body ('{"jsonrpc":"1.0","id":"s","method":"'+$m+'","params":[]}') }
+    function Dgb($m){ $b64=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($authPair)); Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 15 -Body ('{"jsonrpc":"1.0","id":"s","method":"'+$m+'","params":[]}') }
     Say "`nChecking DigiByte sync..." 'Cyan'
     $height=0; $ver='unknown'
     try {
