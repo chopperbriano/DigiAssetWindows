@@ -9,6 +9,9 @@ DigiByte Core (wallet)  →  DigiAsset for Windows (this)  →  IPFS (file stora
    you install once             installer sets up             installer sets up
 ```
 
+> Want to run the **pool server** (accept nodes and pay hosts) rather than just
+> host a node? That's a different job — see **[POOL-SETUP.md](POOL-SETUP.md)**.
+
 ## Be realistic about earnings 🙂
 
 Please don't do this to get rich — do it to help keep DigiByte's asset data

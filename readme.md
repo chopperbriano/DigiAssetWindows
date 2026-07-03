@@ -21,6 +21,10 @@ payout address. Full walkthrough: **[NODE-SETUP.md](NODE-SETUP.md)**.
 > Building from source is **only for developers** — see [Build on Windows](#build-on-windows)
 > below. If you just want to run a node and earn DGB, use the one line above.
 
+**Two ways to take part:**
+- 🖥️ **Host a node and earn DGB** — use the one-liner above. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
+- 🏦 **Run your own pool** (accept nodes, verify them, pay hosts) — guide: **[POOL-SETUP.md](POOL-SETUP.md)**.
+
 ## Table of Contents
 1. [How It Works (Architecture)](#how-it-works-architecture)
 2. [Build on Windows](#build-on-windows)
