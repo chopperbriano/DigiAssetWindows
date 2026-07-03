@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.2.0'
+$SCRIPT_VERSION = '2.3.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -617,7 +617,9 @@ function Install-IpfsDesktop {
     Log "  installing IPFS Desktop $($asset.ver) silently (this can take a minute)..."
     # electron-builder NSIS: /S = silent. It installs per-user, registers its own
     # login auto-start, launches the app, and runs kubo internally on :5001.
-    Start-Process -FilePath $inst -ArgumentList '/S' -Wait
+    # Run it via `start` in a SEPARATE console so the app it auto-launches doesn't
+    # dump its Electron logs into OUR installer window.
+    Start-Process -FilePath 'cmd.exe' -ArgumentList "/c start `"`" /wait `"$inst`" /S" -WindowStyle Hidden -Wait
     Start-Sleep -Seconds 3
     if (Test-Path $IpfsDesktopExe) { Log "  + IPFS Desktop $($asset.ver) -> $IpfsDesktopExe" 'OK' }
     else { Log "  + IPFS Desktop $($asset.ver) installed (tray icon appears at login)." 'OK' }
@@ -625,7 +627,8 @@ function Install-IpfsDesktop {
 }
 function Start-IpfsDesktop {
     if (-not (Test-Path $IpfsDesktopExe)) { return $false }
-    if (-not (Test-ProcRunning 'IPFS Desktop')) { Start-Process -FilePath $IpfsDesktopExe }
+    # Launch detached (separate console) so its logs don't spam our window.
+    if (-not (Test-ProcRunning 'IPFS Desktop')) { Start-Process -FilePath 'cmd.exe' -ArgumentList "/c start `"`" `"$IpfsDesktopExe`"" -WindowStyle Hidden }
     return $true
 }
 
@@ -951,6 +954,22 @@ function Invoke-Install {
     Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1" -ForegroundColor Gray
     Write-Host "  * Stop / remove: powershell -ExecutionPolicy Bypass -File $DigiAssetDir\stop-node.ps1" -ForegroundColor Gray
     Write-Host "  * Logs         : $LogFile" -ForegroundColor Gray
+
+    # Live status so you can see, at a glance, what's actually up right now.
+    Write-Host ''
+    Write-Host 'STATUS RIGHT NOW:' -ForegroundColor Cyan
+    Start-Sleep -Seconds 3
+    if (Test-ProcRunning 'digibyte-qt') { Write-Host '  [OK]   DigiByte wallet    - running (a window is open; it will sync for hours/days)' -ForegroundColor Green }
+    else { Write-Host '  [WARN] DigiByte wallet    - not detected (look for its window / re-open it)' -ForegroundColor Yellow }
+    if (Test-IpfsUp) { Write-Host '  [OK]   IPFS Desktop       - API responding on :5001' -ForegroundColor Green }
+    elseif (Test-ProcRunning 'IPFS Desktop') { Write-Host '  [WARN] IPFS Desktop       - running, API still starting (give it a minute)' -ForegroundColor Yellow }
+    else { Write-Host '  [FAIL] IPFS Desktop       - not running (check the tray)' -ForegroundColor Red }
+    if (Test-ProcRunning 'DigiAssetWindows') { Write-Host '  [OK]   DigiAsset node      - running' -ForegroundColor Green }
+    else { Write-Host '  [WARN] DigiAsset node      - not up yet. It waits for IPFS + DigiByte and retries at' -ForegroundColor Yellow
+           Write-Host '                              logon. If its window shows an error, re-run monitor-node.ps1.' -ForegroundColor Yellow }
+    Write-Host ''
+    Write-Host 'Re-check any time:  powershell -ExecutionPolicy Bypass -File ' -ForegroundColor Gray -NoNewline
+    Write-Host "$DigiAssetDir\monitor-node.ps1" -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------------------
