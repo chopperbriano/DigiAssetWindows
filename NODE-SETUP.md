@@ -41,7 +41,7 @@ It asks for **one thing — your DigiByte payout address** (where you want to be
 paid) — then does everything else automatically:
 
 - installs **DigiByte Core 9.26.4** into `C:\DigiByte` and writes its config,
-- installs **IPFS (kubo) 0.49** into `C:\DigiAsset`,
+- installs the current **IPFS (kubo)** release into `C:\DigiAsset`,
 - downloads the latest **DigiAsset for Windows** node into `C:\DigiAsset` and writes its config,
 - **opens your local firewall** for the right ports,
 - sets **all three to start automatically on boot**,

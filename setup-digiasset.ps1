@@ -46,9 +46,10 @@ param(
     [string]$PayoutAddress  = '',
     [string]$PoolServer     = 'https://pool.digistamp.co',
     # Pinned baseline versions used for a FIRST install. Service mode then
-    # tracks the latest releases and updates past these.
+    # tracks the latest releases and updates past these. If a pinned version
+    # isn't published yet, the installer falls back to the current latest.
     [string]$DigiByteVersion = '9.26.4',
-    [string]$KuboVersion     = '0.49.0'
+    [string]$KuboVersion     = '0.42.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,8 +63,11 @@ $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
 $DgbData        = Join-Path $DigiByteDir  'data'          # blockchain + digibyte.conf
-$DgbBin         = Join-Path $DigiByteDir  'bin'           # digibyted.exe lives here
-$Digibyted      = Join-Path $DgbBin       'digibyted.exe'
+# DigiByte ships a win64 NSIS installer (not a zip). After a silent install the
+# daemon lands at <DigiByteDir>\daemon\digibyted.exe; we discover the real path
+# at install time and remember it here (see Get-Digibyted).
+$DgbExeMarker   = Join-Path $DigiAssetDir 'state\digibyted-path.txt'
+$DgbExeDefault  = Join-Path $DigiByteDir  'daemon\digibyted.exe'
 $NodeExe        = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe         = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
 $IpfsExe        = Join-Path $DigiAssetDir 'ipfs.exe'
@@ -287,50 +291,67 @@ function Test-ProcRunning($name) { return [bool](Get-Process $name -ErrorAction 
 # ---------------------------------------------------------------------------
 #  Component installers / updaters
 # ---------------------------------------------------------------------------
+# Where is digibyted.exe? Remembered at install time, else discovered under the
+# install dir, else the standard NSIS location.
+function Get-Digibyted {
+    if (Test-Path $DgbExeMarker) {
+        $p = (Get-Content $DgbExeMarker -Raw).Trim()
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.FullName }
+    return $DgbExeDefault
+}
+
 function Resolve-DigiByteAsset($tag) {
+    # DigiByte ships a win64 NSIS installer (…-win64-setup.exe), not a zip.
     # tag like "v9.26.4"; returns @{ url; name; ver }
     $rel = $null
     try { $rel = Invoke-GitHubApi "https://api.github.com/repos/DigiByte-Core/digibyte/releases/tags/$tag" } catch {}
     if ($rel) {
-        $a = $rel.assets | Where-Object { $_.name -match 'win64\.zip$' -and $_.name -notmatch 'setup' } | Select-Object -First 1
+        $a = $rel.assets | Where-Object { $_.name -match 'win64-setup\.exe$' } | Select-Object -First 1
+        if (-not $a) { $a = $rel.assets | Where-Object { $_.name -match 'win64.*\.exe$' } | Select-Object -First 1 }
         if ($a) { return @{ url = $a.browser_download_url; name = $a.name; ver = $tag.TrimStart('v') } }
     }
     $v = $tag.TrimStart('v')
-    return @{ url = "https://github.com/DigiByte-Core/digibyte/releases/download/$tag/digibyte-$v-win64.zip"; name = "digibyte-$v-win64.zip"; ver = $v }
+    return @{ url = "https://github.com/DigiByte-Core/digibyte/releases/download/$tag/digibyte-$v-win64-setup.exe"; name = "digibyte-$v-win64-setup.exe"; ver = $v }
 }
 
 function Get-DigiByteLatestTag {
     try { return (Invoke-GitHubApi 'https://api.github.com/repos/DigiByte-Core/digibyte/releases/latest').tag_name } catch { return '' }
 }
 
-# Download+extract DigiByte binaries into $DgbBin (flattened, version-agnostic).
+# Download the DigiByte win64 setup.exe and install it silently into $DigiByteDir,
+# then discover and remember the digibyted.exe path.
 function Install-DigiByteBinaries($asset) {
-    $zip = Join-Path $Tmp $asset.name
-    if (-not (Get-File $asset.url $zip)) { throw "could not download DigiByte from $($asset.url)" }
+    $inst = Join-Path $Tmp $asset.name
+    if (-not (Get-File $asset.url $inst)) { throw "could not download DigiByte from $($asset.url)" }
 
     # Optional SHA256 verification if the release ships a checksums file.
     try {
-        $sumsUrl = ($asset.url -replace '/[^/]+$', '/SHA256SUMS')
+        $sumsUrl  = ($asset.url -replace '/[^/]+$', '/SHA256SUMS')
         $sumsFile = Join-Path $Tmp 'DGB_SHA256SUMS'
         if (Get-File $sumsUrl $sumsFile 1) {
             $want = (Get-Content $sumsFile | Where-Object { $_ -match [regex]::Escape($asset.name) } | Select-Object -First 1)
             if ($want) {
                 $wantHash = ($want -split '\s+')[0].ToLower()
-                $gotHash  = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-                if ($wantHash -ne $gotHash) { Remove-Item $zip -Force; throw 'DigiByte checksum mismatch - aborting.' }
+                $gotHash  = (Get-FileHash $inst -Algorithm SHA256).Hash.ToLower()
+                if ($wantHash -ne $gotHash) { Remove-Item $inst -Force; throw 'DigiByte checksum mismatch - aborting.' }
                 Log '  DigiByte checksum verified (SHA-256).' 'OK'
             }
         }
     } catch { Log "  (DigiByte checksum step skipped: $($_.Exception.Message))" 'WARN' }
 
-    $ex = Join-Path $Tmp 'dgb_extract'
-    if (Test-Path $ex) { Remove-Item $ex -Recurse -Force }
-    Expand-Archive -Path $zip -DestinationPath $ex -Force
-    $src = Get-ChildItem $ex -Recurse -Filter 'digibyted.exe' | Select-Object -First 1
-    if (-not $src) { throw 'digibyted.exe not found in the DigiByte archive.' }
-    Ensure-Dir $DgbBin
-    Copy-Item -Path (Join-Path $src.Directory.FullName '*') -Destination $DgbBin -Recurse -Force
-    Log "  + DigiByte $($asset.ver) binaries -> $DgbBin" 'OK'
+    # NSIS silent install. /D=<dir> MUST be the last arg and cannot be quoted, so
+    # the install dir must have no spaces (default C:\DigiByte is fine).
+    Log "  installing DigiByte $($asset.ver) silently to $DigiByteDir (this can take a minute)..."
+    Start-Process -FilePath $inst -ArgumentList @('/S', "/D=$DigiByteDir") -Wait
+    Start-Sleep -Seconds 3
+    $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $found) { throw "DigiByte installed but digibyted.exe was not found under $DigiByteDir." }
+    Ensure-Dir (Split-Path -Parent $DgbExeMarker)
+    Set-Content -Path $DgbExeMarker -Value $found.FullName -Encoding UTF8
+    Log "  + DigiByte $($asset.ver) -> $($found.FullName)" 'OK'
 }
 
 function Stop-DigiByteGracefully {
@@ -349,11 +370,17 @@ function Stop-DigiByteGracefully {
 }
 
 function Start-DigiByte {
-    if (-not (Test-Path $Digibyted)) { return $false }
+    $dgb = Get-Digibyted
+    if (-not (Test-Path $dgb)) { return $false }
     if (-not (Test-ProcRunning 'digibyted')) {
-        Start-Process $Digibyted -ArgumentList "-datadir=`"$DgbData`"" -WindowStyle Hidden
+        Start-Process $dgb -ArgumentList "-datadir=`"$DgbData`"" -WindowStyle Hidden
     }
     return $true
+}
+
+function Register-DigiByteTask {
+    $dgb = Get-Digibyted
+    Register-DaemonTask $TaskDigiByte $dgb "-datadir=`"$DgbData`"" (Split-Path -Parent $dgb)
 }
 
 function Get-KuboLatestVersion {
@@ -361,6 +388,23 @@ function Get-KuboLatestVersion {
         $versions = (Invoke-WebRequest 'https://dist.ipfs.tech/kubo/versions' -UseBasicParsing -TimeoutSec 20).Content -split "`n"
         return (($versions | Where-Object { $_ -and ($_ -notmatch 'rc') } | Select-Object -Last 1).Trim().TrimStart('v'))
     } catch { return '' }
+}
+
+# Return a kubo version that actually exists for download: the requested one if
+# its Windows zip is published, otherwise the current latest. (The pinned
+# baseline may be ahead of what has shipped.)
+function Resolve-KuboVersion($requested) {
+    $v = "v$requested"
+    try {
+        Invoke-WebRequest "https://dist.ipfs.tech/kubo/$v/kubo_${v}_windows-amd64.zip" -Method Head -UseBasicParsing -TimeoutSec 20 | Out-Null
+        return $requested
+    } catch {}
+    $latest = Get-KuboLatestVersion
+    if ($latest) {
+        if ($latest -ne $requested) { Log "  kubo $requested is not published yet; using current latest $latest." 'WARN' }
+        return $latest
+    }
+    throw "no downloadable kubo version found (requested $requested)."
 }
 
 function Install-Ipfs($ver) {
@@ -521,13 +565,14 @@ Nothing here spends your coins.
     Step 1 "Installing DigiByte Core $DigiByteVersion..."
     Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion")
     $rpc = Write-DigiByteConf
-    Register-DaemonTask $TaskDigiByte $Digibyted "-datadir=`"$DgbData`"" $DgbBin
+    Register-DigiByteTask
     Start-DigiByte | Out-Null
     Log '  DigiByte running + set to start on boot (syncing in the background).' 'OK'
 
     # 2. IPFS ----------------------------------------------------------------
-    Step 2 "Installing IPFS (kubo) $KuboVersion..."
-    Install-Ipfs $KuboVersion
+    $kubo = Resolve-KuboVersion $KuboVersion
+    Step 2 "Installing IPFS (kubo) $kubo..."
+    Install-Ipfs $kubo
     Initialize-Ipfs
     Register-DaemonTask $TaskIpfs $IpfsExe 'daemon --enable-gc' $DigiAssetDir
     Start-Ipfs | Out-Null
@@ -555,7 +600,7 @@ Nothing here spends your coins.
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
     $state.digibyte  = $DigiByteVersion
-    $state.kubo      = $KuboVersion
+    $state.kubo      = $kubo
     $state.digiasset = (Get-DigiAssetLatestTag)
     $state.script    = $SCRIPT_VERSION
     Write-State $state
@@ -607,7 +652,7 @@ function Invoke-Service {
             Log "DigiByte update: $($state.digibyte) -> $latest" 'STEP'
             Stop-DigiByteGracefully
             Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
-            Register-DaemonTask $TaskDigiByte $Digibyted "-datadir=`"$DgbData`"" $DgbBin
+            Register-DigiByteTask
             Start-DigiByte | Out-Null
             $state.digibyte = $latest.TrimStart('v'); Write-State $state
         }
@@ -646,7 +691,7 @@ function Invoke-Service {
         if (-not (Get-ScheduledTask -TaskName $t.n -ErrorAction SilentlyContinue)) {
             Log "boot task '$($t.n)' missing - re-registering." 'WARN'
             switch ($t.n) {
-                $TaskDigiByte { Register-DaemonTask $TaskDigiByte $Digibyted "-datadir=`"$DgbData`"" $DgbBin }
+                $TaskDigiByte { Register-DigiByteTask }
                 $TaskIpfs     { Register-DaemonTask $TaskIpfs $IpfsExe 'daemon --enable-gc' $DigiAssetDir }
                 $TaskMaint    { Register-MaintenanceTask }
             }
@@ -654,9 +699,9 @@ function Invoke-Service {
     }
 
     # DigiByte
-    if (-not (Test-Path $Digibyted)) {
+    if (-not (Test-Path (Get-Digibyted))) {
         Log 'digibyted.exe missing - reinstalling.' 'WARN'
-        try { Install-DigiByteBinaries (Resolve-DigiByteAsset "v$($state.digibyte)") } catch { $problems += "DigiByte reinstall failed: $($_.Exception.Message)" }
+        try { Install-DigiByteBinaries (Resolve-DigiByteAsset "v$($state.digibyte)"); Register-DigiByteTask } catch { $problems += "DigiByte reinstall failed: $($_.Exception.Message)" }
     }
     if (-not (Test-ProcRunning 'digibyted')) { Log 'digibyted not running - starting.' 'WARN'; Start-DigiByte | Out-Null; Start-Sleep 5 }
     if (-not (Test-ProcRunning 'digibyted')) { $problems += 'DigiByte will not stay running (check the log / datadir).' }
@@ -679,7 +724,7 @@ function Invoke-Service {
 
     # Sync + reachability are informational (can't force-heal a router / a sync).
     $prog = Get-DigiByteProgress
-    if ($prog -ne $null) { Log ('DigiByte sync: {0:P1}' -f $prog) } else { Log 'DigiByte RPC not answering yet (still starting or syncing).' 'WARN' }
+    if ($null -ne $prog) { Log ('DigiByte sync: {0:P1}' -f $prog) } else { Log 'DigiByte RPC not answering yet (still starting or syncing).' 'WARN' }
     $reach = Test-PortOpen4001
     if ($reach -eq $false) { Log 'Port 4001 not reachable from the internet - forward TCP 4001 on your router.' 'WARN' }
 
