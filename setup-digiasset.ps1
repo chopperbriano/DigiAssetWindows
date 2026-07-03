@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.3.0'
+$SCRIPT_VERSION = '2.4.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -853,20 +853,40 @@ function Invoke-Install {
 
     # 5. Maintenance task ----------------------------------------------------
     Step 5 'Installing the auto-update + self-heal maintenance task...'
-    if ($PSCommandPath -and (Resolve-Path $PSCommandPath).Path -ne (Resolve-Path -LiteralPath $InstalledScript -ErrorAction SilentlyContinue).Path) {
-        Copy-Item $PSCommandPath $InstalledScript -Force
-    } elseif (-not (Test-Path $InstalledScript)) {
-        Get-File $RawScriptUrl $InstalledScript 2 | Out-Null
+    # Stage THIS script at $InstalledScript - the node launch task and the
+    # maintenance task both run it. Copy the running file; if that isn't possible
+    # (e.g. it was launched from memory), download it. Then confirm + log.
+    $staged = $false
+    if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+        try {
+            if ((Resolve-Path -LiteralPath $PSCommandPath).Path -ne $InstalledScript) {
+                Copy-Item -LiteralPath $PSCommandPath -Destination $InstalledScript -Force
+            }
+            $staged = (Test-Path $InstalledScript)
+        } catch {}
     }
+    if (-not $staged) {
+        try { Get-File $RawScriptUrl $InstalledScript 3 | Out-Null } catch {}
+        $staged = (Test-Path $InstalledScript)
+    }
+    if ($staged) { Log "  installer staged at $InstalledScript" 'OK' }
+    else { Log "  WARNING: could not stage $InstalledScript (node will start directly instead)." 'WARN' }
+
     # Drop the companion tools next to the node so they are always handy.
     foreach ($tool in 'monitor-node.ps1','stop-node.ps1') {
         try { Get-File "https://raw.githubusercontent.com/$Repo/master/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
     }
-    # Node logon task (runs the script we just copied in -Mode LaunchNode, which
-    # waits for IPFS + DigiByte before starting the node - no dependency race).
+    # Node logon task. If the script is staged, use the dependency-aware launcher
+    # (waits for IPFS + DigiByte). If not, fall back to launching the node exe
+    # directly so it still starts at logon (never point the task at a missing file).
     if (-not $NoStartOnLogon) {
-        Register-NodeLaunchTask
-        Log '  node set to wait for its dependencies + start at every logon.' 'OK'
+        if ($staged) {
+            Register-NodeLaunchTask
+            Log '  node set to wait for its dependencies + start at every logon.' 'OK'
+        } else {
+            Register-GuardedLogonTask $TaskNode $NodeExe $DigiAssetDir 'DigiAssetWindows'
+            Log '  node set to start at every logon (direct launch).' 'WARN'
+        }
     }
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
