@@ -227,6 +227,28 @@ function Get-TreasuryInfo {
     catch { return $null }
 }
 
+# This PC's primary LAN IPv4 - the address the user points their router's port
+# forward / NAT rules AT. Returns $null if it can't be determined.
+function Get-LocalIPv4 {
+    try {
+        $c = Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.IPv4Address } | Select-Object -First 1
+        if ($c) { return ($c.IPv4Address | Select-Object -First 1).IPAddress }
+    } catch {}
+    try {
+        $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+              Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+              Select-Object -First 1
+        if ($ip) { return $ip.IPAddress }
+    } catch {}
+    try {
+        $v4 = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+              Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notlike '127.*' -and $_.ToString() -notlike '169.254.*' } |
+              Select-Object -First 1
+        if ($v4) { return $v4.ToString() }
+    } catch {}
+    return $null
+}
+
 # ---------------------------------------------------------------------------
 #  Scheduled tasks (idempotent)
 # ---------------------------------------------------------------------------
@@ -548,6 +570,11 @@ function Invoke-Install {
 
     Ensure-Dir $DigiAssetDir; Ensure-Dir $DigiByteDir; Ensure-Dir $Tmp; Ensure-Dir $LogDir
     Log "===== DigiAsset for Windows - installer (script v$SCRIPT_VERSION) =====" 'OK'
+
+    $localIp = Get-LocalIPv4
+    if ($localIp) { $ipHint = "This PC's local IP is  $localIp   <-- forward the ports below TO this address" }
+    else          { $ipHint = "Find this PC's local IP by running:  ipconfig   (use the 'IPv4 Address')" }
+
     Write-Host @"
 
 This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
@@ -557,9 +584,23 @@ pool. It installs and auto-starts everything, and keeps it updated for you:
   * IPFS (file storage)    -> $DigiAssetDir  (runs in background)
   * DigiAsset for Windows  -> $DigiAssetDir  (the node + live dashboard)
 
-You forward ONE port (4001) on your home router - shown at the end.
+BEFORE YOU BEGIN - set up your home router so the internet can reach this node.
+This PC's own Windows firewall is opened for you automatically, but your ROUTER
+is NOT - you must add a Port Forward / NAT rule for each port below.
+
+  $ipHint
+
+  On your router, forward these to that local IP:
+
+     PORT    PROTOCOL   WHAT IT HOSTS
+     4001    TCP        DigiAsset / IPFS   (REQUIRED - this is how the pool verifies + pays you)
+     4001    UDP        DigiAsset / IPFS   (recommended - QUIC, faster peer connections)
+     12024   TCP        DigiByte peers     (recommended - helps host the DigiByte network)
+
+  Do NOT forward 5001, 14022, or 8090 - those must stay PRIVATE (local only).
+
 DigiByte's first sync takes hours and runs in the background.
-Nothing here spends your coins.
+Nothing here spends your coins. (These router steps are shown again at the end.)
 
 "@ -ForegroundColor Gray
     $go = Read-Host 'Press Enter to continue, or type N then Enter to cancel'
