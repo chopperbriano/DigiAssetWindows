@@ -46,8 +46,9 @@ function Read-Cfg([string]$path) {
     return $h
 }
 
-# Task + firewall names must match what setup-digiasset.ps1 creates.
-$tasks = "DigiStampNode", "DigiStampIPFS", "DigiStampDigiByte", "DigiStampMaintenance"
+# Task + firewall names must match what setup-digiasset.ps1 creates (plus the
+# legacy headless task names so an older install is cleaned up too).
+$tasks = "DigiStampNode", "DigiStampWallet", "DigiStampMaintenance", "DigiStampIPFS", "DigiStampDigiByte"
 $rules = "DigiStamp IPFS swarm (TCP 4001)", "DigiStamp IPFS swarm (UDP 4001)", "DigiByte P2P (TCP 12024)"
 
 Write-Host "=== Stopping DigiStamp node stack  (v$ScriptVersion) ===" -ForegroundColor Cyan
@@ -71,7 +72,7 @@ Start-Sleep -Seconds 3
 foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
 }
-foreach ($p in "DigiAssetWindows", "ipfs", "digibyted") {
+foreach ($p in "DigiAssetWindows", "digibyte-qt", "digibyted", "IPFS Desktop", "ipfs") {
     Get-Process $p -ErrorAction SilentlyContinue | ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Host "  stopped $p" -ForegroundColor Green }
 }
 
@@ -104,5 +105,5 @@ foreach ($r in $rules) {
 [Environment]::SetEnvironmentVariable("IPFS_PATH", $null, "Machine")
 if (Test-Path $DigiAssetDir) { Remove-Item -LiteralPath $DigiAssetDir -Recurse -Force; Write-Host "  removed $DigiAssetDir" -ForegroundColor Green }
 Write-Host "`nUninstalled the DigiAsset node." -ForegroundColor Green
-Write-Host "DigiByte Core is still installed in $DigiByteDir (blockchain in $DigiByteDir\data)." -ForegroundColor Gray
-Write-Host "To remove it too: delete $DigiByteDir, or use its uninstaller in Windows 'Apps'." -ForegroundColor Gray
+Write-Host "DigiByte Core (in $DigiByteDir) and IPFS Desktop are separate installed apps." -ForegroundColor Gray
+Write-Host "Remove them from Settings > Apps if you want them gone too (blockchain data is in $DigiByteDir\data)." -ForegroundColor Gray

@@ -49,7 +49,10 @@ param(
     # tracks the latest releases and updates past these. If a pinned version
     # isn't published yet, the installer falls back to the current latest.
     [string]$DigiByteVersion = '9.26.4',
-    [string]$KuboVersion     = '0.42.0'
+    # By default the GUI apps (DigiByte wallet, IPFS Desktop, node dashboard)
+    # auto-start when you log in. Pass -NoStartOnLogon to install them but NOT
+    # register the logon auto-start (you'd start them by hand).
+    [switch]$NoStartOnLogon
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '1.2.0'
+$SCRIPT_VERSION = '2.0.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -80,10 +83,16 @@ $StateFile      = Join-Path $DigiAssetDir 'state\versions.json'
 $InstalledScript= Join-Path $DigiAssetDir 'setup-digiasset.ps1'
 $Tmp            = Join-Path $env:TEMP     'digiasset-setup'
 
-$TaskDigiByte   = 'DigiStampDigiByte'
-$TaskIpfs       = 'DigiStampIPFS'
-$TaskNode       = 'DigiStampNode'
+$TaskDigiByte   = 'DigiStampDigiByte'   # legacy headless task (removed on upgrade)
+$TaskIpfs       = 'DigiStampIPFS'       # legacy headless task (removed on upgrade)
+$TaskWallet     = 'DigiStampWallet'     # DigiByte GUI wallet, visible at logon
+$TaskNode       = 'DigiStampNode'       # DigiAsset node dashboard, visible at logon
 $TaskMaint      = 'DigiStampMaintenance'
+
+# GUI apps. IPFS Desktop (Electron) installs per-user and registers its own
+# login auto-start; it exposes the same :5001 API the node uses.
+$IpfsDesktopRepo = 'ipfs/ipfs-desktop'
+$IpfsDesktopExe  = Join-Path $env:LOCALAPPDATA 'Programs\IPFS Desktop\IPFS Desktop.exe'
 
 # Ports we open on the LOCAL firewall (the router forward is 4001 only).
 $RpcPort        = 14022
@@ -263,8 +272,10 @@ function Register-DaemonTask($name, $exe, $arguments, $workdir) {
 
 # Visible logon task that only starts the node if it isn't already running
 # (so a manual start + the logon task can't produce two windows).
-function Register-GuardedLogonTask($name, $exe, $workdir, $procName) {
-    $guard = "if (-not (Get-Process '$procName' -ErrorAction SilentlyContinue)) { Start-Process -FilePath '$exe' -WorkingDirectory '$workdir' }"
+function Register-GuardedLogonTask($name, $exe, $workdir, $procName, $arguments = '') {
+    $argPart = ''
+    if ($arguments) { $argPart = " -ArgumentList '$arguments'" }   # arg must be space-free (no quotes)
+    $guard = "if (-not (Get-Process '$procName' -ErrorAction SilentlyContinue)) { Start-Process -FilePath '$exe' -WorkingDirectory '$workdir'$argPart }"
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$guard`""
     $t = New-ScheduledTaskTrigger -AtLogOn
     $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -467,6 +478,23 @@ function Register-DigiByteTask {
     Register-DaemonTask $TaskDigiByte $dgb "-datadir=`"$DgbData`"" (Split-Path -Parent $dgb)
 }
 
+# The GUI wallet (visible, taskbar). Served RPC comes from digibyte-qt with
+# server=1 in digibyte.conf. The full DigiByte install puts it at <dir>\digibyte-qt.exe.
+function Get-DigiByteQt {
+    $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyte-qt.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.FullName }
+    return (Join-Path $DigiByteDir 'digibyte-qt.exe')
+}
+function Start-DigiByteWallet {
+    $qt = Get-DigiByteQt
+    if (-not (Test-Path $qt)) { return $false }
+    Add-ProgramAllowRule 'DigiByte wallet (digibyte-qt)' $qt
+    if (-not (Test-ProcRunning 'digibyte-qt')) {
+        Start-Process $qt -ArgumentList "-datadir=$DgbData"   # $DgbData has no spaces
+    }
+    return $true
+}
+
 function Get-KuboLatestVersion {
     try {
         $versions = (Invoke-WebRequest 'https://dist.ipfs.tech/kubo/versions' -UseBasicParsing -TimeoutSec 20).Content -split "`n"
@@ -529,6 +557,37 @@ function Start-Ipfs {
     $env:IPFS_PATH = $IpfsRepo
     Add-ProgramAllowRule 'IPFS (kubo)' $IpfsExe
     if (-not (Test-ProcRunning 'ipfs')) { Start-Process -FilePath $IpfsExe -ArgumentList 'daemon --enable-gc' -WindowStyle Hidden }
+    return $true
+}
+
+# --- IPFS Desktop (GUI, tray icon) - the run model used by the installer -----
+function Get-IpfsDesktopAsset {
+    try {
+        $rel = Invoke-GitHubApi "https://api.github.com/repos/$IpfsDesktopRepo/releases/latest"
+        $a = $rel.assets | Where-Object { $_.name -match 'setup.*win-x64\.exe$' } | Select-Object -First 1
+        if (-not $a) { $a = $rel.assets | Where-Object { $_.name -match 'win-x64\.exe$' } | Select-Object -First 1 }
+        if ($a) { return @{ url = $a.browser_download_url; name = $a.name; ver = $rel.tag_name.TrimStart('v') } }
+    } catch {}
+    return $null
+}
+function Install-IpfsDesktop {
+    if (Test-Path $IpfsDesktopExe) { Log '  IPFS Desktop already installed.' 'OK'; return 'installed' }
+    $asset = Get-IpfsDesktopAsset
+    if (-not $asset) { throw 'could not find the IPFS Desktop installer on GitHub.' }
+    $inst = Join-Path $Tmp $asset.name
+    if (-not (Get-File $asset.url $inst)) { throw "could not download IPFS Desktop from $($asset.url)" }
+    Log "  installing IPFS Desktop $($asset.ver) silently (this can take a minute)..."
+    # electron-builder NSIS: /S = silent. It installs per-user, registers its own
+    # login auto-start, launches the app, and runs kubo internally on :5001.
+    Start-Process -FilePath $inst -ArgumentList '/S' -Wait
+    Start-Sleep -Seconds 3
+    if (Test-Path $IpfsDesktopExe) { Log "  + IPFS Desktop $($asset.ver) -> $IpfsDesktopExe" 'OK' }
+    else { Log "  + IPFS Desktop $($asset.ver) installed (tray icon appears at login)." 'OK' }
+    return $asset.ver
+}
+function Start-IpfsDesktop {
+    if (-not (Test-Path $IpfsDesktopExe)) { return $false }
+    if (-not (Test-ProcRunning 'IPFS Desktop')) { Start-Process -FilePath $IpfsDesktopExe }
     return $true
 }
 
@@ -627,9 +686,10 @@ function Invoke-Install {
     Write-Host "This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp" -ForegroundColor White
     Write-Host "pool. It installs and auto-starts everything, and keeps it updated for you:" -ForegroundColor White
     Write-Host ""
-    Write-Host "  * DigiByte Core wallet   -> $DigiByteDir   (blockchain, runs in background)" -ForegroundColor Gray
-    Write-Host "  * IPFS (file storage)    -> $DigiAssetDir  (runs in background)" -ForegroundColor Gray
-    Write-Host "  * DigiAsset for Windows  -> $DigiAssetDir  (the node + live dashboard)" -ForegroundColor Gray
+    Write-Host "  * DigiByte Core wallet   (GUI window) -> $DigiByteDir" -ForegroundColor Gray
+    Write-Host "  * IPFS Desktop           (tray icon)  -> installed for your user" -ForegroundColor Gray
+    Write-Host "  * DigiAsset for Windows  (dashboard)  -> $DigiAssetDir" -ForegroundColor Gray
+    Write-Host "  These open as real apps (taskbar + tray) and start when you log in." -ForegroundColor Gray
     Write-Host ""
     Write-Host "BEFORE YOU BEGIN - set up your home router so the internet can reach this node." -ForegroundColor Yellow
     Write-Host "Your PC's Windows firewall is opened automatically, but your ROUTER is NOT -" -ForegroundColor Yellow
@@ -657,7 +717,7 @@ function Invoke-Install {
     Write-Host "click ALLOW (both networks) - it's expected and safe." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Heads up: DigiByte's first sync can take many HOURS - sometimes a DAY or two." -ForegroundColor Yellow
-    Write-Host "It's a big blockchain :)  It runs quietly in the background - just leave the PC on." -ForegroundColor Yellow
+    Write-Host "It's a big blockchain :)  Just leave the PC on and logged in while it catches up." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Nothing here spends your coins." -ForegroundColor Green -NoNewline
     Write-Host "  (These router steps are shown again at the end.)" -ForegroundColor DarkGray
@@ -693,30 +753,29 @@ function Invoke-Install {
     Log 'Checking prerequisites (Visual C++ x64 runtime the node needs)...' 'STEP'
     Ensure-VCRuntime
 
-    # 1. DigiByte ------------------------------------------------------------
-    Step 1 "Installing DigiByte Core $DigiByteVersion..."
+    # 1. DigiByte (GUI wallet) -----------------------------------------------
+    Step 1 "Installing DigiByte Core $DigiByteVersion (wallet GUI)..."
     Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion")
     $rpc = Write-DigiByteConf
-    Register-DigiByteTask
-    Start-DigiByte | Out-Null
-    Log '  DigiByte running + set to start on boot (syncing in the background).' 'OK'
+    if (Get-ScheduledTask -TaskName $TaskDigiByte -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskDigiByte -Confirm:$false }  # drop legacy headless task
+    if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData" }
+    Start-DigiByteWallet | Out-Null
+    Log '  DigiByte wallet (GUI) running + opens at every logon. Blockchain syncs in the background.' 'OK'
 
-    # 2. IPFS ----------------------------------------------------------------
-    $kubo = Resolve-KuboVersion $KuboVersion
-    Step 2 "Installing IPFS (kubo) $kubo..."
-    Install-Ipfs $kubo
-    Initialize-Ipfs
-    Register-DaemonTask $TaskIpfs $IpfsExe 'daemon --enable-gc' $DigiAssetDir
-    Start-Ipfs | Out-Null
-    Log '  IPFS running + set to start on boot.' 'OK'
+    # 2. IPFS Desktop (GUI) --------------------------------------------------
+    Step 2 'Installing IPFS Desktop (GUI, tray icon)...'
+    if (Get-ScheduledTask -TaskName $TaskIpfs -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskIpfs -Confirm:$false }  # drop legacy headless kubo task
+    $ipfsVer = Install-IpfsDesktop
+    Start-IpfsDesktop | Out-Null
+    Log '  IPFS Desktop running (tray icon) + auto-starts at logon.' 'OK'
 
     # 3. DigiAsset node ------------------------------------------------------
     Step 3 'Installing DigiAsset for Windows (latest release)...'
     Install-DigiAsset
     Write-NodeConfig $rpc
-    Register-GuardedLogonTask $TaskNode $NodeExe $DigiAssetDir 'DigiAssetWindows'
+    if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskNode $NodeExe $DigiAssetDir 'DigiAssetWindows' }
     Start-Node | Out-Null
-    Log '  DigiAsset node started + opens at every logon.' 'OK'
+    Log '  DigiAsset node dashboard running + opens at every logon.' 'OK'
 
     # 4. Firewall ------------------------------------------------------------
     Step 4 'Opening the local Windows firewall for hosting (inbound)...'
@@ -738,7 +797,7 @@ function Invoke-Install {
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
     $state.digibyte  = $DigiByteVersion
-    $state.kubo      = $kubo
+    $state.kubo      = "$ipfsVer"   # IPFS Desktop version (field name kept for compatibility)
     $state.digiasset = (Get-DigiAssetLatestTag)
     $state.script    = $SCRIPT_VERSION
     Write-State $state
@@ -795,10 +854,26 @@ function Invoke-Install {
     Write-Host "  * See what is in the treasury any time at $PoolServer" -ForegroundColor White
     Write-Host "  * Saved for you: $treasuryNote" -ForegroundColor Gray
     Write-Host ''
+    Write-Host 'YOUR APPS (taskbar + tray):' -ForegroundColor Cyan
+    Write-Host '  * DigiByte wallet + DigiAsset dashboard open as windows; IPFS Desktop sits in the tray.' -ForegroundColor White
+    if ($NoStartOnLogon) {
+        Write-Host '  * You chose NOT to auto-start on logon - launch them yourself when you want them.' -ForegroundColor Yellow
+    } else {
+        Write-Host '  * They start automatically every time you LOG IN.' -ForegroundColor White
+    }
+    Write-Host ''
+    Write-Host 'RUN IT UNATTENDED (recommended for an always-on node):' -ForegroundColor Cyan
+    Write-Host '  These are desktop apps, so they run while you are LOGGED IN. To have an always-on' -ForegroundColor White
+    Write-Host '  node come back up after a reboot with nobody at the keyboard, set the PC to auto-' -ForegroundColor White
+    Write-Host '  login using Microsoft Sysinternals Autologon (free, official):' -ForegroundColor White
+    Write-Host '     https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Green
+    Write-Host '  Run it once, enter your Windows username + password, and every boot auto-logs-in and' -ForegroundColor White
+    Write-Host '  launches the apps for you.' -ForegroundColor White
+    Write-Host ''
     Write-Host 'WHAT HAPPENS NOW:' -ForegroundColor Cyan
-    Write-Host '  * DigiByte is syncing the blockchain in the background (hours the first time).' -ForegroundColor White
+    Write-Host '  * DigiByte is syncing the blockchain (hours the first time) - watch it in the wallet.' -ForegroundColor White
     Write-Host '  * Once synced, the node registers with the pool automatically.' -ForegroundColor White
-    Write-Host "  * Updates + health checks run on every boot and every 6 hours." -ForegroundColor White
+    Write-Host "  * Update + health checks run on every boot and every 6 hours." -ForegroundColor White
     Write-Host ''
     Write-Host 'HANDY COMMANDS (Administrator PowerShell):' -ForegroundColor Cyan
     Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1" -ForegroundColor Gray
@@ -819,89 +894,66 @@ function Invoke-Service {
     # --- 1. Keep this script current for next time -------------------------
     Update-SelfScript | Out-Null
 
-    # --- 2. Updates: DigiByte, IPFS, DigiAsset -----------------------------
-    # DigiByte
+    # --- 2. Prerequisites (independent of the user session) ----------------
+    try { Ensure-VCRuntime } catch { $problems += "VC++ runtime: $($_.Exception.Message)"; Log $problems[-1] 'WARN' }
+    Ensure-Firewall
+
+    # --- 3. Binary updates. Applied now; the GUI apps pick them up at the
+    #        next login/reboot (with Autologon that's automatic). ------------
+    # DigiByte Core (wallet) binaries.
     try {
         $latest = Get-DigiByteLatestTag
         if ($latest -and (Test-Newer $latest $state.digibyte)) {
             Log "DigiByte update: $($state.digibyte) -> $latest" 'STEP'
             Stop-DigiByteGracefully
             Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
-            Register-DigiByteTask
-            Start-DigiByte | Out-Null
             $state.digibyte = $latest.TrimStart('v'); Write-State $state
         }
     } catch { $problems += "DigiByte update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
-    # IPFS
-    try {
-        $latest = Get-KuboLatestVersion
-        if ($latest -and (Test-Newer $latest $state.kubo)) {
-            Log "IPFS update: $($state.kubo) -> $latest" 'STEP'
-            Install-Ipfs $latest
-            Start-Ipfs | Out-Null
-            $state.kubo = $latest; Write-State $state
-        }
-    } catch { $problems += "IPFS update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
-
-    # DigiAsset node
+    # DigiAsset node exe.
     try {
         $latest = Get-DigiAssetLatestTag
         if ($latest -and (Test-Newer $latest $state.digiasset)) {
             Log "DigiAsset update: $($state.digiasset) -> $latest" 'STEP'
             Install-DigiAsset
-            Start-Node | Out-Null
             $state.digiasset = $latest; Write-State $state
         }
     } catch { $problems += "DigiAsset update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
-    # --- 3. Health + AGGRESSIVE self-heal ----------------------------------
-    # Re-register any missing boot task, re-open firewall, re-download missing
-    # binaries, restart anything that is down. Only alert if it stays broken.
-
-    # The node needs the VC++ x64 runtime; make sure it's present (best-effort).
-    try { Ensure-VCRuntime } catch { $problems += "VC++ runtime: $($_.Exception.Message)"; Log $problems[-1] 'WARN' }
-    Ensure-Firewall
-    foreach ($t in @(
-        @{ n=$TaskDigiByte }, @{ n=$TaskIpfs }, @{ n=$TaskMaint }
-    )) {
-        if (-not (Get-ScheduledTask -TaskName $t.n -ErrorAction SilentlyContinue)) {
-            Log "boot task '$($t.n)' missing - re-registering." 'WARN'
-            switch ($t.n) {
-                $TaskDigiByte { Register-DigiByteTask }
-                $TaskIpfs     { Register-DaemonTask $TaskIpfs $IpfsExe 'daemon --enable-gc' $DigiAssetDir }
-                $TaskMaint    { Register-MaintenanceTask }
-            }
-        }
+    # IPFS Desktop self-updates (Electron autoupdater) - just ensure it's installed.
+    if (-not (Test-Path $IpfsDesktopExe)) {
+        Log 'IPFS Desktop missing - reinstalling.' 'WARN'
+        try { Install-IpfsDesktop | Out-Null } catch { $problems += "IPFS Desktop reinstall failed: $($_.Exception.Message)" }
     }
 
-    # DigiByte
+    # --- 4. Reinstall missing binaries (the GUI apps relaunch at next login) -
     if (-not (Test-Path (Get-Digibyted))) {
-        Log 'digibyted.exe missing - reinstalling.' 'WARN'
-        try { Install-DigiByteBinaries (Resolve-DigiByteAsset "v$($state.digibyte)"); Register-DigiByteTask } catch { $problems += "DigiByte reinstall failed: $($_.Exception.Message)" }
+        Log 'DigiByte binaries missing - reinstalling.' 'WARN'
+        try { Install-DigiByteBinaries (Resolve-DigiByteAsset "v$($state.digibyte)") } catch { $problems += "DigiByte reinstall failed: $($_.Exception.Message)" }
     }
-    if (-not (Test-ProcRunning 'digibyted')) { Log 'digibyted not running - starting.' 'WARN'; Start-DigiByte | Out-Null; Start-Sleep 5 }
-    if (-not (Test-ProcRunning 'digibyted')) { $problems += 'DigiByte will not stay running (check the log / datadir).' }
-
-    # IPFS
-    if (-not (Test-Path $IpfsExe)) {
-        Log 'ipfs.exe missing - reinstalling.' 'WARN'
-        try { Install-Ipfs $state.kubo; Initialize-Ipfs } catch { $problems += "IPFS reinstall failed: $($_.Exception.Message)" }
-    }
-    if (-not (Test-ProcRunning 'ipfs')) { Log 'ipfs not running - starting.' 'WARN'; Start-Ipfs | Out-Null; Start-Sleep 5 }
-    if (-not (Test-IpfsUp)) { $problems += 'IPFS API is not responding on 5001.' }
-
-    # DigiAsset node
     if (-not (Test-Path $NodeExe)) {
         Log 'DigiAssetWindows.exe missing - reinstalling.' 'WARN'
         try { Install-DigiAsset } catch { $problems += "DigiAsset reinstall failed: $($_.Exception.Message)" }
     }
-    if (-not (Test-ProcRunning 'DigiAssetWindows')) { Log 'node not running - starting.' 'WARN'; Start-Node | Out-Null; Start-Sleep 5 }
-    if (-not (Test-ProcRunning 'DigiAssetWindows')) { $problems += 'DigiAsset node will not stay running.' }
 
-    # Sync + reachability are informational (can't force-heal a router / a sync).
+    # --- 5. Health check (report only). These are GUI apps in the USER
+    #        session, so they auto-start at logon - a SYSTEM task can't launch
+    #        them into your desktop. A maintenance run before login will show
+    #        them "not running", which is normal; Autologon makes boot -> login
+    #        automatic. Real problems (missing binaries / failed updates) alert. -
     $prog = Get-DigiByteProgress
-    if ($null -ne $prog) { Log ('DigiByte sync: {0:P1}' -f $prog) } else { Log 'DigiByte RPC not answering yet (still starting or syncing).' 'WARN' }
+    if ($null -ne $prog) { Log ('DigiByte wallet: running, sync {0:P1}' -f $prog) 'OK' }
+    elseif (Test-ProcRunning 'digibyte-qt') { Log 'DigiByte wallet running (RPC not up yet - still starting/syncing).' 'WARN' }
+    else { Log 'DigiByte wallet not running - starts when you log in (see Autologon).' 'WARN' }
+
+    if (Test-IpfsUp) { Log 'IPFS Desktop: API responding on 5001.' 'OK' }
+    elseif (Test-ProcRunning 'IPFS Desktop') { Log 'IPFS Desktop running (API not up yet).' 'WARN' }
+    else { Log 'IPFS Desktop not running - starts when you log in.' 'WARN' }
+
+    if (Test-ProcRunning 'DigiAssetWindows') { Log 'DigiAsset node: running.' 'OK' }
+    else { Log 'DigiAsset node not running - starts when you log in.' 'WARN' }
+
     $reach = Test-PortOpen4001
     if ($reach -eq $false) { Log 'Port 4001 not reachable from the internet - forward TCP 4001 on your router.' 'WARN' }
 

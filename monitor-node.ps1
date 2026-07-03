@@ -70,8 +70,8 @@ function Show-Status {
         if ($pct -ge 99.9) { Line "DigiByte Core" "OK" ("synced 100%  block {0:N0}" -f $bc.blocks) }
         else { Line "DigiByte Core" "WARN" ("syncing {0}%  block {1:N0}/{2:N0}" -f $pct, $bc.blocks, $bc.headers); $issues += "DigiByte still syncing - the node can't fully work until it's caught up." }
     } catch {
-        Line "DigiByte Core" "FAIL" "not responding (is digibyted running? creds correct?)"
-        $issues += "DigiByte Core is down - start it, or check rpcuser/rpcpassword in config.cfg vs digibyte.conf."
+        Line "DigiByte Core" "FAIL" "not responding (is the DigiByte wallet running? creds correct?)"
+        $issues += "DigiByte Core is down - open the DigiByte wallet, or check rpcuser/rpcpassword in config.cfg vs digibyte.conf."
     }
 
     # --- IPFS ---
@@ -81,10 +81,10 @@ function Show-Status {
         $myId = $id.ID
         $peers = 0
         try { $sw = Invoke-RestMethod -Uri ($ipfsApi + "swarm/peers") -Method Post -TimeoutSec 6; if ($sw.Peers) { $peers = $sw.Peers.Count } } catch {}
-        Line "IPFS (kubo)" "OK" ("running, {0} peers" -f $peers)
+        Line "IPFS Desktop" "OK" ("running, {0} peers" -f $peers)
     } catch {
-        Line "IPFS (kubo)" "FAIL" "API not responding on 5001 (is the IPFS daemon running?)"
-        $issues += "IPFS is down - hosting + verification won't work. Start the DigiStampIPFS task."
+        Line "IPFS Desktop" "FAIL" "API not responding on 5001 (is the IPFS daemon running?)"
+        $issues += "IPFS is down - hosting + verification won't work. Open IPFS Desktop (tray icon)."
     }
 
     # --- DigiAsset for Windows process ---
