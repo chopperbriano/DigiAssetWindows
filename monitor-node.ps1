@@ -7,11 +7,11 @@
 .USAGE
     powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1
     powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Watch          # refresh every 15s
-    powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Root C:\DigiAssetWindows
+    powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Root C:\DigiAsset
 #>
 [CmdletBinding()]
 param(
-    [string]$Root = "C:\DigiAssetWindows",
+    [string]$Root = "C:\DigiAsset",
     [switch]$Watch,
     [int]$Every = 15
 )
@@ -90,12 +90,26 @@ function Show-Status {
     if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) { Line "DigiAsset for Windows" "OK" "running" }
     else { Line "DigiAsset for Windows" "FAIL" "not running"; $issues += "DigiAsset for Windows isn't running - start $Root\DigiAssetWindows.exe." }
 
-    # --- Port 4001 reachability ---
-    try {
-        $reach = (Invoke-RestMethod "https://ifconfig.co/port/4001" -TimeoutSec 12).reachable
-        if ($reach -eq $true) { Line "Port 4001" "OK" "open to the internet" }
-        else { Line "Port 4001" "WARN" "NOT reachable - forward TCP 4001 on your router"; $issues += "Port 4001 isn't reachable - forward it on your home router or you may not be verified/paid." }
-    } catch { Line "Port 4001" "--" "could not run the online test right now" }
+    # --- Hosting ports (must accept INBOUND so others can connect to you) ---
+    # Local Windows firewall rules (opened by the installer).
+    $fwMissing = @()
+    foreach ($r in "DigiStamp IPFS swarm (TCP 4001)","DigiStamp IPFS swarm (UDP 4001)","DigiByte P2P (TCP 12024)") {
+        if (-not (Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue)) { $fwMissing += $r }
+    }
+    if ($fwMissing.Count -eq 0) { Line "Local firewall" "OK" "hosting ports open (4001 TCP/UDP, 12024 TCP)" }
+    else { Line "Local firewall" "WARN" ("{0} rule(s) missing - re-run the installer" -f $fwMissing.Count); $issues += "Local firewall is missing a hosting rule - re-run setup-digiasset.ps1 to re-open 4001/12024." }
+
+    function Test-Reach($port) { try { return (Invoke-RestMethod "https://ifconfig.co/port/$port" -TimeoutSec 12).reachable } catch { return $null } }
+
+    $r4001 = Test-Reach 4001
+    if ($r4001 -eq $true) { Line "Port 4001 (DigiAsset)" "OK" "reachable - hosting IPFS/DigiAsset content" }
+    elseif ($r4001 -eq $false) { Line "Port 4001 (DigiAsset)" "WARN" "NOT reachable - forward TCP+UDP 4001 on your router"; $issues += "Port 4001 (DigiAsset/IPFS hosting) isn't reachable - forward TCP+UDP 4001 on your router or you may not be verified/paid." }
+    else { Line "Port 4001 (DigiAsset)" "--" "could not run the online test right now" }
+
+    $r12024 = Test-Reach 12024
+    if ($r12024 -eq $true) { Line "Port 12024 (DigiByte)" "OK" "reachable - hosting DigiByte peers" }
+    elseif ($r12024 -eq $false) { Line "Port 12024 (DigiByte)" "WARN" "NOT reachable - forward TCP 12024 on your router (recommended)" }
+    else { Line "Port 12024 (DigiByte)" "--" "could not run the online test right now" }
 
     # --- Pool registration / self-check ---
     try {

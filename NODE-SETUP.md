@@ -66,17 +66,18 @@ DigiAsset for Windows registers with the pool on its own.
 
 ## 3. Open ports on your home router (important)
 
-Your PC's firewall is handled automatically, but your **home router** is not.
-For the pool to verify you're really hosting (and pay you), forward these to your
-PC's local IP:
+Your PC's Windows firewall is opened automatically by the installer, but your
+**home router** is not. To actually **host incoming connections** — and let the
+pool verify you and pay you — forward these to your PC's local IP:
 
-| Port | Protocol | Needed? | What for |
+| Port | Protocol | Needed? | Hosts |
 |---|---|---|---|
-| **4001** | **TCP** | **Required** | IPFS — how the pool reaches/verifies your node |
-| 4001 | UDP | Recommended | IPFS QUIC (faster connections) |
-| 12024 | TCP | Optional | More DigiByte peers |
+| **4001** | **TCP** | **Required** | DigiAsset / IPFS — how the pool reaches/verifies your node |
+| 4001 | UDP | Recommended | DigiAsset / IPFS (QUIC — faster peer connections) |
+| 12024 | TCP | Recommended | DigiByte — lets you serve DigiByte peers |
 
-**Do NOT forward 5001, 14022, or 8090** — those stay on your PC only.
+**Do NOT forward 5001, 14022, or 8090** — those are local-only (IPFS API,
+DigiByte RPC, and the node's web UI) and must stay private.
 
 > How to forward a port: log into your router (usually `192.168.0.1` or
 > `192.168.1.1`), find **Port Forwarding**, and send TCP 4001 to this PC's local
@@ -88,16 +89,15 @@ The easiest way to see everything at a glance is the **monitor script**. From an
 Administrator PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\install-node.ps1  # (installer, if not run yet)
-powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1                    # one-time status
-powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Watch             # live, refreshes every 15s
+powershell -ExecutionPolicy Bypass -File C:\DigiAsset\monitor-node.ps1          # one-time status
+powershell -ExecutionPolicy Bypass -File C:\DigiAsset\monitor-node.ps1 -Watch   # live, refreshes every 15s
 ```
 
-(Get `monitor-node.ps1` the same way as the installer — it's in the repo root.)
+(The installer drops `monitor-node.ps1` into `C:\DigiAsset` for you.)
 
 It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset for
-Windows**, **Port 4001** (open/closed), and **Pool** (are you registered?), plus a
-plain-English list of anything to fix.
+Windows**, your **local firewall** + **hosting ports** (4001 and 12024), and
+**Pool** (are you registered?), plus a plain-English list of anything to fix.
 
 Other quick checks:
 
@@ -118,17 +118,17 @@ That's it — leave it running and you'll be paid from the pool for the content 
 
 ## Stopping or removing it
 
-Grab `stop-node.ps1` (repo root) and, from an Administrator PowerShell:
+From an Administrator PowerShell (the installer put `stop-node.ps1` in `C:\DigiAsset`):
 
 ```powershell
-.\stop-node.ps1                     # stop everything now (restarts on next boot)
-.\stop-node.ps1 -DisableAutostart   # stop + don't restart on boot
-.\stop-node.ps1 -Uninstall          # stop, remove boot tasks/firewall rules, delete the node files
+powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1                    # stop now (restarts on next boot)
+powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -DisableAutostart  # stop + don't restart on boot
+powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -Uninstall         # stop + remove boot tasks/firewall + delete C:\DigiAsset
 ```
 
-It shuts DigiByte + IPFS down cleanly (not a hard kill). `-Uninstall` leaves
-DigiByte Core and its blockchain in place — remove those from Windows "Apps" if
-you want them gone too.
+It shuts DigiByte + IPFS down cleanly (not a hard kill). `-Uninstall` deletes
+`C:\DigiAsset` but leaves DigiByte Core and its blockchain in `C:\DigiByte` — delete
+that folder (or use the DigiByte uninstaller in Windows "Apps") if you want it gone too.
 
 ## Troubleshooting
 

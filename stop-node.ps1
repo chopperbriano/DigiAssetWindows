@@ -1,15 +1,16 @@
 <#
 .SYNOPSIS
-    Stop the DigiStamp node stack (DigiAsset for Windows, IPFS, DigiByte), and optionally
-    disable auto-start or fully uninstall.
+    Stop the DigiStamp node stack (DigiAsset for Windows, IPFS, DigiByte) and
+    optionally disable auto-start or fully uninstall.
 
 .MODES
     (default)          Stop everything running now (graceful where possible).
-                       The boot tasks stay, so it all restarts on next boot.
+                       Boot tasks stay, so it all restarts on next boot.
     -DisableAutostart  Also remove the boot tasks so nothing restarts on boot.
     -Uninstall         Stop, remove boot tasks + firewall rules, and delete the
-                       DigiAsset/IPFS files in -Root. Leaves DigiByte Core and its
-                       blockchain data alone (removing those is a separate choice).
+                       DigiAsset folder. DigiByte Core and its blockchain in
+                       -DigiByteDir are LEFT in place (removing those is a
+                       separate, destructive choice).
 
 .USAGE
     powershell -ExecutionPolicy Bypass -File .\stop-node.ps1
@@ -18,7 +19,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root = "C:\DigiAssetWindows",
+    [string]$DigiAssetDir = "C:\DigiAsset",
+    [string]$DigiByteDir  = "C:\DigiByte",
     [switch]$DisableAutostart,
     [switch]$Uninstall
 )
@@ -27,7 +29,13 @@ $ErrorActionPreference = "Continue"
 # Elevation (needed to stop SYSTEM tasks / remove firewall rules).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" $(if($DisableAutostart){'-DisableAutostart'}) $(if($Uninstall){'-Uninstall'}) -Root `"$Root`""; return }
+    if ($PSCommandPath) {
+        $a = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -DigiAssetDir `"$DigiAssetDir`" -DigiByteDir `"$DigiByteDir`""
+        if ($DisableAutostart) { $a += " -DisableAutostart" }
+        if ($Uninstall)        { $a += " -Uninstall" }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $a
+        return
+    }
     else { throw "Run this in an elevated (Administrator) PowerShell." }
 }
 
@@ -37,14 +45,15 @@ function Read-Cfg([string]$path) {
     return $h
 }
 
-$tasks = "DigiStampNode", "DigiStampIPFS", "DigiStampDigiByte"
+# Task + firewall names must match what setup-digiasset.ps1 creates.
+$tasks = "DigiStampNode", "DigiStampIPFS", "DigiStampDigiByte", "DigiStampMaintenance"
 $rules = "DigiStamp IPFS swarm (TCP 4001)", "DigiStamp IPFS swarm (UDP 4001)", "DigiByte P2P (TCP 12024)"
 
 Write-Host "=== Stopping DigiStamp node stack ===" -ForegroundColor Cyan
 
 # 1. Graceful stops -----------------------------------------------------
-# DigiByte: ask it to stop cleanly via RPC (kill risks chainstate corruption).
-$cfg = Read-Cfg (Join-Path $Root "config.cfg")
+# DigiByte: ask it to stop cleanly via RPC (a hard kill risks chainstate corruption).
+$cfg = Read-Cfg (Join-Path $DigiAssetDir "config.cfg")
 if ($cfg["rpcuser"] -and $cfg["rpcpassword"]) {
     $port = 14022; if ($cfg["rpcport"]) { try { $port=[int]$cfg["rpcport"] } catch {} }
     try {
@@ -82,8 +91,9 @@ if (-not $Uninstall) {
 }
 
 # 4. Full uninstall -----------------------------------------------------
-Write-Host "`n-Uninstall will DELETE $Root (DigiAsset for Windows, IPFS, config) and remove the" -ForegroundColor Yellow
-Write-Host "firewall rules. DigiByte Core and its blockchain data are left installed." -ForegroundColor Yellow
+Write-Host "`n-Uninstall will DELETE $DigiAssetDir (DigiAsset node, IPFS, config, logs)" -ForegroundColor Yellow
+Write-Host "and remove the firewall rules + boot tasks." -ForegroundColor Yellow
+Write-Host "DigiByte Core and its blockchain in $DigiByteDir are LEFT in place." -ForegroundColor Yellow
 $ans = Read-Host "Type DELETE to confirm"
 if ($ans -ne "DELETE") { Write-Host "Cancelled - nothing removed."; return }
 
@@ -91,7 +101,7 @@ foreach ($r in $rules) {
     if (Get-NetFirewallRule -DisplayName $r -ErrorAction SilentlyContinue) { Remove-NetFirewallRule -DisplayName $r; Write-Host "  removed firewall rule: $r" }
 }
 [Environment]::SetEnvironmentVariable("IPFS_PATH", $null, "Machine")
-if (Test-Path $Root) { Remove-Item -LiteralPath $Root -Recurse -Force; Write-Host "  removed $Root" }
-Write-Host "`nUninstalled." -ForegroundColor Green
-Write-Host "DigiByte Core is still installed (uninstall it from Windows 'Apps' if you want),"
-Write-Host "and its blockchain data remains in %APPDATA%\DigiByte."
+if (Test-Path $DigiAssetDir) { Remove-Item -LiteralPath $DigiAssetDir -Recurse -Force; Write-Host "  removed $DigiAssetDir" }
+Write-Host "`nUninstalled the DigiAsset node." -ForegroundColor Green
+Write-Host "DigiByte Core is still installed in $DigiByteDir (blockchain in $DigiByteDir\data)."
+Write-Host "To remove it too: delete $DigiByteDir, or use its uninstaller in Windows 'Apps'."

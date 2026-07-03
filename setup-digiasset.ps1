@@ -615,8 +615,10 @@ Nothing here spends your coins.
     Log '  DigiAsset node started + opens at every logon.' 'OK'
 
     # 4. Firewall ------------------------------------------------------------
-    Step 4 'Opening local Windows firewall...'
+    Step 4 'Opening the local Windows firewall for hosting (inbound)...'
     Ensure-Firewall
+    Log '  local firewall now allows inbound 4001/TCP + 4001/UDP (DigiAsset/IPFS) and 12024/TCP (DigiByte).' 'OK'
+    Log '  You must ALSO forward these on your home router - see the summary below.' 'WARN'
 
     # 5. Maintenance task ----------------------------------------------------
     Step 5 'Installing the auto-update + self-heal maintenance task...'
@@ -624,6 +626,10 @@ Nothing here spends your coins.
         Copy-Item $PSCommandPath $InstalledScript -Force
     } elseif (-not (Test-Path $InstalledScript)) {
         Get-File $RawScriptUrl $InstalledScript 2 | Out-Null
+    }
+    # Drop the companion tools next to the node so they are always handy.
+    foreach ($tool in 'monitor-node.ps1','stop-node.ps1') {
+        try { Get-File "https://raw.githubusercontent.com/$Repo/master/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
     }
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
@@ -670,11 +676,12 @@ Nothing here spends your coins.
     Write-Host "`n===== Done =====" -ForegroundColor Green
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.'
     Write-Host ''
-    Write-Host 'ON YOUR HOME ROUTER, forward to this PC:' -ForegroundColor Cyan
-    Write-Host '   TCP 4001   (REQUIRED - how the pool verifies + pays you)'
-    Write-Host '   UDP 4001   (recommended)'
-    Write-Host '   TCP 12024  (optional - more DigiByte peers)'
-    Write-Host '   Do NOT forward 5001 / 14022 / 8090.'
+    Write-Host 'HOSTING PORTS - your local Windows firewall is ALREADY open for these.' -ForegroundColor Cyan
+    Write-Host 'To accept incoming connections you must ALSO forward them on your home router:'
+    Write-Host '   TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)'
+    Write-Host '   UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)'
+    Write-Host '   TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)'
+    Write-Host '   Keep 5001 / 14022 / 8090 PRIVATE - never forward them (they are local-only).'
     Write-Host ''
     Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
     Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.'
@@ -688,7 +695,11 @@ Nothing here spends your coins.
     Write-Host '  * DigiByte is syncing the blockchain in the background (hours the first time).'
     Write-Host '  * Once synced, the node registers with the pool automatically.'
     Write-Host "  * Updates + health checks run on every boot and every 6 hours."
-    Write-Host "  * Logs: $LogFile"
+    Write-Host ''
+    Write-Host 'HANDY COMMANDS (Administrator PowerShell):' -ForegroundColor Cyan
+    Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1"
+    Write-Host "  * Stop / remove: powershell -ExecutionPolicy Bypass -File $DigiAssetDir\stop-node.ps1"
+    Write-Host "  * Logs         : $LogFile"
 }
 
 # ---------------------------------------------------------------------------
