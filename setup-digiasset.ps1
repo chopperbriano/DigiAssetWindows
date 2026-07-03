@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.4.0'
+$SCRIPT_VERSION = '2.5.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -73,6 +73,7 @@ $DgbExeMarker   = Join-Path $DigiAssetDir 'state\digibyted-path.txt'
 $DgbExeDefault  = Join-Path $DigiByteDir  'daemon\digibyted.exe'
 $NodeExe        = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe         = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
+$PoolExe        = Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'  # present only on a pool box
 $IpfsExe        = Join-Path $DigiAssetDir 'ipfs.exe'
 $IpfsRepo       = Join-Path $DigiAssetDir 'ipfs-repo'
 $NodeConfig     = Join-Path $DigiAssetDir 'config.cfg'
@@ -646,6 +647,26 @@ function Install-DigiAsset {
         Log "  + $f" 'OK'
     }
 }
+# Keep the pool server binary in sync on a POOL box. Only touches things if
+# DigiAssetPoolServer.exe is already deployed (i.e. this is a pool host). The
+# pool + node ship in the SAME release, so this is called when a new release is
+# detected. Stops the running pool, swaps the exe, and restarts it (headless is
+# fine for a server) so the pool doesn't fall behind the node.
+function Update-PoolServer {
+    if (-not (Test-Path $PoolExe)) { return }
+    Log '  updating DigiAssetPoolServer.exe...' 'STEP'
+    $wasRunning = Test-ProcRunning 'DigiAssetPoolServer'
+    if ($wasRunning) {
+        Get-Process DigiAssetPoolServer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        for ($w = 0; $w -lt 20 -and (Test-ProcRunning 'DigiAssetPoolServer'); $w++) { Start-Sleep -Milliseconds 500 }
+    }
+    Add-ProgramAllowRule 'DigiAsset pool server' $PoolExe
+    if (Get-File "https://github.com/$Repo/releases/latest/download/DigiAssetPoolServer.exe" $PoolExe) {
+        Log '  + DigiAssetPoolServer.exe updated.' 'OK'
+        if ($wasRunning) { Start-Process -FilePath $PoolExe -WorkingDirectory $DigiAssetDir; Log '  pool server restarted.' 'OK' }
+    } else { Log '  pool server update download failed.' 'WARN' }
+}
+
 function Start-Node {
     if (-not (Test-Path $NodeExe)) { return $false }
     Add-ProgramAllowRule 'DigiAsset node' $NodeExe
@@ -1054,12 +1075,13 @@ function Invoke-Service {
         }
     } catch { $problems += "DigiByte update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
-    # DigiAsset node exe.
+    # DigiAsset node exe (+ pool server exe on a pool box - same release).
     try {
         $latest = Get-DigiAssetLatestTag
         if ($latest -and (Test-Newer $latest $state.digiasset)) {
             Log "DigiAsset update: $($state.digiasset) -> $latest" 'STEP'
             Install-DigiAsset
+            Update-PoolServer   # no-op unless DigiAssetPoolServer.exe is deployed
             $state.digiasset = $latest; Write-State $state
         }
     } catch { $problems += "DigiAsset update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
@@ -1096,6 +1118,12 @@ function Invoke-Service {
 
     if (Test-ProcRunning 'DigiAssetWindows') { Log 'DigiAsset node: running.' 'OK' }
     else { Log 'DigiAsset node not running - starts when you log in.' 'WARN' }
+
+    # Pool server (only on a pool box).
+    if (Test-Path $PoolExe) {
+        if (Test-ProcRunning 'DigiAssetPoolServer') { Log 'Pool server: running.' 'OK' }
+        else { Log 'Pool server installed but not running - start it (start-digistamp.ps1).' 'WARN' }
+    }
 
     $reach = Test-PortOpen4001
     if ($reach -eq $false) { Log 'Port 4001 not reachable from the internet - forward TCP 4001 on your router.' 'WARN' }

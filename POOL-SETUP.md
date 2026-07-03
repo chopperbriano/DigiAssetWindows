@@ -136,6 +136,11 @@ A node is eligible only if it was verified (reachable) in the last 24 h, has
 
 ## 7. Keep it running
 
+- **Auto-updates** — because `DigiAssetPoolServer.exe` lives in `C:\DigiAsset`, the
+  node's maintenance task keeps it **in sync with the node**: when a new release
+  ships, it stops the pool, swaps the exe, and restarts it (the pool + node are
+  released together). You can also update on demand with
+  `update-binaries.ps1 -IncludePool`.
 - **Backups** — `pool/deploy/backup-digistamp.ps1` snapshots `pool.db` (the
   ledger + registrations), configs, and the DigiByte wallet, rotating the newest
   few. Best run while stopped. See [pool/deploy/README.md](pool/deploy/README.md).
