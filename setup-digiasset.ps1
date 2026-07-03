@@ -220,6 +220,13 @@ function Test-PortOpen4001 {
     catch { return $null }   # $null = couldn't run the test (don't treat as closed)
 }
 
+# The pool publishes its treasury (donation) address + balance at
+# <pool>/pool/stats.json. Returns the parsed object, or $null if unreachable.
+function Get-TreasuryInfo {
+    try { return (Invoke-RestMethod -Uri "$($PoolServer.TrimEnd('/'))/pool/stats.json" -TimeoutSec 15) }
+    catch { return $null }
+}
+
 # ---------------------------------------------------------------------------
 #  Scheduled tasks (idempotent)
 # ---------------------------------------------------------------------------
@@ -557,10 +564,22 @@ Nothing here spends your coins.
     if ($go -match '^[Nn]') { Write-Host 'Cancelled - nothing was changed.'; return }
 
     # 0. Payout address ------------------------------------------------------
+    $treasury = Get-TreasuryInfo   # pool's published treasury address + balance (may be $null if unreachable)
     if (-not $PayoutAddress) {
         Write-Host "`n--- Your payout address ---" -ForegroundColor Cyan
         Write-Host 'The DigiByte address where the pool sends your hosting earnings.'
         Write-Host 'Use an address from a wallet YOU control (starts with D, S, or dgb1).'
+        Write-Host ''
+        Write-Host 'Please be realistic about earnings:' -ForegroundColor Yellow
+        Write-Host '  * Payments are TINY - this is a tip jar for hosting, not a salary.'
+        Write-Host '  * You are ONLY paid when the pool TREASURY has funds. The treasury is'
+        Write-Host '    shared out among all verified nodes; when it is empty, nobody is paid'
+        Write-Host '    that period. The pool never pays money it does not have.'
+        Write-Host "  * See the live treasury balance + every payout at $PoolServer"
+        if ($treasury -and $treasury.donationAddress) {
+            Write-Host "  * Pool treasury (donation) address: $($treasury.donationAddress)" -ForegroundColor Gray
+        }
+        Write-Host ''
         $script:PayoutAddress = Read-Host '  Paste your DGB payout address'
         $PayoutAddress = $script:PayoutAddress
     }
@@ -621,6 +640,30 @@ Nothing here spends your coins.
     if ($reach -eq $true) { Log '  SUCCESS: port 4001 is OPEN. You are set to be verified + paid.' 'OK' }
     else { Log '  Port 4001 is NOT reachable yet - forward it on your router (below), then re-test.' 'WARN' }
 
+    # Save a treasury/earnings note the user can always find.
+    $treasuryNote = Join-Path $DigiAssetDir 'TREASURY.txt'
+    try {
+        $note = @(
+            'DigiStamp pool - earnings & treasury',
+            '',
+            "Your payout address : $PayoutAddress",
+            "Pool                : $PoolServer"
+        )
+        if ($treasury -and $treasury.donationAddress) {
+            $note += "Treasury address    : $($treasury.donationAddress)"
+            if ($null -ne $treasury.treasuryBalance) { $note += ("Treasury at install : {0} DGB" -f $treasury.treasuryBalance) }
+        }
+        $note += @(
+            '',
+            'Payments are TINY and are only shared when the treasury has funds,',
+            'split among all verified nodes. When the treasury is empty, nobody is',
+            'paid that period - the pool never pays money it does not have.',
+            '',
+            "See the live treasury balance + every payout any time at:  $PoolServer"
+        )
+        Set-Content -Path $treasuryNote -Value $note -Encoding UTF8
+    } catch {}
+
     # Summary ----------------------------------------------------------------
     Write-Host "`n===== Done =====" -ForegroundColor Green
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.'
@@ -631,12 +674,19 @@ Nothing here spends your coins.
     Write-Host '   TCP 12024  (optional - more DigiByte peers)'
     Write-Host '   Do NOT forward 5001 / 14022 / 8090.'
     Write-Host ''
+    Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
+    Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.'
+    if ($treasury -and $treasury.donationAddress) {
+        Write-Host "  * Pool treasury address: $($treasury.donationAddress)"
+    }
+    Write-Host "  * See what is in the treasury any time at $PoolServer"
+    Write-Host "  * Saved for you: $treasuryNote"
+    Write-Host ''
     Write-Host 'WHAT HAPPENS NOW:' -ForegroundColor Cyan
     Write-Host '  * DigiByte is syncing the blockchain in the background (hours the first time).'
     Write-Host '  * Once synced, the node registers with the pool automatically.'
     Write-Host "  * Updates + health checks run on every boot and every 6 hours."
     Write-Host "  * Logs: $LogFile"
-    Write-Host "  * Watch the pool + your earnings at $PoolServer"
 }
 
 # ---------------------------------------------------------------------------
