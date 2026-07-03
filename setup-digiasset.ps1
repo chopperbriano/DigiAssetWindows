@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.7.0'
+$SCRIPT_VERSION = '2.8.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -761,20 +761,71 @@ function Update-SelfScript {
 # --- Fast-sync snapshots ----------------------------------------------------
 # Download a .tar.gz snapshot, verify its SHA256, and extract into $destDir.
 # Resumable (BITS) with an Invoke-WebRequest fallback. Returns $true on success.
+# Download with a BITS job: live %/speed/ETA, auto-resumes dropped connections
+# (and resumes an in-progress job if the installer is re-run). Falls back to a
+# plain download if BITS is unavailable. Returns $true on success.
+function Get-DownloadWithProgress($url, $dest, $label) {
+    Import-Module BitsTransfer -ErrorAction SilentlyContinue
+    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+        $name = 'DigiAssetSnapshot'
+        try {
+            $job = Get-BitsTransfer -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.FileList.RemoteName -eq $url } | Select-Object -First 1
+            if (-not $job) {
+                Get-BitsTransfer -Name $name -ErrorAction SilentlyContinue | Remove-BitsTransfer -ErrorAction SilentlyContinue
+                $job = Start-BitsTransfer -Source $url -Destination $dest -DisplayName $name -Asynchronous -Priority Foreground -ErrorAction Stop
+            } else { Log "  resuming an in-progress download..." }
+            $lastBytes = 0; $lastTime = Get-Date; $lastLogPct = -10
+            while ($job.JobState -in 'Connecting','Transferring','Queued','TransientError') {
+                if ($job.JobState -eq 'TransientError') { try { $job | Resume-BitsTransfer -Asynchronous -ErrorAction SilentlyContinue } catch {} }
+                $bt = $job.BytesTransferred; $tot = $job.BytesTotal; $now = Get-Date
+                $secs = ($now - $lastTime).TotalSeconds
+                $spd = if ($secs -ge 1) { ($bt - $lastBytes) / $secs } else { $null }
+                if ($spd -ne $null) { $lastBytes = $bt; $lastTime = $now }
+                if ($tot -gt 0) {
+                    $pct = [int](($bt / $tot) * 100)
+                    $eta = if ($spd -and $spd -gt 0) { [TimeSpan]::FromSeconds([int](($tot - $bt) / $spd)).ToString() } else { '--:--:--' }
+                    Write-Progress -Activity "Downloading $label snapshot" -PercentComplete $pct `
+                        -Status ("{0:N1} / {1:N1} GB   {2}%   {3:N1} MB/s   ETA {4}" -f ($bt/1GB),($tot/1GB),$pct,(($(if($spd){$spd}else{0}))/1MB),$eta)
+                    if ($pct -ge $lastLogPct + 10) { Log ("  ...download {0}% ({1:N1}/{2:N1} GB)" -f $pct,($bt/1GB),($tot/1GB)); $lastLogPct = $pct }
+                }
+                Start-Sleep -Seconds 2
+            }
+            Write-Progress -Activity "Downloading $label snapshot" -Completed
+            if ($job.JobState -eq 'Transferred') { Complete-BitsTransfer -BitsJob $job; return $true }
+            Log "  download ended in state '$($job.JobState)'." 'WARN'; $job | Remove-BitsTransfer -ErrorAction SilentlyContinue; return $false
+        } catch { Log "  (BITS unavailable: $($_.Exception.Message)) - falling back." 'WARN' }
+    }
+    try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 0; return (Test-Path $dest) } catch { return $false }
+}
+
+# Extract with a "still working" heartbeat, since tar shows nothing for minutes
+# on a huge archive and the heavy disk I/O can look like a freeze.
+function Expand-WithProgress($archive, $destDir, $label) {
+    $drive = (Split-Path $destDir -Qualifier).TrimEnd(':')
+    $freeBefore = try { (Get-PSDrive -Name $drive).Free } catch { 0 }
+    Log "  extracting $label - heavy disk activity for several minutes; this is NORMAL, not frozen." 'WARN'
+    $p = Start-Process -FilePath 'tar.exe' -ArgumentList @('-xzf', "$archive", '-C', "$destDir") -PassThru -WindowStyle Hidden
+    $t0 = Get-Date
+    while (-not $p.HasExited) {
+        Start-Sleep -Seconds 5
+        $written = 0; try { $written = [math]::Max(0, $freeBefore - (Get-PSDrive -Name $drive).Free) } catch {}
+        Write-Progress -Activity "Extracting $label snapshot" -Status ("~{0:N1} GB written   elapsed {1}   (working, please wait...)" -f ($written/1GB), (((Get-Date)-$t0).ToString('hh\:mm\:ss')))
+    }
+    Write-Progress -Activity "Extracting $label snapshot" -Completed
+    return ($p.ExitCode -eq 0)
+}
+
 function Get-Snapshot($url, $sha, $destDir, $label) {
     $tmp = Join-Path $Tmp (Split-Path $url -Leaf)
     if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-    Log "  downloading $label snapshot (large - resumable, please wait)..."
-    $got = $false
-    try { Import-Module BitsTransfer -ErrorAction SilentlyContinue; Start-BitsTransfer -Source $url -Destination $tmp -ErrorAction Stop; $got = $true } catch {}
-    if (-not $got) { try { Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 0; $got = (Test-Path $tmp) } catch {} }
-    if (-not $got -or -not (Test-Path $tmp)) { Log "  $label snapshot download failed - will sync normally." 'WARN'; return $false }
-    Log "  verifying $label checksum..."
+    Log "  downloading $label snapshot (large; resumable - safe to leave running)..." 'STEP'
+    if (-not (Get-DownloadWithProgress $url $tmp $label)) { Log "  $label download failed - will sync normally." 'WARN'; return $false }
+    Log "  verifying $label checksum (reads the whole file, ~a minute)..."
     $h = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
     if ($h -ne ("$sha").ToLower()) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue; Log "  $label checksum MISMATCH - discarding (will sync normally)." 'WARN'; return $false }
+    Log "  checksum OK." 'OK'
     Ensure-Dir $destDir
-    & tar.exe -xzf "$tmp" -C "$destDir"
-    $ok = ($LASTEXITCODE -eq 0)
+    $ok = Expand-WithProgress $tmp $destDir $label
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     if (-not $ok) { Log "  $label snapshot extract failed - will sync normally." 'WARN'; return $false }
     return $true
