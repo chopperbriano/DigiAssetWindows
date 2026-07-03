@@ -49,6 +49,10 @@ param(
     # tracks the latest releases and updates past these. If a pinned version
     # isn't published yet, the installer falls back to the current latest.
     [string]$DigiByteVersion = '9.26.4',
+    # Fast-sync snapshot manifest (snapshot.json) URL. If set, a FRESH install
+    # downloads + verifies + extracts a pre-synced DigiByte blockchain + chain.db
+    # so it skips the ~week-long sync. Overrides $DefaultSnapshotUrl below.
+    [string]$SnapshotUrl = '',
     # By default the GUI apps (DigiByte wallet, IPFS Desktop, node dashboard)
     # auto-start when you log in. Pass -NoStartOnLogon to install them but NOT
     # register the logon auto-start (you'd start them by hand).
@@ -61,9 +65,13 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.5.0'
+$SCRIPT_VERSION = '2.6.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
+# Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
+# your public URL to turn fast-sync ON for everyone; leave '' to sync normally.
+# The -SnapshotUrl parameter overrides it.
+$DefaultSnapshotUrl = ''
 
 $DgbData        = Join-Path $DigiByteDir  'data'          # blockchain + digibyte.conf
 # DigiByte ships a win64 NSIS installer (not a zip). After a silent install the
@@ -749,6 +757,53 @@ function Update-SelfScript {
     return $false
 }
 
+# --- Fast-sync snapshots ----------------------------------------------------
+# Download a .tar.gz snapshot, verify its SHA256, and extract into $destDir.
+# Resumable (BITS) with an Invoke-WebRequest fallback. Returns $true on success.
+function Get-Snapshot($url, $sha, $destDir, $label) {
+    $tmp = Join-Path $Tmp (Split-Path $url -Leaf)
+    if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    Log "  downloading $label snapshot (large - resumable, please wait)..."
+    $got = $false
+    try { Import-Module BitsTransfer -ErrorAction SilentlyContinue; Start-BitsTransfer -Source $url -Destination $tmp -ErrorAction Stop; $got = $true } catch {}
+    if (-not $got) { try { Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 0; $got = (Test-Path $tmp) } catch {} }
+    if (-not $got -or -not (Test-Path $tmp)) { Log "  $label snapshot download failed - will sync normally." 'WARN'; return $false }
+    Log "  verifying $label checksum..."
+    $h = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+    if ($h -ne ("$sha").ToLower()) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue; Log "  $label checksum MISMATCH - discarding (will sync normally)." 'WARN'; return $false }
+    Ensure-Dir $destDir
+    & tar.exe -xzf "$tmp" -C "$destDir"
+    $ok = ($LASTEXITCODE -eq 0)
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    if (-not $ok) { Log "  $label snapshot extract failed - will sync normally." 'WARN'; return $false }
+    return $true
+}
+
+# On a FRESH install, restore the DigiByte blockchain + chain.db from the snapshot
+# manifest so the node skips the multi-day sync. Only touches things not already
+# present; any failure (unreachable/checksum/extract) falls back to a normal sync.
+function Restore-Snapshot {
+    $url = if ($SnapshotUrl) { $SnapshotUrl } else { $DefaultSnapshotUrl }
+    if (-not $url) { return }
+    if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { Log '  fast-sync needs tar (Win10 1803+); syncing normally.' 'WARN'; return }
+    Log 'Fast-sync: fetching snapshot manifest...' 'STEP'
+    try { $m = Invoke-RestMethod -Uri $url -TimeoutSec 30 } catch { Log '  snapshot manifest unreachable - syncing normally.' 'WARN'; return }
+    if (-not $m.baseUrl) { Log '  snapshot manifest has no baseUrl - syncing normally.' 'WARN'; return }
+    $base = ("$($m.baseUrl)").TrimEnd('/')
+    if ($m.digibyte -and -not (Test-Path (Join-Path $DgbData 'blocks'))) {
+        Ensure-Dir $DgbData
+        if (Get-Snapshot "$base/$($m.digibyte.file)" $m.digibyte.sha256 $DgbData 'DigiByte blockchain') {
+            Log "  + DigiByte blockchain restored (height $($m.digibyte.height))." 'OK'
+        }
+    } elseif ($m.digibyte) { Log '  DigiByte data already present - not restoring.' }
+    if ($m.chaindb -and -not (Test-Path (Join-Path $DigiAssetDir 'chain.db'))) {
+        Ensure-Dir $DigiAssetDir
+        if (Get-Snapshot "$base/$($m.chaindb.file)" $m.chaindb.sha256 $DigiAssetDir 'DigiAsset chain.db') {
+            Log '  + chain.db restored.' 'OK'
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 #  INSTALL MODE
 # ---------------------------------------------------------------------------
@@ -840,6 +895,7 @@ function Invoke-Install {
     Step 1 "Installing DigiByte Core $DigiByteVersion (wallet GUI)..."
     Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion")
     $rpc = Write-DigiByteConf
+    Restore-Snapshot   # fast-sync: extract pre-synced blockchain + chain.db before first launch (fresh install only)
     if (Get-ScheduledTask -TaskName $TaskDigiByte -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskDigiByte -Confirm:$false }  # drop legacy headless task
     if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData" }
     Start-DigiByteWallet | Out-Null
