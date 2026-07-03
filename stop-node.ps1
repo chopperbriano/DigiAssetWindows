@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Stop the DigiStamp node stack (DigiAsset Core, IPFS, DigiByte), and optionally
+    Stop the DigiStamp node stack (DigiAsset for Windows, IPFS, DigiByte), and optionally
     disable auto-start or fully uninstall.
 
 .MODES
@@ -82,7 +82,7 @@ if (-not $Uninstall) {
 }
 
 # 4. Full uninstall -----------------------------------------------------
-Write-Host "`n-Uninstall will DELETE $Root (DigiAsset Core, IPFS, config) and remove the" -ForegroundColor Yellow
+Write-Host "`n-Uninstall will DELETE $Root (DigiAsset for Windows, IPFS, config) and remove the" -ForegroundColor Yellow
 Write-Host "firewall rules. DigiByte Core and its blockchain data are left installed." -ForegroundColor Yellow
 $ans = Read-Host "Type DELETE to confirm"
 if ($ans -ne "DELETE") { Write-Host "Cancelled - nothing removed."; return }

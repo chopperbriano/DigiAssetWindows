@@ -33,7 +33,7 @@ function Line($label, $state, $detail) {
     # state: OK / WARN / FAIL / --
     $color = switch ($state) { "OK" { "Green" } "WARN" { "Yellow" } "FAIL" { "Red" } default { "Gray" } }
     $tag = "[{0,-4}]" -f $state
-    Write-Host ("  {0,-16}" -f $label) -NoNewline
+    Write-Host ("  {0,-22}" -f $label) -NoNewline
     Write-Host $tag -ForegroundColor $color -NoNewline
     Write-Host ("  " + $detail)
 }
@@ -86,9 +86,9 @@ function Show-Status {
         $issues += "IPFS is down - hosting + verification won't work. Start the DigiStampIPFS task."
     }
 
-    # --- DigiAsset Core process ---
-    if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) { Line "DigiAsset Core" "OK" "running" }
-    else { Line "DigiAsset Core" "FAIL" "not running"; $issues += "DigiAsset Core isn't running - start $Root\DigiAssetWindows.exe." }
+    # --- DigiAsset for Windows process ---
+    if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) { Line "DigiAsset for Windows" "OK" "running" }
+    else { Line "DigiAsset for Windows" "FAIL" "not running"; $issues += "DigiAsset for Windows isn't running - start $Root\DigiAssetWindows.exe." }
 
     # --- Port 4001 reachability ---
     try {

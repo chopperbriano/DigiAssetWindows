@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ============================================
-echo  DigiAsset Core - End-to-End Tests
+echo  DigiAsset for Windows - End-to-End Tests
 echo ============================================
 echo.
 

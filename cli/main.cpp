@@ -61,9 +61,9 @@ int main(int argc, char* argv[]) {
     } catch (const DigiByteException& e) {
         string errorMessage=e.getMessage();
 
-        //check if DigiAsset Core is offline
+        //check if DigiAsset for Windows is offline
         if (errorMessage.substr(0,20)=="Could not connect to") {
-            cout << "Exception: It looks like DigiAsset Core RPC Service is down.";
+            cout << "Exception: It looks like DigiAsset for Windows RPC Service is down.";
             return 0;
         }
 

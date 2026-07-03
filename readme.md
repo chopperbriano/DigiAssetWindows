@@ -4,7 +4,7 @@
 
 > **Just want to run a node and earn DGB?** Skip the build steps — see
 > **[NODE-SETUP.md](NODE-SETUP.md)** for a one-click PowerShell installer
-> (DigiAsset Core + IPFS + firewall + a reachability test).
+> (DigiAsset for Windows + IPFS + firewall + a reachability test).
 
 ## Table of Contents
 1. [How It Works (Architecture)](#how-it-works-architecture)
@@ -12,7 +12,7 @@
 3. [Optional Build Targets](#optional-build-targets)
 4. [Install DigiByte](#install-digibyte)
 5. [Install IPFS](#install-ipfs)
-6. [Configure DigiAsset Core](#configure-digiasset-core)
+6. [Configure DigiAsset for Windows](#configure-digiasset-for-windows)
 7. [Permanent Storage Pools & Getting Paid](#permanent-storage-pools--getting-paid)
 8. [Documentation](#Documentation)
 9. [Other Notes](#other-notes)
@@ -21,20 +21,20 @@
 
 ## How It Works (Architecture)
 
-DigiAsset Core is the "brain" that ties together **three separate programs**. To
+DigiAsset for Windows is the "brain" that ties together **three separate programs**. To
 run a full node you install and run all three. There is also a **fourth,
 optional** program (`DigiAssetPoolServer.exe`) that only pool operators need.
 
 ### The three things you install
 
-| # | Program | What it provides | Why DigiAsset Core needs it |
+| # | Program | What it provides | Why DigiAsset for Windows needs it |
 |---|---|---|---|
-| 1 | **DigiByte Core wallet** (`digibyted`) | The DigiByte blockchain, a JSON-RPC interface, and a wallet | DigiAsset Core reads every block and transaction from it over RPC to find DigiAsset issuances/transfers. For pool payouts it also calls the wallet's `sendtoaddress`. |
-| 2 | **IPFS Desktop / kubo** | Content-addressed file storage (the actual asset images + metadata) | DigiAssets store their media on IPFS. DigiAsset Core **pins** those files so they stay available, via IPFS's HTTP API. |
-| 3 | **DigiAsset Core** (this repo) | The chain analyzer, asset database, RPC server, web UI, and dashboard | The coordinator: reads the chain from DigiByte Core, decodes DigiAsset data, and pins the right files on IPFS. |
+| 1 | **DigiByte Core wallet** (`digibyted`) | The DigiByte blockchain, a JSON-RPC interface, and a wallet | DigiAsset for Windows reads every block and transaction from it over RPC to find DigiAsset issuances/transfers. For pool payouts it also calls the wallet's `sendtoaddress`. |
+| 2 | **IPFS Desktop / kubo** | Content-addressed file storage (the actual asset images + metadata) | DigiAssets store their media on IPFS. DigiAsset for Windows **pins** those files so they stay available, via IPFS's HTTP API. |
+| 3 | **DigiAsset for Windows** (this repo) | The chain analyzer, asset database, RPC server, web UI, and dashboard | The coordinator: reads the chain from DigiByte Core, decodes DigiAsset data, and pins the right files on IPFS. |
 
-DigiByte Core and IPFS are external programs you download and install. DigiAsset
-Core is what you build here (or download from [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)).
+DigiByte Core and IPFS are external programs you download and install.
+DigiAsset for Windows is what you build here (or download from [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)).
 
 ### The executables this repo builds
 
@@ -51,7 +51,7 @@ You do **not** need a separate web-server exe — the web UI is built into
 
 ```
         reads blocks/txs (RPC :14022)            pins/serves files (API :5001)
- DigiByte Core  ──────────────────────►  DigiAsset Core  ──────────────────────►  IPFS (kubo)
+ DigiByte Core  ──────────────────────►  DigiAsset for Windows  ───────────────►  IPFS (kubo)
  blockchain + wallet                     DigiAssetWindows.exe                        file storage
         ▲                                     │      │
         │  sendtoaddress (pool payouts)       │      └──► web UI  http://localhost:8090
@@ -62,11 +62,11 @@ You do **not** need a separate web-server exe — the web UI is built into
 
 | Port | Program | Purpose |
 |---|---|---|
-| 14022 | DigiByte Core | JSON-RPC — DigiAsset Core reads the chain and sends payouts here |
+| 14022 | DigiByte Core | JSON-RPC — DigiAsset for Windows reads the chain and sends payouts here |
 | 12024 | DigiByte Core | P2P network (blockchain sync) |
 | 5001 | IPFS (kubo) | HTTP API (pin / cat / findprovs) |
 | 4001 | IPFS (kubo) | Swarm P2P — other peers connect here. **Forward this if you want pool payouts** (see below) |
-| 8090 | DigiAsset Core | Built-in web UI |
+| 8090 | DigiAsset for Windows | Built-in web UI |
 | 14028 | DigiAssetPoolServer | Pool server HTTP (operators only) |
 
 ## Build on Windows
@@ -119,7 +119,7 @@ nuget.exe install boost -Version 1.82.0 -OutputDirectory packages
 
 If you don't have `nuget.exe`, download it from https://www.nuget.org/downloads
 
-### Build DigiAsset Core
+### Build DigiAsset for Windows
 
 ```cmd
 .\config.bat
@@ -198,7 +198,7 @@ Download and install IPFS Desktop from https://github.com/ipfs/ipfs-desktop/rele
 
 After installation, verify the IPFS API is running. The line "RPC API server listening on" shows the port (usually 5001). You can access the IPFS web UI at http://localhost:5001/webui in your browser.
 
-## Configure DigiAsset Core
+## Configure DigiAsset for Windows
 
 The first time you run DigiAsset for Windows it will ask you several questions to set up your config file. Run `DigiAssetWindows.exe` from a cmd prompt:
 
@@ -210,7 +210,7 @@ The single executable runs both the sync engine and the web UI server. The conso
 
 This will create config.cfg — the wizard creates only the basic config. For a full list of config options see example.cfg.
 
-Make sure DigiAsset Core is running correctly and then press ctrl+c to stop it and continue with instructions.
+Make sure DigiAsset for Windows is running correctly and then press ctrl+c to stop it and continue with instructions.
 
 NOTE: For peer connectivity and pool payout verification, forward these inbound
 ports to this machine:

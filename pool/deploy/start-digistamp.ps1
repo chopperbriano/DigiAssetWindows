@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Start the DigiStamp stack: DigiAsset Core (node), DigiAssetPoolServer (pool),
+    Start the DigiStamp stack: DigiAsset for Windows (node), DigiAssetPoolServer (pool),
     and the Caddy website. Waits for DigiByte Core to be ready first.
 
 .DESCRIPTION

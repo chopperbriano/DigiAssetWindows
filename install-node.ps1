@@ -4,13 +4,13 @@
     DigiStamp Permanent Storage Pool. Installs and auto-starts the WHOLE stack.
 
 .WHAT IT DOES (all automatic)
-    1. Downloads DigiAsset Core (node + cli) from the latest GitHub release.
+    1. Downloads DigiAsset for Windows (node + cli) from the latest GitHub release.
     2. Installs DigiByte Core (the wallet) if missing, writes digibyte.conf, and
        runs it in the background - starting on every boot.
     3. Installs IPFS (kubo) and runs it in the background - starting on every boot.
     4. Opens the LOCAL Windows firewall for the ports that must be reachable.
     5. Writes config.cfg (pool = pool.digistamp.co, your payout address).
-    6. Sets DigiAsset Core to start (with its dashboard) at every logon.
+    6. Sets DigiAsset for Windows to start (with its dashboard) at every logon.
     7. Tests whether your node is reachable from the internet and tells you what
        to forward on your home router.
 
@@ -73,7 +73,7 @@ Write-Host @"
 This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
 pool. It installs and auto-starts everything:
 
-  * DigiAsset Core (the node)        -> into $Root
+  * DigiAsset for Windows (the node)        -> into $Root
   * DigiByte Core (the wallet)       -> runs in the background, starts on boot
   * IPFS (file storage)              -> runs in the background, starts on boot
   * Opens your local firewall for port 4001 (IPFS) and 12024 (DigiByte)
@@ -105,8 +105,8 @@ if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
     throw "That does not look like a DigiByte address. Re-run and paste a valid D..., S..., or dgb1... address."
 }
 
-# --- 1. DigiAsset Core binaries -------------------------------------------
-Step 1 "Downloading DigiAsset Core (latest release)..."
+# --- 1. DigiAsset for Windows binaries -------------------------------------------
+Step 1 "Downloading DigiAsset for Windows (latest release)..."
 foreach ($f in "DigiAssetWindows.exe", "DigiAssetWindows-cli.exe") {
     Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest/download/$f" -OutFile (Join-Path $Root $f) -UseBasicParsing
     Write-Host "  + $f"
@@ -219,7 +219,7 @@ Open-Port "DigiStamp IPFS swarm (UDP 4001)" UDP 4001
 Open-Port "DigiByte P2P (TCP 12024)"        TCP 12024
 Write-Host "  (5001 / 14022 / 8090 intentionally NOT opened - they stay local.)"
 
-# --- 5. config.cfg for DigiAsset Core -------------------------------------
+# --- 5. config.cfg for DigiAsset for Windows -------------------------------------
 Step 5 "Writing config.cfg..."
 $cfg = Join-Path $Root "config.cfg"
 if (Test-Path $cfg) {
@@ -235,14 +235,14 @@ if (Test-Path $cfg) {
     Write-Host "  + config.cfg (pool=$PoolServer, payout=$PayoutAddress)"
 }
 
-# --- 6. DigiAsset Core: run + restart on boot -----------------------------
-Step 6 "Setting DigiAsset Core to start on boot..."
+# --- 6. DigiAsset for Windows: run + restart on boot -----------------------------
+Step 6 "Setting DigiAsset for Windows to start on boot..."
 $coreExe = Join-Path $Root "DigiAssetWindows.exe"
 Register-GuardedLogonTask "DigiStampNode" $coreExe $Root "DigiAssetWindows"
 if (-not (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath $coreExe -WorkingDirectory $Root
 }
-Write-Host "  DigiAsset Core started + will open at every logon (task 'DigiStampNode')." -ForegroundColor Green
+Write-Host "  DigiAsset for Windows started + will open at every logon (task 'DigiStampNode')." -ForegroundColor Green
 
 # --- 7. Reachability test -------------------------------------------------
 Step 7 "Testing whether port 4001 is reachable from the internet..."
@@ -267,8 +267,8 @@ Write-Host "   Do NOT forward 5001 / 14022 / 8090."
 Write-Host ""
 Write-Host "WHAT HAPPENS NOW:" -ForegroundColor Cyan
 Write-Host "  * DigiByte is syncing the blockchain in the background (hours the first time)."
-Write-Host "  * Once synced, DigiAsset Core registers with the pool automatically."
-Write-Host "  * In the DigiAsset Core window: press [N] to see the pool nodes (you should"
+Write-Host "  * Once synced, DigiAsset for Windows registers with the pool automatically."
+Write-Host "  * In the DigiAsset for Windows window: press [N] to see the pool nodes (you should"
 Write-Host "    appear), and [P] to re-test port 4001."
 Write-Host "  * Check status any time with:  monitor-node.ps1"
 Write-Host "  * Watch the pool + your earnings at $PoolServer"

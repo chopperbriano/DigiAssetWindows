@@ -5,8 +5,8 @@ version. There are three programs involved — the installer sets up two of them
 for you; the third (the DigiByte wallet) you install once.
 
 ```
-DigiByte Core (wallet)  →  DigiAsset Core (this)  →  IPFS (file storage)
-   you install once          installer sets up          installer sets up
+DigiByte Core (wallet)  →  DigiAsset for Windows (this)  →  IPFS (file storage)
+   you install once             installer sets up             installer sets up
 ```
 
 ## Be realistic about earnings 🙂
@@ -39,7 +39,7 @@ $s="$env:TEMP\install-node.ps1"; iwr https://raw.githubusercontent.com/chopperbr
 It asks for **one thing — your DigiByte payout address** (where you want to be
 paid) — then does everything else automatically:
 
-- downloads **DigiAsset Core**,
+- downloads **DigiAsset for Windows**,
 - downloads + installs **DigiByte Core** (the wallet, latest version) and writes its config,
 - downloads + starts **IPFS**,
 - **opens your local firewall** for the right ports,
@@ -55,7 +55,7 @@ forward (next section).
 DigiByte's blockchain is large, so the first sync takes **several hours**, running
 quietly in the background. You don't have to babysit it — just leave the PC on.
 Check progress any time with the monitor (see section 4). Once DigiByte is synced,
-DigiAsset Core registers with the pool on its own.
+DigiAsset for Windows registers with the pool on its own.
 
 > Already had DigiByte Core installed? The installer detects it and just adds the
 > settings — restart DigiByte Core once if it says it wrote a new `digibyte.conf`.
@@ -91,8 +91,8 @@ powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Watch             #
 
 (Get `monitor-node.ps1` the same way as the installer — it's in the repo root.)
 
-It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset
-Core**, **Port 4001** (open/closed), and **Pool** (are you registered?), plus a
+It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset for
+Windows**, **Port 4001** (open/closed), and **Pool** (are you registered?), plus a
 plain-English list of anything to fix.
 
 Other quick checks:
