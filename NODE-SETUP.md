@@ -158,6 +158,11 @@ if you want them gone too.
     if one still appears. The install can't finish without them.
 - **`MSVCP140.dll was not found`:** the node needs the Visual C++ x64 runtime. The
   installer installs it automatically; if you still see this, re-run the one-liner.
+- **Node closes with "IPFS Exception: Timeout":** the node needs **IPFS** and
+  **DigiByte** running first. The installer now waits for both and retries, so this
+  should be rare — but if it happens, make sure **IPFS Desktop** (tray icon) is
+  running and give it a minute; the node relaunches once IPFS is up. The node keeps
+  running while DigiByte finishes syncing (it doesn't need a full sync to start).
 - **Windows blue "unknown publisher" / SmartScreen box:** the apps aren't
   code-signed yet, so Windows warns on first run. Click **More info → Run anyway**.
   If your antivirus quarantines `DigiAssetWindows.exe`, allow/restore it.

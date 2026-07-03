@@ -39,7 +39,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install','Service')]
+    [ValidateSet('Install','Service','LaunchNode')]
     [string]$Mode           = 'Install',
     [string]$DigiByteDir    = 'C:\DigiByte',
     [string]$DigiAssetDir   = 'C:\DigiAsset',
@@ -61,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.1.0'
+$SCRIPT_VERSION = '2.2.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -284,6 +284,19 @@ function Register-GuardedLogonTask($name, $exe, $workdir, $procName, $arguments 
     Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 }
 
+# The node's logon task runs THIS script in -Mode LaunchNode, which waits for
+# IPFS + DigiByte to be ready and then (re)starts the node - so the node never
+# races its dependencies at login.
+function Register-NodeLaunchTask {
+    $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$InstalledScript`" -Mode LaunchNode -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`""
+    $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName $TaskNode -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+}
+
 # Maintenance task: runs THIS script in -Mode Service at boot, and again every
 # 6 hours so issues are caught even without a reboot.
 function Register-MaintenanceTask {
@@ -371,6 +384,31 @@ function Test-IpfsUp {
     try { Invoke-RestMethod -Uri ($api + 'id') -Method Post -TimeoutSec 8 | Out-Null; return $true } catch { return $false }
 }
 function Test-ProcRunning($name) { return [bool](Get-Process $name -ErrorAction SilentlyContinue) }
+
+# --- Dependency waits -------------------------------------------------------
+# The DigiAsset node depends on BOTH IPFS (it bootstraps its DB over IPFS and
+# pins content) and DigiByte Core RPC (it reads the chain). Starting the node
+# before those are ready is what causes "IPFS Exception: Timeout". These poll
+# until the dependency is ready (or a timeout), so we never launch the node
+# into a dependency that isn't up yet.
+function Wait-ForIpfs([int]$timeoutSec = 300) {
+    $tries = [Math]::Max(1, [int]($timeoutSec / 3))
+    for ($i = 0; $i -lt $tries; $i++) {
+        if (Test-IpfsUp) { return $true }
+        Start-Sleep -Seconds 3
+    }
+    return (Test-IpfsUp)
+}
+# DigiByte RPC just needs to RESPOND - the node then follows the sync as it
+# progresses, so we do NOT wait for a full sync (that takes hours/days).
+function Wait-ForDigiByteRpc([int]$timeoutSec = 300) {
+    $tries = [Math]::Max(1, [int]($timeoutSec / 3))
+    for ($i = 0; $i -lt $tries; $i++) {
+        if ($null -ne (Get-DigiByteProgress)) { return $true }
+        Start-Sleep -Seconds 3
+    }
+    return ($null -ne (Get-DigiByteProgress))
+}
 
 # ---------------------------------------------------------------------------
 #  Component installers / updaters
@@ -660,6 +698,9 @@ function Write-NodeConfig($rpc) {
     $lines = @(
         "rpcbind=127.0.0.1","rpcport=$RpcPort","rpcuser=$($rpc.user)","rpcpassword=$($rpc.pass)",
         "ipfspath=http://localhost:5001/api/v0/",
+        # Be tolerant of a slow IPFS (big DB bootstrap, slow connection) so the
+        # node retries instead of dying on a short timeout.
+        "ipfstimeoutdownload=600","ipfstimeoutpin=600","ipfstimeoutretry=30",
         "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
         "pruneage=5760","bootstrapchainstate=1"
     )
@@ -794,9 +835,15 @@ function Invoke-Install {
     Step 3 'Installing DigiAsset for Windows (latest release)...'
     Install-DigiAsset
     Write-NodeConfig $rpc
-    if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskNode $NodeExe $DigiAssetDir 'DigiAssetWindows' }
+    # The node depends on IPFS + DigiByte RPC - wait for them before launching so
+    # it doesn't FATAL on an IPFS timeout. (The logon task, registered in step 5,
+    # does the same wait every login.) Registered/launched after step 5 copies
+    # the script the launch task runs.
+    Log '  waiting for IPFS + DigiByte to be ready before the node starts...'
+    Wait-ForIpfs 300 | Out-Null
+    Wait-ForDigiByteRpc 300 | Out-Null
     Start-Node | Out-Null
-    Log '  DigiAsset node dashboard running + opens at every logon.' 'OK'
+    Log '  DigiAsset node dashboard started.' 'OK'
 
     # 4. Firewall ------------------------------------------------------------
     Step 4 'Opening the local Windows firewall for hosting (inbound)...'
@@ -814,6 +861,12 @@ function Invoke-Install {
     # Drop the companion tools next to the node so they are always handy.
     foreach ($tool in 'monitor-node.ps1','stop-node.ps1') {
         try { Get-File "https://raw.githubusercontent.com/$Repo/master/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
+    }
+    # Node logon task (runs the script we just copied in -Mode LaunchNode, which
+    # waits for IPFS + DigiByte before starting the node - no dependency race).
+    if (-not $NoStartOnLogon) {
+        Register-NodeLaunchTask
+        Log '  node set to wait for its dependencies + start at every logon.' 'OK'
     }
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
@@ -893,6 +946,7 @@ function Invoke-Install {
     Write-Host ''
     Write-Host 'WHAT HAPPENS NOW:' -ForegroundColor Cyan
     Write-Host '  * DigiByte is syncing the blockchain (hours the first time) - watch it in the wallet.' -ForegroundColor White
+    Write-Host '  * The node waits for IPFS + DigiByte to be ready before it starts (a short delay is normal).' -ForegroundColor White
     Write-Host '  * Once synced, the node registers with the pool automatically.' -ForegroundColor White
     Write-Host "  * Update + health checks run on every boot and every 6 hours." -ForegroundColor White
     Write-Host ''
@@ -900,6 +954,38 @@ function Invoke-Install {
     Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1" -ForegroundColor Gray
     Write-Host "  * Stop / remove: powershell -ExecutionPolicy Bypass -File $DigiAssetDir\stop-node.ps1" -ForegroundColor Gray
     Write-Host "  * Logs         : $LogFile" -ForegroundColor Gray
+}
+
+# ---------------------------------------------------------------------------
+#  LAUNCH-NODE MODE  (run by the node's logon task: wait for deps, supervise)
+# ---------------------------------------------------------------------------
+function Invoke-LaunchNode {
+    Ensure-Dir $LogDir
+    Log "----- launch-node (script v$SCRIPT_VERSION) -----"
+    if (Test-ProcRunning 'DigiAssetWindows') { Log 'launch-node: node already running.' 'OK'; return }
+
+    # The node depends on IPFS (DB bootstrap + pinning) and DigiByte Core RPC.
+    # Wait for both so it doesn't FATAL on "IPFS Exception: Timeout". We wait for
+    # DigiByte's RPC to RESPOND, not for a full sync - the node follows the sync
+    # as it progresses, which can take hours or days.
+    Log 'launch-node: waiting for IPFS API (:5001) - IPFS Desktop can take a bit to boot...'
+    if (-not (Wait-ForIpfs 300)) { Log 'launch-node: IPFS API still not up after 5 min; starting anyway (node will retry).' 'WARN' }
+    Log 'launch-node: waiting for DigiByte RPC to respond (NOT full sync)...'
+    if (-not (Wait-ForDigiByteRpc 300)) { Log 'launch-node: DigiByte RPC still not up after 5 min; starting anyway.' 'WARN' }
+
+    # Supervise the launch: if the node dies quickly (a transient IPFS/DigiByte
+    # hiccup during the long early sync), re-check the deps and retry, bounded,
+    # so it doesn't just give up while its dependencies settle.
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        if (Test-ProcRunning 'DigiAssetWindows') { Log 'launch-node: node is running.' 'OK'; return }
+        Start-Node | Out-Null
+        Start-Sleep -Seconds 30
+        if (Test-ProcRunning 'DigiAssetWindows') { Log "launch-node: node running (attempt $attempt)." 'OK'; return }
+        Log "launch-node: node exited quickly (attempt $attempt) - re-checking IPFS/DigiByte and retrying..." 'WARN'
+        Wait-ForIpfs 120 | Out-Null
+        Wait-ForDigiByteRpc 120 | Out-Null
+    }
+    Log 'launch-node: node would not stay up after retries - check IPFS Desktop + the DigiByte wallet.' 'WARN'
 }
 
 # ---------------------------------------------------------------------------
@@ -1011,10 +1097,14 @@ if ($Mode -eq 'Install' -and -not (Test-Admin)) {
 }
 
 try {
-    if ($Mode -eq 'Service') { Invoke-Service } else { Invoke-Install }
+    switch ($Mode) {
+        'Service'    { Invoke-Service }
+        'LaunchNode' { Invoke-LaunchNode }
+        default      { Invoke-Install }
+    }
 } catch {
     Log ("FATAL: $($_.Exception.Message)") 'ERROR'
     if ($Mode -eq 'Service') { Alert "maintenance run failed: $($_.Exception.Message)" }
-    else { Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red; Write-Host "See $LogFile" -ForegroundColor Gray }
+    elseif ($Mode -eq 'Install') { Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red; Write-Host "See $LogFile" -ForegroundColor Gray }
     exit 1
 }
