@@ -111,10 +111,18 @@ foreach ($it in $items) {
     if ($it.proc -and (Get-Process $it.proc -ErrorAction SilentlyContinue)) {
         $wasRunning = $true
         Get-Process $it.proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Write-Host "  stopped $($it.proc)" -ForegroundColor Yellow
+        # Wait until every instance is really gone so the .exe unlocks before copy.
+        for ($w = 0; $w -lt 20 -and (Get-Process $it.proc -ErrorAction SilentlyContinue); $w++) { Start-Sleep -Milliseconds 500 }
+        if (Get-Process $it.proc -ErrorAction SilentlyContinue) { Write-Host "  WARNING: $($it.proc) still running after kill" -ForegroundColor Red }
+        else { Write-Host "  stopped $($it.proc)" -ForegroundColor Yellow }
     }
-    Copy-Item -LiteralPath $src -Destination $dst -Force
+    # Copy, retrying briefly in case the file is momentarily still locked.
+    $copied = $false
+    for ($c = 1; $c -le 6 -and -not $copied; $c++) {
+        try { Copy-Item -LiteralPath $src -Destination $dst -Force; $copied = $true }
+        catch { Start-Sleep -Seconds 1 }
+    }
+    if (-not $copied) { Write-Host "  FAILED to update $($it.name) - file locked (is it still running?)" -ForegroundColor Red; continue }
     $updated++
     Write-Host "  + updated $($it.name)" -ForegroundColor Green
     if ($it.restart -and $wasRunning) { $restartList += $dst }
