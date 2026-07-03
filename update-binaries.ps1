@@ -1,49 +1,60 @@
 <#
 .SYNOPSIS
-    Deploy freshly-built binaries (DigiAssetWindows.exe, DigiAssetWindows-cli.exe,
-    DigiAssetPoolServer.exe) from .\build into a live install in ONE step: stop the
-    running app, copy the new exe over it, restart. Optionally build first.
+    Update the DigiAsset binaries to the latest GitHub release in ONE step:
+    download the newest DigiAssetWindows.exe (+ cli, + optionally the pool server)
+    from the repo's Releases, stop the running app, copy the new exe in, restart.
 
-    For DEVELOPERS / OPERATORS updating a box from a local build.
+.DESCRIPTION
+    Pulls from https://github.com/chopperbriano/DigiAssetWindows/releases/latest by
+    default. The node's built-in maintenance task already auto-updates on a schedule;
+    this is for updating on demand (and for the pool exe, which isn't auto-updated).
 
-.PARAMETER Build         Run the cmake Release build first (all three targets).
-.PARAMETER DigiAssetDir  Where the deployed exes live (default C:\DigiAsset).
-.PARAMETER Config        Build config to copy from (default Release).
+.PARAMETER DigiAssetDir  Where the exes live (default C:\DigiAsset).
+.PARAMETER IncludePool   Also update DigiAssetPoolServer.exe (auto-on if it's already there).
+.PARAMETER FromBuild     Use locally-built exes in .\build instead of GitHub.
+.PARAMETER Build         With -FromBuild, run the cmake Release build first.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\update-binaries.ps1
-    powershell -ExecutionPolicy Bypass -File .\update-binaries.ps1 -Build
+    powershell -ExecutionPolicy Bypass -File .\update-binaries.ps1               # pull latest release
+    powershell -ExecutionPolicy Bypass -File .\update-binaries.ps1 -IncludePool  # + pool server
+    powershell -ExecutionPolicy Bypass -File .\update-binaries.ps1 -FromBuild -Build
 #>
 [CmdletBinding()]
 param(
-    [switch]$Build,
     [string]$DigiAssetDir = 'C:\DigiAsset',
-    [string]$Config       = 'Release'
+    [switch]$IncludePool,
+    [switch]$FromBuild,
+    [switch]$Build,
+    [string]$Config = 'Release'
 )
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '1.0.0'
-
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ScriptVersion = '2.0.0'
+$Repo     = 'chopperbriano/DigiAssetWindows'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RepoRoot 'build'
+$Tmp      = Join-Path $env:TEMP 'digiasset-update'
 
 # Elevate: writing into C:\DigiAsset and stopping processes may need admin.
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
     if ($PSCommandPath) {
         $a = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -DigiAssetDir `"$DigiAssetDir`" -Config `"$Config`""
-        if ($Build) { $a += ' -Build' }
+        if ($IncludePool) { $a += ' -IncludePool' }
+        if ($FromBuild)   { $a += ' -FromBuild' }
+        if ($Build)       { $a += ' -Build' }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $a
         return
     } else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
 
 Write-Host "=== Update DigiAsset binaries  (v$ScriptVersion) ===" -ForegroundColor Cyan
-Write-Host "Repo:   $RepoRoot" -ForegroundColor Gray
-Write-Host "Target: $DigiAssetDir" -ForegroundColor Gray
+if (-not (Test-Path $DigiAssetDir)) { New-Item -ItemType Directory -Force -Path $DigiAssetDir | Out-Null }
+New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 
-# 1. Optional build --------------------------------------------------------
-if ($Build) {
-    Write-Host "`nBuilding ($Config)..." -ForegroundColor Cyan
+# Optional local build (only relevant with -FromBuild).
+if ($FromBuild -and $Build) {
+    Write-Host "Building ($Config)..." -ForegroundColor Cyan
     $cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
     if (-not $cmake) {
         $vs = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
@@ -55,21 +66,46 @@ if ($Build) {
     Write-Host "Build OK." -ForegroundColor Green
 }
 
-if (-not (Test-Path $DigiAssetDir)) { New-Item -ItemType Directory -Force -Path $DigiAssetDir | Out-Null }
+if ($FromBuild) {
+    Write-Host "Source: local build ($BuildDir, $Config)" -ForegroundColor Gray
+} else {
+    $tag = ''
+    try { $tag = (Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'digiasset-updater' } -TimeoutSec 20).tag_name } catch {}
+    Write-Host "Source: GitHub release $(if ($tag) { $tag } else { 'latest' })" -ForegroundColor Gray
+}
+Write-Host "Target: $DigiAssetDir`n" -ForegroundColor Gray
 
-# 2. Map built -> deployed -------------------------------------------------
+# node + cli always; pool if asked or already present (so node boxes don't get it).
+$wantPool = $IncludePool -or (Test-Path (Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'))
 $items = @(
-    @{ name = 'DigiAssetWindows.exe';     src = (Join-Path $BuildDir "src\$Config\DigiAssetWindows.exe");     proc = 'DigiAssetWindows';    restart = $true  },
-    @{ name = 'DigiAssetWindows-cli.exe'; src = (Join-Path $BuildDir "cli\$Config\DigiAssetWindows-cli.exe"); proc = $null;                 restart = $false },
-    @{ name = 'DigiAssetPoolServer.exe';  src = (Join-Path $BuildDir "pool\$Config\DigiAssetPoolServer.exe"); proc = 'DigiAssetPoolServer'; restart = $true  }
+    @{ name = 'DigiAssetWindows.exe';     buildSub = 'src';  proc = 'DigiAssetWindows';    restart = $true;  want = $true     },
+    @{ name = 'DigiAssetWindows-cli.exe'; buildSub = 'cli';  proc = $null;                 restart = $false; want = $true     },
+    @{ name = 'DigiAssetPoolServer.exe';  buildSub = 'pool'; proc = 'DigiAssetPoolServer'; restart = $true;  want = $wantPool }
 )
 
-# 3. For each present build output: stop, copy, note whether to restart ----
-$restartList = @()
+# Resolve the new exe (download from the release, or the local build path).
+function Get-SourceExe($item) {
+    if ($FromBuild) {
+        $p = Join-Path $BuildDir "$($item.buildSub)\$Config\$($item.name)"
+        if (Test-Path $p) { return $p } else { return $null }
+    }
+    $url = "https://github.com/$Repo/releases/latest/download/$($item.name)"
+    $out = Join-Path $Tmp $item.name
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 180
+            if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) { return $out }
+        } catch { Start-Sleep -Seconds (2 * $i) }
+    }
+    return $null
+}
+
 $updated = 0
-Write-Host ""
+$restartList = @()
 foreach ($it in $items) {
-    if (-not (Test-Path $it.src)) { Write-Host "  skip $($it.name) - not built at $($it.src)" -ForegroundColor DarkGray; continue }
+    if (-not $it.want) { continue }
+    $src = Get-SourceExe $it
+    if (-not $src) { Write-Host "  skip $($it.name) - could not get it (not built / not in the release?)" -ForegroundColor Yellow; continue }
     $dst = Join-Path $DigiAssetDir $it.name
     $wasRunning = $false
     if ($it.proc -and (Get-Process $it.proc -ErrorAction SilentlyContinue)) {
@@ -78,18 +114,14 @@ foreach ($it in $items) {
         Start-Sleep -Seconds 2
         Write-Host "  stopped $($it.proc)" -ForegroundColor Yellow
     }
-    Copy-Item -LiteralPath $it.src -Destination $dst -Force
+    Copy-Item -LiteralPath $src -Destination $dst -Force
     $updated++
     Write-Host "  + updated $($it.name)" -ForegroundColor Green
     if ($it.restart -and $wasRunning) { $restartList += $dst }
 }
 
-if ($updated -eq 0) {
-    Write-Host "`nNothing to update - no built binaries found in $BuildDir. Add -Build to build first." -ForegroundColor Yellow
-    return
-}
+if ($updated -eq 0) { Write-Host "`nNothing updated." -ForegroundColor Yellow; return }
 
-# 4. Restart whatever was running before the swap --------------------------
 foreach ($exe in $restartList) {
     Start-Process -FilePath $exe -WorkingDirectory $DigiAssetDir
     Write-Host "  restarted $(Split-Path -Leaf $exe)" -ForegroundColor Green
