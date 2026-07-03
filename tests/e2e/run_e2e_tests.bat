@@ -10,9 +10,9 @@ set PASS=0
 set FAIL=0
 set SKIP=0
 
-set EXE=..\..\build\src\Release\DigiAssetCore.exe
+set EXE=..\..\build\src\Release\DigiAssetWindows.exe
 if not exist "%EXE%" (
-    echo FAIL: DigiAssetCore.exe not found. Build first.
+    echo FAIL: DigiAssetWindows.exe not found. Build first.
     exit /b 1
 )
 
@@ -20,16 +20,16 @@ REM ---- Test 1: Binary exists and has reasonable size ----
 echo [Test 1] Binary size check...
 for %%A in ("%EXE%") do set SIZE=%%~zA
 if !SIZE! GTR 1000000 (
-    echo   PASS: DigiAssetCore.exe is !SIZE! bytes
+    echo   PASS: DigiAssetWindows.exe is !SIZE! bytes
     set /a PASS+=1
 ) else (
-    echo   FAIL: DigiAssetCore.exe is too small ^(!SIZE! bytes^)
+    echo   FAIL: DigiAssetWindows.exe is too small ^(!SIZE! bytes^)
     set /a FAIL+=1
 )
 
 REM ---- Test 2: Version string in binary ----
 echo [Test 2] Version string check...
-findstr /C:"DigiAsset Core for Windows" "%EXE%" >NUL 2>&1
+findstr /C:"DigiAsset for Windows" "%EXE%" >NUL 2>&1
 if !ERRORLEVEL! EQU 0 (
     echo   PASS: Version string found in binary
     set /a PASS+=1
@@ -45,9 +45,9 @@ mkdir "%SMOKE_DIR%" 2>NUL
 copy "%EXE%" "%SMOKE_DIR%\" >NUL 2>&1
 
 REM Run with stdin closed — should print wizard prompt
-echo. | "%SMOKE_DIR%\DigiAssetCore.exe" > "%SMOKE_DIR%\output.txt" 2>&1
+echo. | "%SMOKE_DIR%\DigiAssetWindows.exe" > "%SMOKE_DIR%\output.txt" 2>&1
 timeout /t 3 /nobreak >NUL 2>&1
-taskkill /F /IM DigiAssetCore.exe >NUL 2>&1
+taskkill /F /IM DigiAssetWindows.exe >NUL 2>&1
 
 findstr /C:"config wizard" "%SMOKE_DIR%\output.txt" >NUL 2>&1
 if !ERRORLEVEL! EQU 0 (
@@ -70,7 +70,7 @@ if "!HTTP_CODE!"=="200" (
     echo   PASS: Web server responding on port 8090 ^(404 = no index but server works^)
     set /a PASS+=1
 ) else (
-    echo   SKIP: Web server not reachable ^(DigiAssetCore may not be running^)
+    echo   SKIP: Web server not reachable ^(DigiAssetWindows may not be running^)
     set /a SKIP+=1
 )
 del "%TEMP%\webcheck.txt" 2>NUL

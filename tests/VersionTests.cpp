@@ -12,7 +12,7 @@ TEST(Version, VersionStringFormat) {
 
 TEST(Version, ProductVersionString) {
     std::string pv = getProductVersionString();
-    EXPECT_TRUE(pv.find("DigiAsset Core for Windows v") == 0) << "Product version: " << pv;
+    EXPECT_TRUE(pv.find("DigiAsset for Windows v") == 0) << "Product version: " << pv;
 }
 
 TEST(Version, UpstreamVersionString) {

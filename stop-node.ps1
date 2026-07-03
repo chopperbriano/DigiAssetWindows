@@ -61,7 +61,7 @@ Start-Sleep -Seconds 3
 foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
 }
-foreach ($p in "DigiAssetCore", "ipfs", "digibyted") {
+foreach ($p in "DigiAssetWindows", "ipfs", "digibyted") {
     Get-Process $p -ErrorAction SilentlyContinue | ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Host "  stopped $p" }
 }
 

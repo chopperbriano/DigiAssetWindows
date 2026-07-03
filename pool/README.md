@@ -12,19 +12,19 @@ There are two roles:
 
 - **Pool operator** — runs `DigiAssetPoolServer.exe`, owns the DGB wallet, and
   decides whether/when to pay.
-- **Node operator** — runs `DigiAssetCore` + an IPFS (kubo) node, points it at a
+- **Node operator** — runs `DigiAssetWindows` + an IPFS (kubo) node, points it at a
   pool via `psp1server=`, and registers a payout address to earn DGB for hosting.
 
 > New here? Read the [architecture overview](../readme.md#how-it-works-architecture)
 > in the top-level readme first — it explains how DigiByte Core, IPFS, and
-> DigiAssetCore fit together. This file covers only the pool server on top.
+> DigiAssetWindows fit together. This file covers only the pool server on top.
 
 ### How the pieces talk
 
 ```
   Node operators (many)                        Pool operator (one)
   ─────────────────────                        ───────────────────
-  DigiAssetCore.exe                            DigiAssetPoolServer.exe
+  DigiAssetWindows.exe                            DigiAssetPoolServer.exe
     │  register peerId + payout addr  ──POST /list──►  records node in pool.db
     │  keepalive                      ──POST /keepalive►
     │  fetch asset list              ◄─GET /permanent◄  serves canonical CIDs
@@ -69,7 +69,7 @@ To be reliably verifiable:
 1. **Forward TCP port 4001** (IPFS swarm port) on your router to the machine
    running kubo. If you changed kubo's `Addresses.Swarm` port, forward that one.
 2. **Announce a reachable address** — set `Addresses.Announce` in your kubo
-   config to your public `/ip4/<WAN-IP>/tcp/4001` (the DigiAssetCore dashboard's
+   config to your public `/ip4/<WAN-IP>/tcp/4001` (the DigiAssetWindows dashboard's
    `[F]` key will do this for you when it detects port-open-but-not-announced).
 
 If you are behind CGNAT and cannot open a port, you may still earn via the
@@ -78,7 +78,7 @@ and occasional missed periods until your provider records propagate.
 
 **Check your reachability:**
 
-- In the DigiAssetCore dashboard, press `[P]` (runs an `ifconfig.co/port/4001`
+- In the DigiAssetWindows dashboard, press `[P]` (runs an `ifconfig.co/port/4001`
   reachability check) — it should report the port as open.
 - From another machine: `ipfs swarm connect /ip4/<your-WAN-IP>/tcp/4001/p2p/<your-peerId>`
   should succeed.
@@ -155,7 +155,7 @@ the last 7 days.
 
 ## Node operator setup (earning DGB)
 
-1. Run kubo (IPFS) and `DigiAssetCore` as usual.
+1. Run kubo (IPFS) and `DigiAssetWindows` as usual.
 2. **Forward TCP port 4001** — strongly recommended (see the port-4001 section
    above). Forwarded nodes verify instantly; NAT'd nodes can still qualify via
    the fallback but less reliably.
@@ -166,7 +166,7 @@ the last 7 days.
    (New installs are prompted for this in the first-run wizard and default to the
    DigiStamp pool, so most users don't need to edit anything by hand.)
 4. The node auto-generates a payout address and registers it with the pool via
-   `/list`. Watch the DigiAssetCore dashboard's Payment row: `registered (no
+   `/list`. Watch the DigiAssetWindows dashboard's Payment row: `registered (no
    payouts yet)` means the pool hasn't enabled payouts; `active` means it has.
 
 ## Advertising your pool ("Join my pool" snippet)
@@ -175,7 +175,7 @@ There is **no in-app pool discovery** — a node only finds your pool if you tel
 people the URL. Copy-paste this to Discord/Twitter/your site:
 
 > **Join the DigiStamp Permanent Storage Pool and earn DGB for hosting DigiAssets.**
-> 1. Install DigiAsset Core for Windows: https://github.com/chopperbriano/DigiAssetWindows
+> 1. Install DigiAsset for Windows: https://github.com/chopperbriano/DigiAssetWindows
 > 2. When the setup wizard asks for a pool, press Enter to accept the default
 >    (`https://pool.digistamp.co`) — or add `psp1server=https://pool.digistamp.co`
 >    to your `config.cfg`.

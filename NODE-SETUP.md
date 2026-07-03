@@ -97,7 +97,7 @@ plain-English list of anything to fix.
 
 Other quick checks:
 
-- **In the app:** in the `DigiAssetCore.exe` window press **`P`** (re-tests port
+- **In the app:** in the `DigiAssetWindows.exe` window press **`P`** (re-tests port
   4001) or **`N`** (lists pool nodes; yours is marked `<-- YOU`).
 - **From anywhere:** visit https://pool.digistamp.co — your node shows up in the
   count once it's registered and verified.
@@ -106,7 +106,7 @@ Other quick checks:
 
 - IPFS is running (installed as a boot task).
 - DigiByte Core is synced.
-- `DigiAssetCore.exe` dashboard shows **PSP Pool: Hosting pool files** and, once
+- `DigiAssetWindows.exe` dashboard shows **PSP Pool: Hosting pool files** and, once
   the pool has you verified, the **Payment** row goes active.
 - Port 4001 tests as **open**.
 
@@ -130,7 +130,7 @@ you want them gone too.
 
 - **Windows blue "unknown publisher" / SmartScreen box:** the apps aren't
   code-signed yet, so Windows warns on first run. Click **More info → Run anyway**.
-  If your antivirus quarantines `DigiAssetCore.exe`, allow/restore it.
+  If your antivirus quarantines `DigiAssetWindows.exe`, allow/restore it.
 - **Payment row not active / not verified:** almost always port 4001 isn't
   forwarded on the router. Fix the forward, then press `P` in the app.
 - **"DigiByte Core not responding":** it hasn't finished syncing yet (check with

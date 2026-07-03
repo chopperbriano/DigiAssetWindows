@@ -279,7 +279,7 @@ void ConsoleDashboard::processInput() {
                         std::string ip = hw->getExternalIP();
                         if (!ip.empty() && ip != "unknown") log->addMessage("External IP: " + ip);
                     }
-                    log->addMessage("RPC: port 14024 (DigiAssetCore-cli.exe getnodestats)");
+                    log->addMessage("RPC: port 14024 (DigiAssetWindows-cli.exe getnodestats)");
                     log->addMessage("Config: config.cfg in the exe's working directory.");
                     log->addMessage("  Key settings: rpcuser, rpcpassword, rpcport, psp1server, psp1payout");
                 }
@@ -1541,7 +1541,7 @@ bool ConsoleDashboard::applyIpfsAnnounceFix() {
     log->addMessage("Addresses.Announce updated successfully.");
     log->addMessage("IMPORTANT: restart IPFS Desktop (tray icon -> Quit, relaunch) "
                     "to activate the new announce list.", Log::WARNING);
-    log->addMessage("After IPFS restart, DigiAssetCore will verify the change "
+    log->addMessage("After IPFS restart, DigiAssetWindows will verify the change "
                     "automatically (checking every 15s).");
 
     // Mark the fix as applied so the render loop polls aggressively until

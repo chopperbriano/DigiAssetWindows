@@ -87,8 +87,8 @@ function Show-Status {
     }
 
     # --- DigiAsset Core process ---
-    if (Get-Process DigiAssetCore -ErrorAction SilentlyContinue) { Line "DigiAsset Core" "OK" "running" }
-    else { Line "DigiAsset Core" "FAIL" "not running"; $issues += "DigiAsset Core isn't running - start $Root\DigiAssetCore.exe." }
+    if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) { Line "DigiAsset Core" "OK" "running" }
+    else { Line "DigiAsset Core" "FAIL" "not running"; $issues += "DigiAsset Core isn't running - start $Root\DigiAssetWindows.exe." }
 
     # --- Port 4001 reachability ---
     try {

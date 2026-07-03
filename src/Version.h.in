@@ -23,7 +23,7 @@
 #define UPSTREAM_VERSION_STRING (TO_STRING(MAJOR_VERSION) "." TO_STRING(MINOR_VERSION) "." TO_STRING(PATCH_VERSION))
 
 // Product name
-#define PRODUCT_NAME "DigiAsset Core for Windows"
+#define PRODUCT_NAME "DigiAsset for Windows"
 
 // Function to return version string
 inline const std::string getVersionString() {

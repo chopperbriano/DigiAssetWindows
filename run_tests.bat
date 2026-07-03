@@ -7,7 +7,7 @@ set SKIP=0
 set TOTAL_TESTS=0
 
 echo ============================================
-echo  DigiAsset Core for Windows - Test Suite
+echo  DigiAsset for Windows - Test Suite
 echo ============================================
 echo.
 
@@ -41,28 +41,28 @@ REM --- TIER 2: Binary Checks ---
 echo [TIER 2] Binary Checks
 echo -------------------------------------------
 
-set EXE=build\src\Release\DigiAssetCore.exe
-set CLI=build\cli\Release\DigiAssetCore-cli.exe
+set EXE=build\src\Release\DigiAssetWindows.exe
+set CLI=build\cli\Release\DigiAssetWindows-cli.exe
 
 if exist "%EXE%" (
     for %%A in ("%EXE%") do set SIZE=%%~zA
     if !SIZE! GTR 1000000 (
-        echo   PASS: DigiAssetCore.exe exists ^(!SIZE! bytes^)
+        echo   PASS: DigiAssetWindows.exe exists ^(!SIZE! bytes^)
         set /a PASS+=1
     ) else (
-        echo   FAIL: DigiAssetCore.exe too small
+        echo   FAIL: DigiAssetWindows.exe too small
         set /a FAIL+=1
     )
 ) else (
-    echo   FAIL: DigiAssetCore.exe not found
+    echo   FAIL: DigiAssetWindows.exe not found
     set /a FAIL+=1
 )
 
 if exist "%CLI%" (
-    echo   PASS: DigiAssetCore-cli.exe exists
+    echo   PASS: DigiAssetWindows-cli.exe exists
     set /a PASS+=1
 ) else (
-    echo   SKIP: DigiAssetCore-cli.exe not found
+    echo   SKIP: DigiAssetWindows-cli.exe not found
     set /a SKIP+=1
 )
 echo.
@@ -133,7 +133,7 @@ if "!WEB_CODE!"=="200" (
     echo   PASS: Web server responding ^(404 = server up, no index^)
     set /a PASS+=1
 ) else (
-    echo   SKIP: Web server not reachable ^(start DigiAssetCore.exe first^)
+    echo   SKIP: Web server not reachable ^(start DigiAssetWindows.exe first^)
     set /a SKIP+=1
 )
 

@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 project(DigiAssetPoolServer)
 
-# Pool server - optional companion to DigiAssetCore.exe.
+# Pool server - optional companion to DigiAssetWindows.exe.
 #
 # Implements the wire protocol mctrivia's original pool server used, so both
 # the win.31+ C++ client and the legacy NodeJS digiasset_node client can
 # register payout addresses and fetch the permanent asset list from a pool
 # this operator controls.
 #
-# Same C++ toolchain, same Boost, same SQLite as the main DigiAssetCore
+# Same C++ toolchain, same Boost, same SQLite as the main DigiAssetWindows
 # project. Ships as a standalone DigiAssetPoolServer.exe alongside the main
 # exe in each release. Optional to run — only pool operators need it.
 

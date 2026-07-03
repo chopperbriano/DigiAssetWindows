@@ -8,7 +8,7 @@
     then:
       1. waits for DigiByte Core's RPC to respond,
       2. checks the IPFS API is up (warns if not),
-      3. launches DigiAssetCore.exe and DigiAssetPoolServer.exe (each in its own
+      3. launches DigiAssetWindows.exe and DigiAssetPoolServer.exe (each in its own
          window, from the data folder so they read config.cfg / pool.cfg), and
       4. makes sure the Caddy website task is running.
 
@@ -92,7 +92,7 @@ function Start-Exe([string]$name) {
     Start-Process -FilePath $exe -WorkingDirectory $Root
     Write-Host "Started $name" -ForegroundColor Green
 }
-Start-Exe "DigiAssetCore.exe"
+Start-Exe "DigiAssetWindows.exe"
 Start-Exe "DigiAssetPoolServer.exe"
 
 # --- 4. Caddy website ------------------------------------------------------

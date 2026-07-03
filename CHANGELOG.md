@@ -1,8 +1,8 @@
-# Changelog — DigiAsset Core for Windows
+# Changelog — DigiAsset for Windows
 
 ## Overview
 
-DigiAsset Core for Windows is a Windows port of
+DigiAsset for Windows is a Windows port of
 [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) by
 [mctrivia](https://github.com/mctrivia) and contributors.
 All core logic, chain analysis, RPC methods, and DigiAsset protocol
@@ -23,8 +23,8 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 ## 0.3.0-win.4
 
 ### Executable renamed
-- Main executable renamed from `digiasset_core.exe` to `DigiAssetCore.exe`
-- CLI renamed from `digiasset_core-cli.exe` to `DigiAssetCore-cli.exe`
+- Main executable renamed from `digiasset_core.exe` to `DigiAssetWindows.exe`
+- CLI renamed from `digiasset_core-cli.exe` to `DigiAssetWindows-cli.exe`
 
 ### Integrated web server
 - Web UI server (Boost Beast HTTP) is now built into the main executable —

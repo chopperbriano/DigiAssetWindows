@@ -15,7 +15,7 @@ Caddy obtains and renews the TLS certificate for you, so clients can use a clean
 ## Why a reverse proxy at all?
 
 `DigiAssetPoolServer.exe` speaks plain HTTP on port 14028 and has no TLS and no
-web page. Clients (`DigiAssetCore`) default to `https://pool.digistamp.co`, so
+web page. Clients (`DigiAssetWindows`) default to `https://pool.digistamp.co`, so
 something has to terminate TLS on 443 and forward to the exe. Caddy does that
 with near-zero config and auto-certificates. It also lets a browser that visits
 the domain see a friendly page instead of a 404 from the API.
@@ -95,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
 ```
 
 It waits for DigiByte Core's RPC to respond, checks the IPFS API is up, launches
-`DigiAssetCore.exe` and `DigiAssetPoolServer.exe` (each in its own window, from
+`DigiAssetWindows.exe` and `DigiAssetPoolServer.exe` (each in its own window, from
 the data folder so they read their configs), and makes sure the `DigiStampCaddy`
 website task is running. It skips anything already running, so it's safe to
 re-run.

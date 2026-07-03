@@ -1,5 +1,5 @@
 //
-// DigiAssetPoolServer - optional companion exe for DigiAssetCore for Windows.
+// DigiAssetPoolServer - optional companion exe for DigiAsset for Windows.
 //
 // Implements mctrivia's pool wire protocol so the win.31+ C++ client can
 // register payout addresses and fetch the permanent asset list from a pool
@@ -250,7 +250,7 @@ int main(int /*argc*/, char** /*argv*/) {
     // they're earning DGB when they aren't.
     bool payoutsEnabled = readConfigInt(cfg, "poolpayouts", 0) != 0;
     // IPFS HTTP API base the verifier uses for swarm-connect dial-back.
-    // Defaults to the same localhost Kubo that DigiAssetCore itself talks to.
+    // Defaults to the same localhost Kubo that DigiAssetWindows itself talks to.
     std::string ipfsApi = cfg.count("ipfspath") ? cfg["ipfspath"]
                                                 : "http://localhost:5001/api/v0/";
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    One-click setup for a DigiAsset Core for Windows node that earns DGB from the
+    One-click setup for a DigiAsset for Windows node that earns DGB from the
     DigiStamp Permanent Storage Pool. Installs and auto-starts the WHOLE stack.
 
 .WHAT IT DOES (all automatic)
@@ -67,7 +67,7 @@ function Register-GuardedLogonTask($name, $exe, $workdir, $procName) {
     Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 }
 
-Write-Host "===== DigiAsset Core for Windows - node installer =====" -ForegroundColor Green
+Write-Host "===== DigiAsset for Windows - node installer =====" -ForegroundColor Green
 Write-Host @"
 
 This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
@@ -107,7 +107,7 @@ if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
 
 # --- 1. DigiAsset Core binaries -------------------------------------------
 Step 1 "Downloading DigiAsset Core (latest release)..."
-foreach ($f in "DigiAssetCore.exe", "DigiAssetCore-cli.exe") {
+foreach ($f in "DigiAssetWindows.exe", "DigiAssetWindows-cli.exe") {
     Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest/download/$f" -OutFile (Join-Path $Root $f) -UseBasicParsing
     Write-Host "  + $f"
 }
@@ -237,9 +237,9 @@ if (Test-Path $cfg) {
 
 # --- 6. DigiAsset Core: run + restart on boot -----------------------------
 Step 6 "Setting DigiAsset Core to start on boot..."
-$coreExe = Join-Path $Root "DigiAssetCore.exe"
-Register-GuardedLogonTask "DigiStampNode" $coreExe $Root "DigiAssetCore"
-if (-not (Get-Process DigiAssetCore -ErrorAction SilentlyContinue)) {
+$coreExe = Join-Path $Root "DigiAssetWindows.exe"
+Register-GuardedLogonTask "DigiStampNode" $coreExe $Root "DigiAssetWindows"
+if (-not (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath $coreExe -WorkingDirectory $Root
 }
 Write-Host "  DigiAsset Core started + will open at every logon (task 'DigiStampNode')." -ForegroundColor Green

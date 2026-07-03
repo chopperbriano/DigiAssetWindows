@@ -1,4 +1,4 @@
-# DigiAsset Core for Windows
+# DigiAsset for Windows
 
 > **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
 
@@ -40,19 +40,19 @@ Core is what you build here (or download from [Releases](https://github.com/chop
 
 | Executable | Needed? | What it does |
 |---|---|---|
-| **`DigiAssetCore.exe`** | **Required** | The node itself. One process runs the sync engine, asset database, JSON-RPC server, the built-in web UI (http://localhost:8090), and the console dashboard. **This is the program you run.** |
-| `DigiAssetCore-cli.exe` | Optional | A command-line client that sends RPC commands to a running `DigiAssetCore.exe` (query assets, trigger actions). Useful for scripting; the web UI covers most needs. |
+| **`DigiAssetWindows.exe`** | **Required** | The node itself. One process runs the sync engine, asset database, JSON-RPC server, the built-in web UI (http://localhost:8090), and the console dashboard. **This is the program you run.** |
+| `DigiAssetWindows-cli.exe` | Optional | A command-line client that sends RPC commands to a running `DigiAssetWindows.exe` (query assets, trigger actions). Useful for scripting; the web UI covers most needs. |
 | `DigiAssetPoolServer.exe` | Optional — **pool operators only** | A standalone pool server that pays node operators for hosting. Most users never run this. See [Permanent Storage Pools & Getting Paid](#permanent-storage-pools--getting-paid). |
 
 You do **not** need a separate web-server exe — the web UI is built into
-`DigiAssetCore.exe`.
+`DigiAssetWindows.exe`.
 
 ### How data flows
 
 ```
         reads blocks/txs (RPC :14022)            pins/serves files (API :5001)
  DigiByte Core  ──────────────────────►  DigiAsset Core  ──────────────────────►  IPFS (kubo)
- blockchain + wallet                     DigiAssetCore.exe                        file storage
+ blockchain + wallet                     DigiAssetWindows.exe                        file storage
         ▲                                     │      │
         │  sendtoaddress (pool payouts)       │      └──► web UI  http://localhost:8090
         └─────────────────────────────────────┘
@@ -75,7 +75,7 @@ This fork builds a Windows version with Visual Studio and MSVC in the main branc
 
 Most dependencies (libcurl, OpenSSL, SQLite3, libjsonrpccpp) are replaced by vendored source files or Windows-native stubs (WinHTTP), so no vcpkg or external package manager is needed beyond the jsoncpp and libjson-rpc-cpp subprojects that are already in the repo.
 
-Note: If you want to skip building from source, download the pre-built binaries from the [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page. You will still need to install IPFS Desktop and DigiByte Core wallet as described below. Run `DigiAssetCore.exe` from a cmd prompt — the web server is built in (no separate exe needed).
+Note: If you want to skip building from source, download the pre-built binaries from the [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page. You will still need to install IPFS Desktop and DigiByte Core wallet as described below. Run `DigiAssetWindows.exe` from a cmd prompt — the web server is built in (no separate exe needed).
 
 ### Prerequisites
 
@@ -86,7 +86,7 @@ Note: If you want to skip building from source, download the pre-built binaries 
 
 ```cmd
 git clone --recursive https://github.com/chopperbriano/DigiAssetWindows.git
-cd DigiAsset_Core_Windows
+cd DigiAssetWindows
 ```
 
 The `--recursive` flag is required to fetch the jsoncpp and libjson-rpc-cpp submodules. If you already cloned without it, run:
@@ -131,10 +131,10 @@ Or build from a Developer Command Prompt:
 
 ```cmd
 cd build
-msbuild src\DigiAssetCore.vcxproj /p:Configuration=Release
+msbuild src\DigiAssetWindows.vcxproj /p:Configuration=Release
 ```
 
-The `DigiAssetCore.exe` binary will be in `build\src\Release\` (or `Debug\`). This single executable includes the core sync engine, RPC server, and web UI server.
+The `DigiAssetWindows.exe` binary will be in `build\src\Release\` (or `Debug\`). This single executable includes the core sync engine, RPC server, and web UI server.
 
 ## Optional Build Targets
 
@@ -146,7 +146,7 @@ cmake .. -DBUILD_CLI=ON -DBUILD_WEB=ON -DBUILD_TEST=ON
 
 | Target | Binary | Description |
 |---|---|---|
-| `BUILD_CLI` | `DigiAssetCore-cli.exe` | Command-line RPC client |
+| `BUILD_CLI` | `DigiAssetWindows-cli.exe` | Command-line RPC client |
 | `BUILD_WEB` | `digiasset_core-web.exe` | Standalone web server (legacy, now built into main exe) |
 | `BUILD_TEST` | `Google_Tests_run.exe` | Google Test suite |
 
@@ -200,10 +200,10 @@ After installation, verify the IPFS API is running. The line "RPC API server lis
 
 ## Configure DigiAsset Core
 
-The first time you run DigiAsset Core for Windows it will ask you several questions to set up your config file. Run `DigiAssetCore.exe` from a cmd prompt:
+The first time you run DigiAsset for Windows it will ask you several questions to set up your config file. Run `DigiAssetWindows.exe` from a cmd prompt:
 
 ```cmd
-DigiAssetCore.exe
+DigiAssetWindows.exe
 ```
 
 The single executable runs both the sync engine and the web UI server. The console displays a live dashboard with sync progress, service status, asset count, and a link to the web UI (default: http://localhost:8090/).
@@ -240,7 +240,7 @@ operators.
 
 ### Node operator — you want to earn DGB for hosting
 
-1. Run DigiByte Core + IPFS + `DigiAssetCore.exe` as described above.
+1. Run DigiByte Core + IPFS + `DigiAssetWindows.exe` as described above.
 2. In `config.cfg`, subscribe to a pool and set your payout address (the `#` is
    the pool number; see `example.cfg` for all keys):
    ```
@@ -274,7 +274,7 @@ Run **`DigiAssetPoolServer.exe`**. It is a self-contained server that:
 - **pays** verified nodes from your DigiByte Core wallet, on your explicit
   command, with a spend budget and a per-period guard.
 
-It's a *separate* program from `DigiAssetCore.exe` on purpose: it links its own
+It's a *separate* program from `DigiAssetWindows.exe` on purpose: it links its own
 minimal server/dashboard so it can run independently, and it only exists because
 the upstream pool went dormant. Full setup — `pool.cfg` keys, the DigiByte Core
 RPC credentials it needs, the verification model, and the `[P]`/`[E]` payout
@@ -282,7 +282,7 @@ flow — is documented in **[pool/README.md](pool/README.md)**.
 
 ## Documentation
 
-The web UI is built into `DigiAssetCore.exe`. Once running, open http://localhost:8090/ in your browser.
+The web UI is built into `DigiAssetWindows.exe`. Once running, open http://localhost:8090/ in your browser.
 
 For running a paying Permanent Storage Pool, see **[pool/README.md](pool/README.md)**.
 

@@ -1,7 +1,7 @@
 //
 // PoolDashboard - minimal VT100 TUI for the pool server exe.
 //
-// Deliberately separate from the main DigiAssetCore ConsoleDashboard so the
+// Deliberately separate from the main DigiAssetWindows ConsoleDashboard so the
 // pool server is a standalone exe with no link-time dependency on the main
 // lib. Reimplements the minimum set of helpers we need (VT100 init, cursor
 // home, ERASE_LINE, FG colors, key polling, a log buffer).

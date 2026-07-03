@@ -402,7 +402,7 @@ void PoolDashboard::render() {
     const int w = _width;
     auto separator = [&]() { out << ERASE_LINE << std::string(w, '-') << "\n"; };
 
-    // Centered title — same style as DigiAsset Core for Windows header.
+    // Centered title — same style as DigiAsset for Windows header.
     std::string title = "DigiAsset Pool Server for Windows " + std::string(VERSION_STRING) +
                         "  (Phase 1 - experimental)";
     int pad = (w - (int) title.size()) / 2;
@@ -422,7 +422,7 @@ void PoolDashboard::render() {
     unsigned int permPages = _db.countPermanentPages();
     uint64_t requests = _server.getRequestCount();
 
-    // ---- Aligned two-column header (same cell() pattern as DigiAssetCore) ----
+    // ---- Aligned two-column header (same cell() pattern as DigiAssetWindows) ----
     const int COL1_LABEL_W = 16;
     const int COL1_VALUE_W = 14;
     const int COL2_LABEL_W = 14;
