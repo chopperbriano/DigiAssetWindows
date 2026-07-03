@@ -2,9 +2,24 @@
 
 > **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
 
-> **Just want to run a node and earn DGB?** Skip the build steps — see
-> **[NODE-SETUP.md](NODE-SETUP.md)** for a one-click PowerShell installer
-> (DigiAsset for Windows + IPFS + firewall + a reachability test).
+## ⚡ Quick install (recommended)
+
+**Most people should use this — you do not need to clone or build anything.** On
+the Windows PC that will run the node, open **PowerShell as Administrator** (click
+Start, type `PowerShell`, right-click **Windows PowerShell**, choose *Run as
+administrator*) and paste this single line:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
+```
+
+It installs and auto-starts the whole stack — **DigiByte Core**, **IPFS**, and the
+**DigiAsset node** — writes every config, opens the firewall, and adds a background
+task that **auto-updates and self-heals on every boot**. It asks only for your DGB
+payout address. Full walkthrough: **[NODE-SETUP.md](NODE-SETUP.md)**.
+
+> Building from source is **only for developers** — see [Build on Windows](#build-on-windows)
+> below. If you just want to run a node and earn DGB, use the one line above.
 
 ## Table of Contents
 1. [How It Works (Architecture)](#how-it-works-architecture)

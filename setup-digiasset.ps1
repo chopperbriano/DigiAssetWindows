@@ -30,8 +30,8 @@
     Right-click > Run with PowerShell (it will ask for Administrator), or:
       powershell -ExecutionPolicy Bypass -File .\setup-digiasset.ps1
 
-    One-liner (paste into an elevated PowerShell):
-      $s="$env:TEMP\setup-digiasset.ps1"; iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile $s; Start-Process powershell "-ExecutionPolicy Bypass -File `"$s`"" -Verb RunAs
+    One-liner (paste into an Administrator PowerShell):
+      iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
 
 .NOTES
     DigiByte's first blockchain sync takes hours and runs in the background.
@@ -523,6 +523,11 @@ function Update-SelfScript {
     try {
         $tmp = Join-Path $Tmp 'setup-latest.ps1'
         if (Get-File $RawScriptUrl $tmp 1) {
+            # Only adopt the new copy if it actually PARSES - never overwrite a
+            # working maintenance script with a truncated or corrupt download.
+            $perr = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$perr)
+            if ($perr -and $perr.Count -gt 0) { Log '  (self-update skipped: downloaded script did not parse)' 'WARN'; return $false }
             $new = Get-Sha512Hex $tmp
             $cur = ''
             if (Test-Path $InstalledScript) { $cur = Get-Sha512Hex $InstalledScript }
@@ -536,13 +541,10 @@ function Update-SelfScript {
 #  INSTALL MODE
 # ---------------------------------------------------------------------------
 function Invoke-Install {
-    if (-not (Test-Admin)) {
-        if ($PSCommandPath) {
-            Write-Host 'Elevating to Administrator...' -ForegroundColor Yellow
-            Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Mode Install"
-            return
-        } else { throw 'Please run this in an ELEVATED (Administrator) PowerShell window.' }
-    }
+    # Safety net: the entry point already guarantees elevation before we get
+    # here (it relaunches under UAC). This just refuses to run privileged steps
+    # if the function is somehow called without admin.
+    if (-not (Test-Admin)) { throw 'Administrator rights are required to install.' }
 
     Ensure-Dir $DigiAssetDir; Ensure-Dir $DigiByteDir; Ensure-Dir $Tmp; Ensure-Dir $LogDir
     Log "===== DigiAsset for Windows - installer (script v$SCRIPT_VERSION) =====" 'OK'
@@ -695,6 +697,7 @@ Nothing here spends your coins.
 function Invoke-Service {
     Ensure-Dir $Tmp; Ensure-Dir $LogDir
     Log "----- maintenance run (script v$SCRIPT_VERSION) -----"
+    if (-not (Test-Admin)) { Log 'not elevated - some update/heal actions may fail (this normally runs as SYSTEM).' 'WARN' }
     $state = Read-State
     $problems = @()
 
@@ -796,6 +799,27 @@ function Invoke-Service {
 # ---------------------------------------------------------------------------
 #  Entry point
 # ---------------------------------------------------------------------------
+# FIRST THING: make sure we are elevated. Install writes to C:\, installs
+# services, and registers scheduled tasks + firewall rules - all need admin.
+# Service mode runs as SYSTEM from the scheduled task, so it is already elevated
+# (this guard only ever triggers for a manual, non-admin Install).
+if ($Mode -eq 'Install' -and -not (Test-Admin)) {
+    if ($PSCommandPath) {
+        Write-Host 'This installer needs Administrator rights - approve the UAC prompt that appears...' -ForegroundColor Yellow
+        # Relaunch elevated, forwarding every argument the user actually passed.
+        $fwd = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath))
+        foreach ($k in $PSBoundParameters.Keys) {
+            $val = $PSBoundParameters[$k]
+            if ($val -is [System.Management.Automation.SwitchParameter]) { if ($val.IsPresent) { $fwd += "-$k" } }
+            else { $fwd += "-$k"; $fwd += ('"{0}"' -f $val) }
+        }
+        try { Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; exit 0 }
+        catch { Write-Host 'Could not elevate. Right-click PowerShell, choose "Run as administrator", then run the one-line installer again.' -ForegroundColor Red; exit 1 }
+    }
+    Write-Host 'Administrator rights are required. Open PowerShell as administrator (right-click > Run as administrator) and run the one-line installer again.' -ForegroundColor Red
+    exit 1
+}
+
 try {
     if ($Mode -eq 'Service') { Invoke-Service } else { Invoke-Install }
 } catch {
