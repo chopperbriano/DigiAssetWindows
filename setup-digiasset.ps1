@@ -572,37 +572,43 @@ function Invoke-Install {
     Log "===== DigiAsset for Windows - installer (script v$SCRIPT_VERSION) =====" 'OK'
 
     $localIp = Get-LocalIPv4
-    if ($localIp) { $ipHint = "This PC's local IP is  $localIp   <-- forward the ports below TO this address" }
-    else          { $ipHint = "Find this PC's local IP by running:  ipconfig   (use the 'IPv4 Address')" }
 
-    Write-Host @"
-
-This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp
-pool. It installs and auto-starts everything, and keeps it updated for you:
-
-  * DigiByte Core wallet   -> $DigiByteDir   (blockchain, runs in background)
-  * IPFS (file storage)    -> $DigiAssetDir  (runs in background)
-  * DigiAsset for Windows  -> $DigiAssetDir  (the node + live dashboard)
-
-BEFORE YOU BEGIN - set up your home router so the internet can reach this node.
-This PC's own Windows firewall is opened for you automatically, but your ROUTER
-is NOT - you must add a Port Forward / NAT rule for each port below.
-
-  $ipHint
-
-  On your router, forward these to that local IP:
-
-     PORT    PROTOCOL   WHAT IT HOSTS
-     4001    TCP        DigiAsset / IPFS   (REQUIRED - this is how the pool verifies + pays you)
-     4001    UDP        DigiAsset / IPFS   (recommended - QUIC, faster peer connections)
-     12024   TCP        DigiByte peers     (recommended - helps host the DigiByte network)
-
-  Do NOT forward 5001, 14022, or 8090 - those must stay PRIVATE (local only).
-
-DigiByte's first sync takes hours and runs in the background.
-Nothing here spends your coins. (These router steps are shown again at the end.)
-
-"@ -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "This sets your PC up to HOST DigiAsset content and EARN DGB from the DigiStamp" -ForegroundColor White
+    Write-Host "pool. It installs and auto-starts everything, and keeps it updated for you:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  * DigiByte Core wallet   -> $DigiByteDir   (blockchain, runs in background)" -ForegroundColor Gray
+    Write-Host "  * IPFS (file storage)    -> $DigiAssetDir  (runs in background)" -ForegroundColor Gray
+    Write-Host "  * DigiAsset for Windows  -> $DigiAssetDir  (the node + live dashboard)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "BEFORE YOU BEGIN - set up your home router so the internet can reach this node." -ForegroundColor Yellow
+    Write-Host "Your PC's Windows firewall is opened automatically, but your ROUTER is NOT -" -ForegroundColor Yellow
+    Write-Host "you must add a Port Forward / NAT rule for each port below." -ForegroundColor Yellow
+    Write-Host ""
+    if ($localIp) {
+        Write-Host "  This PC's local IP is  " -ForegroundColor Gray -NoNewline
+        Write-Host $localIp -ForegroundColor Green -NoNewline
+        Write-Host "   <-- forward the ports below TO this address" -ForegroundColor Gray
+    } else {
+        Write-Host "  Find this PC's local IP by running:  ipconfig   (use the 'IPv4 Address')" -ForegroundColor Gray
+    }
+    Write-Host ""
+    Write-Host "  On your router, forward these to that local IP:" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "     PORT    PROTOCOL   WHAT IT HOSTS" -ForegroundColor Cyan
+    Write-Host "     4001    TCP        DigiAsset / IPFS   " -ForegroundColor White -NoNewline
+    Write-Host "(REQUIRED - how the pool verifies + pays you)" -ForegroundColor Yellow
+    Write-Host "     4001    UDP        DigiAsset / IPFS   (recommended - QUIC, faster peers)" -ForegroundColor White
+    Write-Host "     12024   TCP        DigiByte peers     (recommended - helps host DigiByte)" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Do NOT forward 5001, 14022, or 8090 - those must stay PRIVATE (local only)." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Heads up: DigiByte's first sync can take many HOURS - sometimes a DAY or two." -ForegroundColor Yellow
+    Write-Host "It's a big blockchain :)  It runs quietly in the background - just leave the PC on." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Nothing here spends your coins." -ForegroundColor Green -NoNewline
+    Write-Host "  (These router steps are shown again at the end.)" -ForegroundColor DarkGray
+    Write-Host ""
     $go = Read-Host 'Press Enter to continue, or type N then Enter to cancel'
     if ($go -match '^[Nn]') { Write-Host 'Cancelled - nothing was changed.'; return }
 
