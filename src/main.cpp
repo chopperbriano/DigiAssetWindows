@@ -11,6 +11,7 @@
 #include "WebServer.h"
 #include "utils.h"
 #include <csignal>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 
@@ -153,8 +154,29 @@ int main() {
             !utils::fileExists("chain.db")) {              //if the chain database does not yet exist
         log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
         IPFS ipfs("config.cfg", false);
-        ipfs.downloadFile(officialBootstrapCID, "chain.db", true);
-        pauseHeight = officialBootStrapHeight+2;
+        //The bootstrap download depends on IPFS being up and the CID being
+        //reachable.  Rather than let a timeout abort the whole node, retry a few
+        //times (IPFS may still be starting) and, if it still won't come, carry on
+        //WITHOUT the bootstrap - the chain simply syncs from scratch instead.
+        bool bootstrapped = false;
+        for (unsigned int attempt = 1; attempt <= 5 && !bootstrapped; attempt++) {
+            try {
+                ipfs.downloadFile(officialBootstrapCID, "chain.db", true);
+                bootstrapped = true;
+            } catch (const std::exception& e) {
+                std::remove("chain.db"); //discard any partial download before retrying
+                log->addMessage(
+                        "Bootstrap download failed (is IPFS running/reachable?): " + string(e.what()) +
+                        " - attempt " + to_string(attempt) + " of 5, waiting 30s...");
+                if (attempt < 5) this_thread::sleep_for(chrono::seconds(30));
+            }
+        }
+        if (bootstrapped) {
+            pauseHeight = officialBootStrapHeight+2;
+        } else {
+            std::remove("chain.db"); //ensure no partial file is left for the DB to open
+            log->addMessage("Bootstrap unavailable - continuing without it; the chain will sync from scratch (slower, but the node won't crash).");
+        }
     }
 
     /*

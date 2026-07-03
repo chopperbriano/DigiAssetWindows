@@ -698,9 +698,6 @@ function Write-NodeConfig($rpc) {
     $lines = @(
         "rpcbind=127.0.0.1","rpcport=$RpcPort","rpcuser=$($rpc.user)","rpcpassword=$($rpc.pass)",
         "ipfspath=http://localhost:5001/api/v0/",
-        # Be tolerant of a slow IPFS (big DB bootstrap, slow connection) so the
-        # node retries instead of dying on a short timeout.
-        "ipfstimeoutdownload=600","ipfstimeoutpin=600","ipfstimeoutretry=30",
         "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
         "pruneage=5760","bootstrapchainstate=1"
     )
