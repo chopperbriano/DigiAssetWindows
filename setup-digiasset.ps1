@@ -58,7 +58,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '1.1.0'
+$SCRIPT_VERSION = '1.2.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 
@@ -300,6 +300,43 @@ function Ensure-Firewall {
     Open-Port 'DigiByte P2P (TCP 12024)'        TCP 12024
 }
 
+# Pre-authorize an app in Windows Firewall so Windows does NOT pop the "Do you
+# want to allow this app?" dialog the first time the app listens. Adding an
+# allow rule for the program before it starts suppresses that prompt.
+function Add-ProgramAllowRule($name, $exePath) {
+    if (-not $exePath -or -not (Test-Path $exePath)) { return }
+    $disp = "DigiStamp allow $name"
+    if (-not (Get-NetFirewallRule -DisplayName $disp -ErrorAction SilentlyContinue)) {
+        try {
+            New-NetFirewallRule -DisplayName $disp -Direction Inbound -Action Allow -Program $exePath -Profile Any -ErrorAction Stop | Out-Null
+            Log "  + firewall: pre-authorized $name (no popup)"
+        } catch { Log "  (could not pre-authorize $name in firewall: $($_.Exception.Message))" 'WARN' }
+    }
+}
+
+# The node/pool exes are MSVC-built and need the Visual C++ x64 runtime
+# (MSVCP140.dll, VCRUNTIME140*.dll). Fresh Windows often lacks it, which makes
+# DigiAssetWindows.exe fail to launch - so install it if missing.
+function Ensure-VCRuntime {
+    $sys = Join-Path $env:SystemRoot 'System32'
+    if ((Test-Path (Join-Path $sys 'msvcp140.dll')) -and (Test-Path (Join-Path $sys 'vcruntime140.dll'))) {
+        Log '  Visual C++ x64 runtime already present.' 'OK'; return
+    }
+    Log '  Visual C++ x64 runtime missing - installing (the node needs MSVCP140.dll)...'
+    $vc = Join-Path $Tmp 'vc_redist.x64.exe'
+    if (-not (Get-File 'https://aka.ms/vs/17/release/vc_redist.x64.exe' $vc)) {
+        throw 'could not download the Visual C++ x64 runtime (vc_redist.x64.exe).'
+    }
+    $proc = Start-Process -FilePath $vc -ArgumentList @('/install','/quiet','/norestart') -Wait -PassThru
+    $rc = $proc.ExitCode
+    if ($rc -eq 0 -or $rc -eq 3010 -or $rc -eq 1638) {
+        Log ("  + Visual C++ x64 runtime installed (exit {0})." -f $rc) 'OK'
+        if ($rc -eq 3010) { Log '  (a reboot will finalize the VC++ runtime; the node still runs now.)' 'WARN' }
+    } else {
+        throw "Visual C++ runtime install failed (exit code $rc)."
+    }
+}
+
 # ---------------------------------------------------------------------------
 #  Service health probes
 # ---------------------------------------------------------------------------
@@ -363,20 +400,30 @@ function Install-DigiByteBinaries($asset) {
     $inst = Join-Path $Tmp $asset.name
     if (-not (Get-File $asset.url $inst)) { throw "could not download DigiByte from $($asset.url)" }
 
-    # Optional SHA256 verification if the release ships a checksums file.
+    # Optional SHA256 verification. DigiByte often doesn't publish a SHA256SUMS
+    # file (and a fetch can hiccup) - that's fine, we already downloaded over
+    # HTTPS - so an absent/failed checksum is a quiet note, NOT a scary error.
+    # A real MISMATCH still aborts.
     try {
         $sumsUrl  = ($asset.url -replace '/[^/]+$', '/SHA256SUMS')
         $sumsFile = Join-Path $Tmp 'DGB_SHA256SUMS'
-        if (Get-File $sumsUrl $sumsFile 1) {
-            $want = (Get-Content $sumsFile | Where-Object { $_ -match [regex]::Escape($asset.name) } | Select-Object -First 1)
-            if ($want) {
-                $wantHash = ($want -split '\s+')[0].ToLower()
-                $gotHash  = (Get-FileHash $inst -Algorithm SHA256).Hash.ToLower()
-                if ($wantHash -ne $gotHash) { Remove-Item $inst -Force; throw 'DigiByte checksum mismatch - aborting.' }
-                Log '  DigiByte checksum verified (SHA-256).' 'OK'
-            }
+        $want = $null
+        try {
+            Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsFile -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+            if (Test-Path $sumsFile) { $want = (Get-Content $sumsFile | Where-Object { $_ -match [regex]::Escape($asset.name) } | Select-Object -First 1) }
+        } catch { $want = $null }
+        if ($want) {
+            $wantHash = ($want -split '\s+')[0].ToLower()
+            $gotHash  = (Get-FileHash $inst -Algorithm SHA256).Hash.ToLower()
+            if ($wantHash -ne $gotHash) { Remove-Item $inst -Force; throw 'DigiByte checksum mismatch - aborting.' }
+            Log '  DigiByte checksum verified (SHA-256).' 'OK'
+        } else {
+            Log '  (no published DigiByte checksum; verified via HTTPS instead)'
         }
-    } catch { Log "  (DigiByte checksum step skipped: $($_.Exception.Message))" 'WARN' }
+    } catch {
+        if ($_.Exception.Message -match 'mismatch') { throw }
+        Log '  (DigiByte checksum step skipped; downloaded over HTTPS)'
+    }
 
     # NSIS silent install. /D=<dir> MUST be the last arg and cannot be quoted, so
     # the install dir must have no spaces (default C:\DigiByte is fine).
@@ -408,6 +455,7 @@ function Stop-DigiByteGracefully {
 function Start-DigiByte {
     $dgb = Get-Digibyted
     if (-not (Test-Path $dgb)) { return $false }
+    Add-ProgramAllowRule 'DigiByte (digibyted)' $dgb
     if (-not (Test-ProcRunning 'digibyted')) {
         Start-Process $dgb -ArgumentList "-datadir=`"$DgbData`"" -WindowStyle Hidden
     }
@@ -479,6 +527,7 @@ function Initialize-Ipfs {
 function Start-Ipfs {
     if (-not (Test-Path $IpfsExe)) { return $false }
     $env:IPFS_PATH = $IpfsRepo
+    Add-ProgramAllowRule 'IPFS (kubo)' $IpfsExe
     if (-not (Test-ProcRunning 'ipfs')) { Start-Process -FilePath $IpfsExe -ArgumentList 'daemon --enable-gc' -WindowStyle Hidden }
     return $true
 }
@@ -499,6 +548,7 @@ function Install-DigiAsset {
 }
 function Start-Node {
     if (-not (Test-Path $NodeExe)) { return $false }
+    Add-ProgramAllowRule 'DigiAsset node' $NodeExe
     if (-not (Test-ProcRunning 'DigiAssetWindows')) { Start-Process -FilePath $NodeExe -WorkingDirectory $DigiAssetDir }
     return $true
 }
@@ -603,6 +653,9 @@ function Invoke-Install {
     Write-Host ""
     Write-Host "  Do NOT forward 5001, 14022, or 8090 - those must stay PRIVATE (local only)." -ForegroundColor Red
     Write-Host ""
+    Write-Host "If Windows asks to allow 'digibyted', IPFS, or the node through the firewall," -ForegroundColor Yellow
+    Write-Host "click ALLOW (both networks) - it's expected and safe." -ForegroundColor Yellow
+    Write-Host ""
     Write-Host "Heads up: DigiByte's first sync can take many HOURS - sometimes a DAY or two." -ForegroundColor Yellow
     Write-Host "It's a big blockchain :)  It runs quietly in the background - just leave the PC on." -ForegroundColor Yellow
     Write-Host ""
@@ -635,6 +688,10 @@ function Invoke-Install {
     if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
         throw 'That does not look like a DigiByte address. Re-run and paste a valid D..., S..., or dgb1... address.'
     }
+
+    # --- Prerequisites ------------------------------------------------------
+    Log 'Checking prerequisites (Visual C++ x64 runtime the node needs)...' 'STEP'
+    Ensure-VCRuntime
 
     # 1. DigiByte ------------------------------------------------------------
     Step 1 "Installing DigiByte Core $DigiByteVersion..."
@@ -802,6 +859,8 @@ function Invoke-Service {
     # Re-register any missing boot task, re-open firewall, re-download missing
     # binaries, restart anything that is down. Only alert if it stays broken.
 
+    # The node needs the VC++ x64 runtime; make sure it's present (best-effort).
+    try { Ensure-VCRuntime } catch { $problems += "VC++ runtime: $($_.Exception.Message)"; Log $problems[-1] 'WARN' }
     Ensure-Firewall
     foreach ($t in @(
         @{ n=$TaskDigiByte }, @{ n=$TaskIpfs }, @{ n=$TaskMaint }
