@@ -65,13 +65,14 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.6.0'
+$SCRIPT_VERSION = '2.7.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
 # your public URL to turn fast-sync ON for everyone; leave '' to sync normally.
-# The -SnapshotUrl parameter overrides it.
-$DefaultSnapshotUrl = ''
+# The -SnapshotUrl parameter overrides it. Until the snapshot files are uploaded,
+# a fetch just fails and the installer syncs normally (safe).
+$DefaultSnapshotUrl = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json'
 
 $DgbData        = Join-Path $DigiByteDir  'data'          # blockchain + digibyte.conf
 # DigiByte ships a win64 NSIS installer (not a zip). After a silent install the
