@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.8.1'
+$SCRIPT_VERSION = '2.8.2'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -801,14 +801,17 @@ function Get-DownloadWithProgress($url, $dest, $label) {
 # Extract with a "still working" heartbeat, since tar shows nothing for minutes
 # on a huge archive and the heavy disk I/O can look like a freeze.
 function Expand-WithProgress($archive, $destDir, $label) {
+    # DriveInfo.AvailableFreeSpace does a live syscall every read; Get-PSDrive's
+    # .Free is cached and jitters (would show negative deltas mid-extract).
     $drive = (Split-Path $destDir -Qualifier).TrimEnd(':')
-    $freeBefore = try { (Get-PSDrive -Name $drive).Free } catch { 0 }
+    $di = try { New-Object System.IO.DriveInfo $drive } catch { $null }
+    $freeBefore = if ($di) { $di.AvailableFreeSpace } else { 0 }
     Log "  extracting $label - heavy disk activity for several minutes; this is NORMAL, not frozen." 'WARN'
     $p = Start-Process -FilePath 'tar.exe' -ArgumentList @('-xzf', "$archive", '-C', "$destDir") -PassThru -WindowStyle Hidden
     $t0 = Get-Date
     while (-not $p.HasExited) {
         Start-Sleep -Seconds 5
-        $written = 0; try { $written = [math]::Max(0, $freeBefore - (Get-PSDrive -Name $drive).Free) } catch {}
+        $written = 0; if ($di) { try { $written = [math]::Max(0, $freeBefore - $di.AvailableFreeSpace) } catch {} }
         Write-Progress -Activity "Extracting $label snapshot" -Status ("~{0:N1} GB written   elapsed {1}   (working, please wait...)" -f ($written/1GB), (((Get-Date)-$t0).ToString('hh\:mm\:ss')))
     }
     Write-Progress -Activity "Extracting $label snapshot" -Completed

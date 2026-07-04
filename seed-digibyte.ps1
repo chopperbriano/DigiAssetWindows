@@ -23,7 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.1.1'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 
 # Resumable BITS download with live %/speed/ETA; falls back to a plain download.
@@ -51,10 +51,10 @@ function Get-DL($u,$d){
 }
 # Extract with a heartbeat (tar is silent for minutes on a huge archive).
 function Expand-DL($a,$dst){
-    $drv=(Split-Path $dst -Qualifier).TrimEnd(':'); $fb=try{(Get-PSDrive -Name $drv).Free}catch{0}
+    $drv=(Split-Path $dst -Qualifier).TrimEnd(':'); $di=try{New-Object System.IO.DriveInfo $drv}catch{$null}; $fb=if($di){$di.AvailableFreeSpace}else{0}
     Say "Extracting into $dst - heavy disk activity for several minutes; this is NORMAL, not frozen." 'Yellow'
     $p=Start-Process tar.exe -ArgumentList @('-xzf',"$a",'-C',"$dst") -PassThru -WindowStyle Hidden; $t0=Get-Date
-    while (-not $p.HasExited) { Start-Sleep -Seconds 5; $w=0; try{$w=[math]::Max(0,$fb-(Get-PSDrive -Name $drv).Free)}catch{}
+    while (-not $p.HasExited) { Start-Sleep -Seconds 5; $w=0; if($di){try{$w=[math]::Max(0,$fb-$di.AvailableFreeSpace)}catch{}}
         Write-Progress -Activity "Extracting" -Status ("~{0:N1} GB written  elapsed {1}  (working...)" -f ($w/1GB),(((Get-Date)-$t0).ToString('hh\:mm\:ss'))) }
     Write-Progress -Activity "Extracting" -Completed; return ($p.ExitCode -eq 0)
 }
