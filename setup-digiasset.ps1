@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.11.0'
+$SCRIPT_VERSION = '2.11.1'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -977,12 +977,20 @@ function Invoke-Install {
         if ($treasury -and $treasury.donationAddress) {
             Write-Host "  * Pool treasury (donation) address: $($treasury.donationAddress)" -ForegroundColor Gray
         }
+        Write-Host "  Don't have a DGB address yet? Make one in the DigiByte mobile/desktop wallet" -ForegroundColor Gray
+        Write-Host '  or your exchange, then paste it here (you can also re-run later to change it).' -ForegroundColor Gray
         Write-Host ''
-        $script:PayoutAddress = Read-Host '  Paste your DGB payout address'
-        $PayoutAddress = $script:PayoutAddress
+        # Loop on a typo instead of aborting a long install over one bad paste.
+        for ($tries = 0; $tries -lt 5; $tries++) {
+            $script:PayoutAddress = Read-Host '  Paste your DGB payout address'
+            $PayoutAddress = ("$script:PayoutAddress").Trim()
+            if ($PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') { break }
+            Write-Host '  That does not look like a DigiByte address (should start with D, S, or dgb1). Try again.' -ForegroundColor Yellow
+            $PayoutAddress = ''
+        }
     }
     if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
-        throw 'That does not look like a DigiByte address. Re-run and paste a valid D..., S..., or dgb1... address.'
+        throw 'No valid DigiByte address provided. Re-run and paste a valid D..., S..., or dgb1... address.'
     }
 
     # --- Prerequisites ------------------------------------------------------
