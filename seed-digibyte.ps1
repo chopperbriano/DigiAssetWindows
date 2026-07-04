@@ -7,23 +7,27 @@
 
     Works for ANY DigiByte Core wallet, not just DigiAsset.
 
-.PARAMETER SnapshotUrl  URL of snapshot.json on your Cloudflare R2. Required.
+    Typical use: install DigiByte Core, START it once and CLOSE it (so the data
+    directory exists), then run this to seed the blockchain from R2.
+
+.PARAMETER SnapshotUrl  URL of snapshot.json. Defaults to the official R2 feed, so
+                        normally you pass nothing.
 .PARAMETER DataDir      DigiByte data directory to seed.
                         Default: %APPDATA%\DigiByte (DigiByte Core's own default).
                         Use C:\DigiByte\data for the DigiAsset layout.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -SnapshotUrl https://pub-xxxx.r2.dev/snapshot.json
-    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -SnapshotUrl https://pub-xxxx.r2.dev/snapshot.json -DataDir C:\DigiByte\data
+    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1
+    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -DataDir C:\DigiByte\data
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][string]$SnapshotUrl,
+    [string]$SnapshotUrl = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json',
     [string]$DataDir = (Join-Path $env:APPDATA 'DigiByte')
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.1.1'
+$ScriptVersion = '1.2.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 
 # Resumable BITS download with live %/speed/ETA; falls back to a plain download.
@@ -70,8 +74,16 @@ Say "=== Seed DigiByte wallet from snapshot  (v$ScriptVersion) ===" 'Cyan'
 if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw 'tar.exe not found (needs Windows 10 1803+ / Windows 11).' }
 
 Say "Fetching manifest: $SnapshotUrl" 'Gray'
-$m = Invoke-RestMethod -Uri $SnapshotUrl -TimeoutSec 30
-if (-not $m.digibyte -or -not $m.baseUrl) { throw 'Manifest is missing digibyte / baseUrl.' }
+# Parse defensively: R2 serves .json as octet-stream, so Invoke-RestMethod would
+# hand back raw text instead of an object. Fetch text, strip any BOM, parse.
+$m = $null
+try {
+    $resp = Invoke-WebRequest -Uri $SnapshotUrl -UseBasicParsing -TimeoutSec 30
+    $txt = $resp.Content
+    if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
+    $m = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+} catch { throw "Could not fetch/parse manifest ($SnapshotUrl): $($_.Exception.Message)" }
+if (-not $m -or -not $m.digibyte -or -not $m.baseUrl) { throw 'Manifest is missing digibyte / baseUrl.' }
 $base = ("$($m.baseUrl)").TrimEnd('/')
 $url  = "$base/$($m.digibyte.file)"
 Say ("Snapshot: {0}   height {1:N0}   DigiByte {2}" -f $m.digibyte.file,[int]$m.digibyte.height,$m.digibyte.version) 'White'
