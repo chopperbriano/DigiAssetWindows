@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.10.0'
+$SCRIPT_VERSION = '2.11.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -745,10 +745,26 @@ function Write-DigiByteConf {
 
 function Write-NodeConfig($rpc) {
     Ensure-Dir $DigiAssetDir
-    if (Test-Path $NodeConfig) { Log '  config.cfg already exists - leaving it untouched.'; return }
+    if (Test-Path $NodeConfig) {
+        # Repair, don't clobber. The local pool (index 0) subscribes by default and
+        # needs a payout address; without psp0payout it falls back to the _psppayout
+        # label and CRITICALs trying to mint one from a wallet that may not exist.
+        # Add any missing psp0 payout line so an older/partial config still works.
+        $existing = Get-Content $NodeConfig
+        if ($PayoutAddress -and -not ($existing -match '^psp0payout=')) {
+            Add-Content -Path $NodeConfig -Value @("psp0subscribe=1","psp0payout=$PayoutAddress") -Encoding ASCII
+            Log '  config.cfg existed - added missing local-pool payout (psp0).' 'OK'
+        } else {
+            Log '  config.cfg already exists - leaving it untouched.'
+        }
+        return
+    }
     $lines = @(
         "rpcbind=127.0.0.1","rpcport=$RpcPort","rpcuser=$($rpc.user)","rpcpassword=$($rpc.pass)",
         "ipfspath=http://localhost:5001/api/v0/",
+        # Pool 0 = local pool (your own pins); pool 1 = the DigiStamp pool you join.
+        # Both get a real payout address so neither needs to mint one from the wallet.
+        "psp0subscribe=1","psp0payout=$PayoutAddress",
         "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
         "pruneage=5760","bootstrapchainstate=1"
     )
