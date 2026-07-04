@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.9.2'
+$SCRIPT_VERSION = '2.10.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1175,7 +1175,8 @@ function Invoke-Install {
 function Invoke-LaunchNode {
     Ensure-Dir $LogDir
     Log "----- launch-node (script v$SCRIPT_VERSION) -----"
-    if (Test-ProcRunning 'DigiAssetWindows') { Log 'launch-node: node already running.' 'OK'; return }
+    Log "launch-node: exe=$NodeExe  workdir=$DigiAssetDir"
+    if (-not (Test-Path $NodeExe)) { Log "launch-node: node exe NOT FOUND at $NodeExe - cannot start (re-run the installer or update-binaries.ps1)." 'ERROR'; return }
 
     # This task runs AS THE USER, so per-user paths + installs land in the right
     # profile. Ensure IPFS Desktop is actually installed (repairs the rare genuine
@@ -1186,28 +1187,43 @@ function Invoke-LaunchNode {
     }
     Start-IpfsDesktop | Out-Null
 
-    # The node depends on IPFS (DB bootstrap + pinning) and DigiByte Core RPC.
-    # Wait for both so it doesn't FATAL on "IPFS Exception: Timeout". We wait for
-    # DigiByte's RPC to RESPOND, not for a full sync - the node follows the sync
-    # as it progresses, which can take hours or days.
-    Log 'launch-node: waiting for IPFS API (:5001) - IPFS Desktop can take a bit to boot...'
-    if (-not (Wait-ForIpfs 300)) { Log 'launch-node: IPFS API still not up after 5 min; starting anyway (node will retry).' 'WARN' }
-    Log 'launch-node: waiting for DigiByte RPC to respond (NOT full sync)...'
-    if (-not (Wait-ForDigiByteRpc 300)) { Log 'launch-node: DigiByte RPC still not up after 5 min; starting anyway.' 'WARN' }
+    # Persistent supervisor: keep the node alive for the whole logon session. The
+    # node's task has no execution-time limit, so we never permanently give up
+    # (the old 8-try loop quit while a freshly-seeded wallet was still verifying
+    # the chain and its RPC wasn't answering, and nothing restarted it after).
+    # The node needs IPFS (:5001) + DigiByte RPC (:14022); a seeded wallet can take
+    # a long time to VERIFY before RPC answers, so we wait patiently the first time,
+    # then (re)start the node whenever it exits, logging PID + uptime each cycle.
+    $firstTime = $true
+    while ($true) {
+        if (Test-ProcRunning 'DigiAssetWindows') { Start-Sleep -Seconds 60; continue }
 
-    # Supervise the launch: if the node dies quickly (a transient IPFS/DigiByte
-    # hiccup during the long early sync), re-check the deps and retry, bounded,
-    # so it doesn't just give up while its dependencies settle.
-    for ($attempt = 1; $attempt -le 8; $attempt++) {
-        if (Test-ProcRunning 'DigiAssetWindows') { Log 'launch-node: node is running.' 'OK'; return }
+        if ($firstTime) {
+            Log 'launch-node: waiting for IPFS API (:5001) - IPFS Desktop can take a bit to boot...'
+            if (-not (Wait-ForIpfs 600)) { Log 'launch-node: IPFS API not up after 10 min; starting node anyway (it retries internally).' 'WARN' }
+            Log 'launch-node: waiting for DigiByte RPC (a seeded wallet may still be verifying the chain - this can take a while)...'
+            if (-not (Wait-ForDigiByteRpc 1800)) { Log 'launch-node: DigiByte RPC not up after 30 min; starting node anyway.' 'WARN' }
+            $firstTime = $false
+        }
+
+        $t0 = Get-Date
+        Log 'launch-node: starting node...'
         Start-Node | Out-Null
-        Start-Sleep -Seconds 30
-        if (Test-ProcRunning 'DigiAssetWindows') { Log "launch-node: node running (attempt $attempt)." 'OK'; return }
-        Log "launch-node: node exited quickly (attempt $attempt) - re-checking IPFS/DigiByte and retrying..." 'WARN'
+        Start-Sleep -Seconds 8
+        $proc = Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($proc) {
+            Log "launch-node: node started (PID $($proc.Id))." 'OK'
+            while (Test-ProcRunning 'DigiAssetWindows') { Start-Sleep -Seconds 30 }
+            Log ("launch-node: node exited after {0}s - re-checking deps and restarting." -f [int]((Get-Date)-$t0).TotalSeconds) 'WARN'
+        } else {
+            Log ("launch-node: node did not stay up ({0}s after launch). Run it in a window to see the error: {1}" -f [int]((Get-Date)-$t0).TotalSeconds, $NodeExe) 'WARN'
+        }
+
+        # Backoff + re-verify deps before restarting so a crashing node can't tight-loop.
+        Start-Sleep -Seconds 20
         Wait-ForIpfs 120 | Out-Null
-        Wait-ForDigiByteRpc 120 | Out-Null
+        Wait-ForDigiByteRpc 300 | Out-Null
     }
-    Log 'launch-node: node would not stay up after retries - check IPFS Desktop + the DigiByte wallet.' 'WARN'
 }
 
 # ---------------------------------------------------------------------------
