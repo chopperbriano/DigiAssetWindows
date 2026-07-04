@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.9.0'
+$SCRIPT_VERSION = '2.9.1'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -641,6 +641,21 @@ function Start-IpfsDesktop {
     if (-not (Test-ProcRunning 'IPFS Desktop')) { Start-Process -FilePath 'cmd.exe' -ArgumentList "/c start `"`" `"$IpfsDesktopExe`"" -WindowStyle Hidden }
     return $true
 }
+# IPFS Desktop is a PER-USER install. The SYSTEM maintenance task's $env:LOCALAPPDATA
+# points at SYSTEM's own profile, so $IpfsDesktopExe (built from it) can't see the
+# user's copy. Search every user profile, and treat a running process as installed.
+function Get-IpfsDesktopExe {
+    if (Test-Path $IpfsDesktopExe) { return $IpfsDesktopExe }
+    try {
+        $hit = Get-ChildItem 'C:\Users\*\AppData\Local\Programs\IPFS Desktop\IPFS Desktop.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    } catch {}
+    return $null
+}
+function Test-IpfsDesktopInstalled {
+    if (Test-ProcRunning 'IPFS Desktop') { return $true }
+    return [bool](Get-IpfsDesktopExe)
+}
 
 function Get-DigiAssetLatestTag {
     try { return (Invoke-GitHubApi "https://api.github.com/repos/$Repo/releases/latest").tag_name } catch { return '' }
@@ -1159,6 +1174,15 @@ function Invoke-LaunchNode {
     Log "----- launch-node (script v$SCRIPT_VERSION) -----"
     if (Test-ProcRunning 'DigiAssetWindows') { Log 'launch-node: node already running.' 'OK'; return }
 
+    # This task runs AS THE USER, so per-user paths + installs land in the right
+    # profile. Ensure IPFS Desktop is actually installed (repairs the rare genuine
+    # loss correctly, unlike the SYSTEM maintenance task) and started.
+    if (-not (Test-IpfsDesktopInstalled)) {
+        Log 'launch-node: IPFS Desktop not installed - installing now...' 'WARN'
+        try { Install-IpfsDesktop | Out-Null } catch { Log "launch-node: IPFS Desktop install failed: $($_.Exception.Message)" 'WARN' }
+    }
+    Start-IpfsDesktop | Out-Null
+
     # The node depends on IPFS (DB bootstrap + pinning) and DigiByte Core RPC.
     # Wait for both so it doesn't FATAL on "IPFS Exception: Timeout". We wait for
     # DigiByte's RPC to RESPOND, not for a full sync - the node follows the sync
@@ -1224,11 +1248,13 @@ function Invoke-Service {
         }
     } catch { $problems += "DigiAsset update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
-    # IPFS Desktop self-updates (Electron autoupdater) - just ensure it's installed.
-    if (-not (Test-Path $IpfsDesktopExe)) {
-        Log 'IPFS Desktop missing - reinstalling.' 'WARN'
-        try { Install-IpfsDesktop | Out-Null } catch { $problems += "IPFS Desktop reinstall failed: $($_.Exception.Message)" }
-    }
+    # IPFS Desktop self-updates (Electron autoupdater). It's a PER-USER install, so
+    # a running process or a copy in ANY user profile counts as present. This SYSTEM
+    # task must NOT reinstall from its own (SYSTEM) profile path - that churns a
+    # useless reinstall every cycle. Genuine repair happens in the user's logon
+    # launcher (Invoke-LaunchNode), which runs in the correct profile.
+    if (Test-IpfsDesktopInstalled) { Log 'IPFS Desktop present.' 'OK' }
+    else { Log 'IPFS Desktop not found in any user profile - will be restored at next logon.' 'WARN' }
 
     # --- 4. Reinstall missing binaries (the GUI apps relaunch at next login) -
     if (-not (Test-Path (Get-Digibyted))) {
