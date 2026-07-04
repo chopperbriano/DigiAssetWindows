@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.8.0'
+$SCRIPT_VERSION = '2.8.1'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -839,8 +839,17 @@ function Restore-Snapshot {
     if (-not $url) { return }
     if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { Log '  fast-sync needs tar (Win10 1803+); syncing normally.' 'WARN'; return }
     Log 'Fast-sync: fetching snapshot manifest...' 'STEP'
-    try { $m = Invoke-RestMethod -Uri $url -TimeoutSec 30 } catch { Log '  snapshot manifest unreachable - syncing normally.' 'WARN'; return }
-    if (-not $m.baseUrl) { Log '  snapshot manifest has no baseUrl - syncing normally.' 'WARN'; return }
+    # Parse defensively: R2/other hosts may serve .json as octet-stream, in which
+    # case Invoke-RestMethod would hand back raw text instead of an object. Fetch
+    # the text, strip any UTF-8 BOM, and ConvertFrom-Json ourselves.
+    $m = $null
+    try {
+        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+        $txt = $resp.Content
+        if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
+        $m = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+    } catch { Log '  snapshot manifest unreachable/invalid - syncing normally.' 'WARN'; return }
+    if (-not $m -or -not $m.baseUrl) { Log '  snapshot manifest has no baseUrl - syncing normally.' 'WARN'; return }
     $base = ("$($m.baseUrl)").TrimEnd('/')
     if ($m.digibyte -and -not (Test-Path (Join-Path $DgbData 'blocks'))) {
         Ensure-Dir $DgbData
