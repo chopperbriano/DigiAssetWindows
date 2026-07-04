@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.8.2'
+$SCRIPT_VERSION = '2.9.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1131,6 +1131,24 @@ function Invoke-Install {
     Write-Host ''
     Write-Host 'Re-check any time:  powershell -ExecutionPolicy Bypass -File ' -ForegroundColor Gray -NoNewline
     Write-Host "$DigiAssetDir\monitor-node.ps1" -ForegroundColor Green
+
+    # Last thing on screen (most visible) - securing the wallet is a MUST.
+    Write-Host ''
+    Write-Host '============================================================' -ForegroundColor Yellow
+    Write-Host ' ONE MORE THING - CREATE AND ENCRYPT YOUR WALLET (IMPORTANT)' -ForegroundColor Yellow
+    Write-Host '============================================================' -ForegroundColor Yellow
+    Write-Host '  Your DigiByte wallet holds your private keys. Secure it BEFORE it holds coins:' -ForegroundColor White
+    Write-Host '   1. Open the DigiByte wallet (it is starting now / on your taskbar).' -ForegroundColor White
+    Write-Host '   2. Let it create a wallet (accept the default), or File > Create Wallet.' -ForegroundColor White
+    Write-Host '   3. Settings > Encrypt Wallet -> set a STRONG passphrase and WRITE IT DOWN.' -ForegroundColor White
+    Write-Host '      If you lose that passphrase, your coins are GONE - nobody can recover them.' -ForegroundColor Red
+    Write-Host '   4. File > Backup Wallet... -> save wallet.dat somewhere safe/offline.' -ForegroundColor White
+    Write-Host '   Encrypting does NOT affect RECEIVING payouts; you only unlock when YOU send.' -ForegroundColor Gray
+    Write-Host '============================================================' -ForegroundColor Yellow
+
+    # Durable proof of completion (the window may close; this file + log line stay).
+    Log "Install completed successfully (script v$SCRIPT_VERSION)." 'OK'
+    try { Set-Content -Path (Join-Path $LogDir 'INSTALL-COMPLETE.txt') -Value ("DigiAsset for Windows install completed - script v$SCRIPT_VERSION - " + (Get-Date).ToString('s')) -Encoding ascii } catch {}
 }
 
 # ---------------------------------------------------------------------------
@@ -1286,9 +1304,19 @@ try {
         'LaunchNode' { Invoke-LaunchNode }
         default      { Invoke-Install }
     }
+    # The self-elevated install runs in its own window that would otherwise close
+    # the instant the script ends - leaving no proof it finished. Hold it open for
+    # a manual, interactive install (never for the headless SYSTEM service task).
+    if ($Mode -eq 'Install' -and [Environment]::UserInteractive) {
+        try { Read-Host "`nAll done - press Enter to close this window" | Out-Null } catch {}
+    }
 } catch {
     Log ("FATAL: $($_.Exception.Message)") 'ERROR'
     if ($Mode -eq 'Service') { Alert "maintenance run failed: $($_.Exception.Message)" }
-    elseif ($Mode -eq 'Install') { Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red; Write-Host "See $LogFile" -ForegroundColor Gray }
+    elseif ($Mode -eq 'Install') {
+        Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "See $LogFile" -ForegroundColor Gray
+        if ([Environment]::UserInteractive) { try { Read-Host 'Press Enter to close' | Out-Null } catch {} }
+    }
     exit 1
 }
