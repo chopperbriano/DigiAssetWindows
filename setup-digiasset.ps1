@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.9.1'
+$SCRIPT_VERSION = '2.9.2'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -694,7 +694,10 @@ function Update-PoolServer {
 function Start-Node {
     if (-not (Test-Path $NodeExe)) { return $false }
     Add-ProgramAllowRule 'DigiAsset node' $NodeExe
-    if (-not (Test-ProcRunning 'DigiAssetWindows')) { Start-Process -FilePath $NodeExe -WorkingDirectory $DigiAssetDir }
+    # -WindowStyle Normal forces a VISIBLE console. Without it the node inherits
+    # the hidden show-state of the logon task's hidden PowerShell, so its live
+    # dashboard runs but never appears on the desktop.
+    if (-not (Test-ProcRunning 'DigiAssetWindows')) { Start-Process -FilePath $NodeExe -WorkingDirectory $DigiAssetDir -WindowStyle Normal }
     return $true
 }
 
