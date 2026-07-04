@@ -24,7 +24,7 @@ param(
     [int]   $WaitForCoreSeconds = 300
 )
 $ErrorActionPreference = "Stop"
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -92,7 +92,9 @@ function Start-Exe([string]$name) {
         Write-Host "$name already running." -ForegroundColor Gray
         return
     }
-    Start-Process -FilePath $exe -WorkingDirectory $Root
+    # -WindowStyle Normal forces a VISIBLE console. Without it the dashboards
+    # inherit the hidden show-state if this script is run from a hidden task.
+    Start-Process -FilePath $exe -WorkingDirectory $Root -WindowStyle Normal
     Write-Host "Started $name" -ForegroundColor Green
 }
 Start-Exe "DigiAssetWindows.exe"
