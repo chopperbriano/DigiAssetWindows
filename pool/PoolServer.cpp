@@ -239,10 +239,32 @@ namespace {
         return true;
     }
 
+    // The pool server's own public IP, looked up once (via ip-api) and cached.
+    // A node that registers from loopback/LAN - e.g. one running ON the pool box,
+    // which the setup guide recommends - has no public client IP and would be
+    // invisible on the map. We plot it at the pool's own location instead.
+    std::string serverPublicIp() {
+        static std::mutex m;
+        static std::string cached;
+        static bool tried = false;
+        std::lock_guard<std::mutex> lk(m);
+        if (tried) return cached;
+        tried = true;
+        try {
+            std::string ip = CurlHandler::get("http://ip-api.com/line/?fields=query", 8000);
+            size_t a = ip.find_first_not_of(" \t\r\n");
+            size_t b = ip.find_last_not_of(" \t\r\n");
+            if (a != std::string::npos) ip = ip.substr(a, b - a + 1); else ip.clear();
+            if (isPublicIp(ip)) cached = ip;
+        } catch (...) {}
+        return cached;
+    }
+
     // Work out the registering node's real IP. Behind the Caddy reverse proxy
     // every connection arrives from 127.0.0.1, so the true client address is in
     // X-Forwarded-For (Caddy sets it) or X-Real-IP; fall back to the socket peer
-    // for direct connections. Returns "" if no public IP can be determined.
+    // for direct connections. If none is a public IP (a co-located/LAN node),
+    // fall back to the pool server's own public IP so it still maps.
     std::string resolveClientIp(const std::string& headers, const std::string& socketPeer) {
         std::string xff = getHeaderValue(headers, "X-Forwarded-For");
         if (!xff.empty()) {
@@ -256,7 +278,7 @@ namespace {
         std::string xrip = getHeaderValue(headers, "X-Real-IP");
         if (isPublicIp(xrip)) return xrip;
         if (isPublicIp(socketPeer)) return socketPeer;
-        return "";
+        return serverPublicIp();
     }
 
     // Geolocate a batch of IPs via ip-api.com (free, no key, server-side only).
