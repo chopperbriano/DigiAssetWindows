@@ -643,6 +643,23 @@ unsigned int PoolDatabase::countTotalNodes() {
     return count;
 }
 
+// Count of ACTIVE nodes: seen in the last 7 days AND not failed-out of dial-back
+// verification (verifyFails < 3). Matches exactly the set buildNodesJson()
+// publishes and the count nodes/the map show, so all surfaces agree.
+unsigned int PoolDatabase::countActiveNodes() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t cutoff = nowUnix() - 7 * 24 * 60 * 60;
+    const char* sql = "SELECT COUNT(*) FROM nodes WHERE lastSeen >= ? AND verifyFails < 3;";
+    sqlite3_stmt* stmt = nullptr;
+    unsigned int count = 0;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, cutoff);
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = (unsigned int) sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    return count;
+}
+
 unsigned int PoolDatabase::countPermanentAssets() {
     std::lock_guard<std::mutex> lk(_mutex);
     const char* sql = "SELECT COUNT(DISTINCT assetId) FROM permanent_assets;";

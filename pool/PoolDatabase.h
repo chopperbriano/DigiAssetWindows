@@ -92,6 +92,7 @@ public:
     // Dashboard counters.
     unsigned int countNodesSeenSince(int64_t unixSeconds);
     unsigned int countTotalNodes();
+    unsigned int countActiveNodes();   // seen in last 7d AND verifyFails < 3 (matches /nodes.json + map)
     unsigned int countPermanentAssets();
     unsigned int countPermanentPages();
 

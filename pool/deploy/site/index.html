@@ -98,7 +98,7 @@
         <div class="stat"><div class="num" id="statReceived">&mdash;</div><div class="lbl">Donated in</div></div>
         <div class="stat"><div class="num" id="statTreasury">&mdash;</div><div class="lbl">In treasury</div></div>
         <div class="stat"><div class="num" id="statPaid">&mdash;</div><div class="lbl">Paid to hosts</div></div>
-        <div class="stat"><div class="num" id="statNodes">&mdash;</div><div class="lbl">Verified nodes</div></div>
+        <div class="stat"><div class="num" id="statNodes">&mdash;</div><div class="lbl">Verified / active nodes</div></div>
       </div>
       <div class="donate">
         <div id="qr" aria-label="Donation address QR code"></div>
@@ -161,7 +161,7 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     document.getElementById("statReceived").textContent = fmt(d.receivedTotal);
     document.getElementById("statTreasury").textContent = fmt(d.treasuryBalance);
     document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
-    document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + (d.totalNodes || 0);
+    document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + ((d.activeNodes != null ? d.activeNodes : d.totalNodes) || 0);
     if (window._plotNodes) window._plotNodes(d.nodes);
 
     var addr = d.donationAddress || "";

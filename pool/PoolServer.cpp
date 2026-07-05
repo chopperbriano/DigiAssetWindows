@@ -707,6 +707,7 @@ void PoolServer::handleStats(std::string& outBody) {
     int64_t hourAgo = std::chrono::duration_cast<std::chrono::seconds>(
                           std::chrono::system_clock::now().time_since_epoch()).count() - 3600;
     unsigned int verifiedNodes = _db.countVerifiedSince(hourAgo);
+    unsigned int activeNodes = _db.countActiveNodes();   // 7-day, not failed-out (matches the map/nodes)
     unsigned int totalNodes = _db.countTotalNodes();
     auto recent = _db.getRecentPayouts(15);
 
@@ -722,6 +723,7 @@ void PoolServer::handleStats(std::string& outBody) {
        << "\"paidToHosts\":" << paidToHosts << ","
        << "\"payoutCount\":" << paidCount << ","
        << "\"verifiedNodes\":" << verifiedNodes << ","
+       << "\"activeNodes\":" << activeNodes << ","
        << "\"totalNodes\":" << totalNodes << ","
        << "\"nodes\":" << nodesJson << ","
        << "\"explorerTxPrefix\":\"" << jsonEscape(explorerPrefix) << "\","
