@@ -33,7 +33,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.0.0'
+$SCRIPT_VERSION = '1.1.0'
 $Repo = 'https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master'
 $Rel  = 'https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download'
 
@@ -167,6 +167,37 @@ try {
 Step 6 'Starting the pool stack'
 if (Test-Path $startPs) {
     try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startPs -Root $Root } catch { Say "  start-digistamp reported: $($_.Exception.Message)" 'Yellow' }
+}
+
+# --- 7. Smoke test (prove the exe AND the website are actually up) ---------
+Step 7 'Smoke test'
+Start-Sleep -Seconds 5   # let processes bind their ports
+function Check($name, $ok, $note) { if ($ok) { Say ("  [OK]   $name") 'Green' } else { Say ("  [FAIL] $name $note") 'Yellow' } }
+
+# DigiByte RPC
+$dc = Read-Conf (Join-Path $DigiByteDir 'digibyte.conf'); $dgbOk = $false
+if ($dc['rpcuser'] -and $dc['rpcpassword']) {
+    try {
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($dc['rpcuser']):$($dc['rpcpassword'])"))
+        $null = Invoke-RestMethod -Uri 'http://127.0.0.1:14022' -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 6 -Body '{"jsonrpc":"1.0","id":"t","method":"getblockcount","params":[]}'; $dgbOk = $true
+    } catch {}
+}
+Check 'DigiByte RPC (14022)' $dgbOk '- wallet may still be starting/verifying'
+
+# IPFS
+$ipfsOk = $false; try { $null = Invoke-WebRequest 'http://127.0.0.1:5001/api/v0/version' -Method Post -UseBasicParsing -TimeoutSec 5; $ipfsOk = $true } catch {}
+Check 'IPFS API (5001)' $ipfsOk '- start IPFS Desktop'
+
+# Pool exe + its local HTTP API
+Check 'Pool exe (DigiAssetPoolServer) running' ([bool](Get-Process DigiAssetPoolServer -ErrorAction SilentlyContinue)) '- check its window'
+$poolHttp = $false; try { $null = Invoke-WebRequest 'http://127.0.0.1:14028/nodes.json' -UseBasicParsing -TimeoutSec 6; $poolHttp = $true } catch {}
+Check 'Pool API (127.0.0.1:14028)' $poolHttp '- pool exe not serving yet'
+
+# Website (Caddy)
+if ($Domain) {
+    Check 'Caddy website process' ([bool](Get-Process caddy -ErrorAction SilentlyContinue)) '- re-run setup-caddy.ps1'
+    $siteOk = $false; try { $siteOk = ((Invoke-WebRequest "https://$Domain/" -UseBasicParsing -TimeoutSec 12).StatusCode -eq 200) } catch {}
+    Check "Website https://$Domain" $siteOk '- needs DNS + 80/443 forwarded; also test from OUTSIDE your LAN'
 }
 
 Write-Host ''
