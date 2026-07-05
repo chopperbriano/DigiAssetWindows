@@ -57,7 +57,7 @@ put it in `C:\DigiAssetWindows` (next to the node), **or** build it from source
 ## 3. Write `pool.cfg`
 
 Create `C:\DigiAssetWindows\pool.cfg`. Reuse the **same** `rpcuser`/`rpcpassword` that
-the installer put in `C:\DigiByte\data\digibyte.conf` so the pool can reach
+the installer put in `C:\DigiByte\digibyte.conf` so the pool can reach
 DigiByte Core. Minimal starting config:
 
 ```ini
@@ -65,7 +65,7 @@ poolport=14028
 pooldbpath=pool.db
 ipfspath=http://localhost:5001/api/v0/
 
-# DigiByte Core RPC (copy from C:\DigiByte\data\digibyte.conf)
+# DigiByte Core RPC (copy from C:\DigiByte\digibyte.conf)
 rpcuser=digiasset
 rpcpassword=PASTE_THE_SAME_PASSWORD_HERE
 rpcport=14022

@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.13.0'
+$SCRIPT_VERSION = '2.14.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -74,7 +74,7 @@ $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasse
 # a fetch just fails and the installer syncs normally (safe).
 $DefaultSnapshotUrl = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json'
 
-$DgbData        = Join-Path $DigiByteDir  'data'          # blockchain + digibyte.conf
+$DgbData        = Join-Path $DigiByteDir  'Data'          # blockchain (blocks/chainstate/wallets)
 # DigiByte ships a win64 NSIS installer (not a zip). After a silent install the
 # daemon lands at <DigiByteDir>\daemon\digibyted.exe; we discover the real path
 # at install time and remember it here (see Get-Digibyted).
@@ -86,7 +86,7 @@ $PoolExe        = Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'  # present o
 $IpfsExe        = Join-Path $DigiAssetDir 'ipfs.exe'
 $IpfsRepo       = Join-Path $DigiAssetDir 'ipfs-repo'
 $NodeConfig     = Join-Path $DigiAssetDir 'config.cfg'
-$DgbConf        = Join-Path $DgbData      'digibyte.conf'
+$DgbConf        = Join-Path $DigiByteDir  'digibyte.conf'  # conf lives in C:\DigiByte (NOT in Data)
 $LogDir         = Join-Path $DigiAssetDir 'logs'
 $LogFile        = Join-Path $LogDir       'setup.log'
 $StateFile      = Join-Path $DigiAssetDir 'state\versions.json'
@@ -541,14 +541,14 @@ function Start-DigiByte {
     if (-not (Test-Path $dgb)) { return $false }
     Add-ProgramAllowRule 'DigiByte (digibyted)' $dgb
     if (-not (Test-ProcRunning 'digibyted')) {
-        Start-Process $dgb -ArgumentList "-datadir=`"$DgbData`"" -WindowStyle Hidden
+        Start-Process $dgb -ArgumentList "-datadir=`"$DgbData`" -conf=`"$DgbConf`"" -WindowStyle Hidden
     }
     return $true
 }
 
 function Register-DigiByteTask {
     $dgb = Get-Digibyted
-    Register-DaemonTask $TaskDigiByte $dgb "-datadir=`"$DgbData`"" (Split-Path -Parent $dgb)
+    Register-DaemonTask $TaskDigiByte $dgb "-datadir=`"$DgbData`" -conf=`"$DgbConf`"" (Split-Path -Parent $dgb)
 }
 
 # The GUI wallet (visible, taskbar). Served RPC comes from digibyte-qt with
@@ -563,7 +563,7 @@ function Start-DigiByteWallet {
     if (-not (Test-Path $qt)) { return $false }
     Add-ProgramAllowRule 'DigiByte wallet (digibyte-qt)' $qt
     if (-not (Test-ProcRunning 'digibyte-qt')) {
-        Start-Process $qt -ArgumentList "-datadir=$DgbData"   # $DgbData has no spaces
+        Start-Process $qt -ArgumentList "-datadir=$DgbData -conf=$DgbConf"   # neither path has spaces
     }
     return $true
 }
@@ -1028,7 +1028,7 @@ function Invoke-Install {
     $rpc = Write-DigiByteConf
     Restore-Snapshot   # fast-sync: extract pre-synced blockchain + chain.db before first launch (fresh install only)
     if (Get-ScheduledTask -TaskName $TaskDigiByte -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskDigiByte -Confirm:$false }  # drop legacy headless task
-    if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData" }
+    if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData -conf=$DgbConf" }
     Start-DigiByteWallet | Out-Null
     Log '  DigiByte wallet (GUI) running + opens at every logon. Blockchain syncs in the background.' 'OK'
 

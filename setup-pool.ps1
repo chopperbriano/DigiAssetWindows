@@ -95,7 +95,7 @@ $poolCfg = Join-Path $Root 'pool.cfg'
 if (Test-Path $poolCfg) {
     Say '  pool.cfg already exists - leaving it untouched.' 'Yellow'
 } else {
-    $c = Read-Conf (Join-Path $DigiByteDir 'data\digibyte.conf')
+    $c = Read-Conf (Join-Path $DigiByteDir 'digibyte.conf')
     $ru = $c['rpcuser']; $rp = $c['rpcpassword']
     $rport = if ($c['rpcport']) { $c['rpcport'] } else { '14022' }
     if (-not $ru -or -not $rp) { Say '  WARNING: could not read RPC creds from digibyte.conf - edit rpcuser/rpcpassword in pool.cfg by hand.' 'Yellow' }

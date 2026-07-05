@@ -39,7 +39,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.1.0'
+$ScriptVersion = '2.2.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -59,7 +59,9 @@ if (-not $DataDir) {
     else   { $DataDir = Join-Path $DigiByteDir 'data' }
 }
 $DgbData = $DataDir
-$DgbConf = Join-Path $DgbData 'digibyte.conf'
+# Our layout keeps digibyte.conf in C:\DigiByte (parent of Data); a stock install
+# keeps it in the datadir. Prefer the parent, fall back to the datadir.
+$DgbConf = if (Test-Path (Join-Path $DigiByteDir 'digibyte.conf')) { Join-Path $DigiByteDir 'digibyte.conf' } else { Join-Path $DgbData 'digibyte.conf' }
 Say "=== Make DigiAsset fast-sync snapshot ($Component)  (v$ScriptVersion) ===" 'Cyan'
 if ($Component -ne 'manifest' -and -not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw "tar.exe not found (needs Windows 10 1803+ / Windows 11)." }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
