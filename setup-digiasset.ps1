@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.15.0'
+$SCRIPT_VERSION = '2.16.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -731,39 +731,118 @@ function Start-Node {
 # ---------------------------------------------------------------------------
 function Write-DigiByteConf {
     Ensure-Dir $DgbData
-    # Feature settings the node needs (DigiDollar + block/bloom filter indexes),
-    # and seed peers. Applied to a fresh conf; missing ones appended to an
-    # existing conf on re-run.
-    $features = @('digidollar=1','blockfilterindex=1','peerblockfilters=1','peerbloomfilters=1')
-    $addnodes = @(
-        '191.81.59.115','175.45.182.173','45.76.235.153','24.74.186.115','24.101.88.154',
-        '8.214.25.169','47.75.38.245','64.182.71.30','64.182.71.55','64.182.71.56'
-    )
+    Ensure-Dir $DigiByteDir   # digibyte.conf lives in C:\DigiByte (parent of Data)
     $cfg = Read-Conf $DgbConf
     $rpcUser = $cfg['rpcuser']; $rpcPass = $cfg['rpcpassword']
+
+    # RAM-adaptive dbcache: 25% of physical RAM, capped at 8192 MB (the service-node
+    # target), floor 512 - so it never OOMs a typical wallet + IPFS + node box.
+    $ramMB = 4096; try { $ramMB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch {}
+    $dbcache = [Math]::Max(512, [Math]::Min(8192, [int]($ramMB * 0.25)))
+
+    # Every setting this node needs to be a good public service node. Used to build
+    # a fresh conf and to top up a pre-existing one (append-missing on re-run).
+    $required = [ordered]@{
+        server='1'; listen='1'; discover='1'; dnsseed='1'; port='12024'; deprecatedrpc='addresses'
+        prune='0'; txindex='1'; coinstatsindex='1'
+        blockfilterindex='basic'; peerblockfilters='1'; peerbloomfilters='1'
+        blocksonly='0'; persistmempool='1'; maxmempool='1024'; mempoolexpiry='336'; datacarrier='1'
+        maxconnections='400'; maxuploadtarget='0'; dbcache="$dbcache"; par='0'; disablewallet='0'
+        digidollar='1'; digidollarstatsindex='1'
+        rpcport="$RpcPort"; rpcbind='127.0.0.1'; rpcallowip='127.0.0.1'; rpcthreads='16'; rpcworkqueue='128'
+        rest='0'; logtimestamps='1'; logips='0'; shrinkdebugfile='1'
+    }
+    $addnodes = @('64.182.71.55:12024','64.182.71.56:12024')
+
     if (-not $rpcUser -or -not $rpcPass) {
         $rpcUser = 'digiasset'; $rpcPass = New-Password 32
-        $lines = @(
-            "rpcuser=$rpcUser","rpcpassword=$rpcPass","rpcbind=127.0.0.1","rpcport=$RpcPort",
-            "rpcallowip=127.0.0.1","whitelist=127.0.0.1","listen=1","server=1","txindex=1","deprecatedrpc=addresses"
-        )
-        $lines += $features
-        $lines += ($addnodes | ForEach-Object { "addnode=$_" })
-        Set-Content -Path $DgbConf -Value $lines -Encoding ASCII
-        Log '  wrote digibyte.conf with fresh RPC credentials + node settings.'
+        $conf = @"
+###############################################################################
+# DigiByte Core Public Service Node Configuration  (written by DigiAsset for Windows)
+#   - Helps the network: inbound peers, tx relay, full historical blocks + indexes
+#   - Forward TCP 12024 from your router to this machine.
+#   - Do NOT expose RPC 14022 to the public internet.
+# Target: DigiByte Core v9.26.x mainnet
+###############################################################################
+
+# --- Node mode ---------------------------------------------------------------
+server=1
+listen=1
+discover=1
+dnsseed=1
+port=12024
+deprecatedrpc=addresses
+
+# --- Full archival node ------------------------------------------------------
+prune=0
+txindex=1
+coinstatsindex=1
+
+# --- Compact block filters ---------------------------------------------------
+blockfilterindex=basic
+peerblockfilters=1
+peerbloomfilters=1
+
+# --- Transaction relay / mempool ---------------------------------------------
+blocksonly=0
+persistmempool=1
+maxmempool=1024
+mempoolexpiry=336
+datacarrier=1
+
+# --- Peers / bandwidth -------------------------------------------------------
+maxconnections=400
+maxuploadtarget=0
+
+# --- Performance -------------------------------------------------------------
+# dbcache auto-sized to 25% of RAM (capped 8192 MB). par=0 auto-detects cores.
+dbcache=$dbcache
+par=0
+
+# --- Wallet ------------------------------------------------------------------
+# Wallet ENABLED (disablewallet=0): the DigiAsset node needs a payout address and
+# the installer auto-creates + asks you to encrypt a wallet. Set to 1 only if you
+# will NOT receive payouts on this box.
+disablewallet=0
+
+# --- DigiDollar --------------------------------------------------------------
+digidollar=1
+digidollarstatsindex=1
+
+# --- RPC (LOCAL ONLY - never port-forward 14022) -----------------------------
+# The DigiAsset node + pool authenticate with these credentials (also copied into
+# config.cfg / pool.cfg). Keep them in sync across all three files.
+rpcport=$RpcPort
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+rpcuser=$rpcUser
+rpcpassword=$rpcPass
+rpcthreads=16
+rpcworkqueue=128
+
+# --- REST / logging ----------------------------------------------------------
+rest=0
+logtimestamps=1
+logips=0
+shrinkdebugfile=1
+
+# --- Seed peers (DNS discovery usually suffices) -----------------------------
+addnode=64.182.71.55:12024
+addnode=64.182.71.56:12024
+"@
+        Set-Content -Path $DgbConf -Value $conf -Encoding ASCII
+        Log "  wrote digibyte.conf (public service node; dbcache=${dbcache}MB) + RPC credentials." 'OK'
     } else {
-        # Existing conf: append any required feature settings + addnodes it is missing.
-        $raw = ''; if (Test-Path $DgbConf) { $raw = (Get-Content $DgbConf -Raw) }
-        $added = @()
-        foreach ($f in $features) {
-            $key = ($f -split '=')[0]
-            if (-not $cfg.ContainsKey($key)) { Add-Content -Path $DgbConf -Value $f -Encoding ASCII; $added += $key }
+        # Existing conf: top up any required setting / addnode it is missing.
+        $raw = (Get-Content $DgbConf -Raw); $added = @()
+        foreach ($k in $required.Keys) {
+            if (-not $cfg.ContainsKey($k)) { Add-Content -Path $DgbConf -Value ("$k=" + $required[$k]) -Encoding ASCII; $added += $k }
         }
         foreach ($ip in $addnodes) {
             if ($raw -notmatch [regex]::Escape("addnode=$ip")) { Add-Content -Path $DgbConf -Value "addnode=$ip" -Encoding ASCII; $added += "addnode=$ip" }
         }
-        if ($added.Count -gt 0) { Log ("  added missing digibyte.conf settings: {0}" -f ($added -join ', ')) }
-        else { Log '  digibyte.conf already has all settings - leaving it.' }
+        if ($added.Count -gt 0) { Log ("  topped up digibyte.conf (added: {0})" -f ($added -join ', ')) }
+        else { Log '  digibyte.conf already complete - leaving it.' }
     }
     return @{ user = $rpcUser; pass = (Read-Conf $DgbConf)['rpcpassword'] }
 }
