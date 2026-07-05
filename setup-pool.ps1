@@ -146,7 +146,12 @@ if (Test-Path $poolCfg) {
         '# Payouts OFF until you fund a wallet + smoke-test (POOL-SETUP.md step 6).',
         'poolpayouts=0',
         'poolpayoutpercent=10',
-        'poolpayoutperiodhours=24'
+        'poolpayoutperiodhours=24',
+        '',
+        '# If the pool wallet is ENCRYPTED, set the passphrase here so the pool can',
+        '# unlock it just for each payout batch and re-lock immediately after.',
+        '# Leave blank for an unencrypted wallet. Keep this file readable only by you.',
+        'poolwalletpassphrase='
     )
     Set-Content -Path $poolCfg -Value $lines -Encoding ASCII
     Say "  + pool.cfg (treasury=$TreasuryAddress, payouts OFF)" 'Green'

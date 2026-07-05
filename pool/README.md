@@ -103,6 +103,7 @@ from the working directory. Keys:
 | `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
 | `poolspendperperiod` | *(unset)* | Fixed DGB budget per period, split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Used only when `poolpayoutpercent` is unset. |
 | `poolpayoutperiodhours` | `24` | Minimum hours between payouts. `[E]` refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
+| `poolwalletpassphrase` | *(unset)* | Passphrase for an **encrypted** pool wallet. When set, `[E]` unlocks the wallet with `walletpassphrase` just for the payout batch and re-locks it immediately after, so encrypted-wallet payouts work unattended. Leave blank for an unencrypted wallet. Keep `pool.cfg` readable only by the operator. |
 | `rpcuser` | *(unset)* | DigiByte Core RPC username — required for wallet `sendtoaddress`, `getbalance`, and the stats page. Copy from your DigiByte Core config. |
 | `rpcpassword` | *(unset)* | DigiByte Core RPC password. |
 | `rpcport` | `14022` | DigiByte Core RPC port. |

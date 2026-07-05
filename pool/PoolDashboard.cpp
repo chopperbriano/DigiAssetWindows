@@ -177,6 +177,36 @@ namespace {
         return respBody.substr(rv + 1, q2 - rv - 1); // the txid
     }
 
+    // Unlock an encrypted wallet for `seconds` so the payout batch can spend.
+    // Returns "" on success, or "ERROR: ..." on failure. A wallet that isn't
+    // encrypted returns error -15 ("running with an unencrypted wallet") - we
+    // treat that as success (nothing to unlock). The passphrase is passed as a
+    // JSON string; walletpassphrase takes no address so there's no injection
+    // surface beyond the passphrase itself (operator-supplied, from pool.cfg).
+    std::string walletUnlock(const std::string& rpcUser, const std::string& rpcPass,
+                             int rpcPort, const std::string& passphrase, int seconds) {
+        // Escape backslash and quote so a passphrase with those chars stays valid JSON.
+        std::string esc;
+        for (char c : passphrase) { if (c == '\\' || c == '"') esc += '\\'; esc += c; }
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"walletpassphrase\","
+                           "\"params\":[\"" + esc + "\"," + std::to_string(seconds) + "]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string resp; long status = 0;
+        try { status = CurlHandler::postJson(url, body, resp, 15000); }
+        catch (const std::exception& e) { return std::string("ERROR: ") + e.what(); }
+        if (resp.find("\"code\":-15") != std::string::npos) return ""; // unencrypted: nothing to do
+        if (status >= 200 && status < 300 && resp.find("\"error\":null") != std::string::npos) return "";
+        return "ERROR: " + resp;
+    }
+
+    // Re-lock the wallet after the payout batch (best-effort; ignore result).
+    void walletLock(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"walletlock\",\"params\":[]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string resp;
+        try { CurlHandler::postJson(url, body, resp, 15000); } catch (...) {}
+    }
+
     // Wallet spendable balance via DigiByte Core RPC. Negative sentinel on any
     // failure so callers can tell "0 DGB" from "couldn't reach core".
     double getWalletBalance(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
@@ -311,11 +341,27 @@ void PoolDashboard::processInput() {
                 int rpcPort = 14022;
                 try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
 
+                // If the pool wallet is encrypted, unlock it for the batch. The
+                // operator sets poolwalletpassphrase in pool.cfg; we unlock just
+                // long enough to send and re-lock immediately after, so the
+                // wallet is never left open. Without a passphrase an encrypted
+                // wallet returns -13 ("walletpassphrase first") per send below.
+                std::string walletPass = cfg.count("poolwalletpassphrase") ? cfg["poolwalletpassphrase"] : "";
+                bool unlockedNow = false;
+                if (!walletPass.empty()) {
+                    // Generous window (nodes * 5s + 60s) covers a slow batch.
+                    int unlockSecs = (int)(_pendingPayouts.size() * 5 + 60);
+                    std::string ue = walletUnlock(rpcUser, rpcPass, rpcPort, walletPass, unlockSecs);
+                    if (ue.empty()) { unlockedNow = true; addLog("Wallet unlocked for payout."); }
+                    else addLog("WARNING: wallet unlock failed (" + ue + "); sends may fail with -13.");
+                }
+
                 // Execute the exact per-node plan (weighted by coverage x
                 // reliability) computed and shown at [E] time.
                 int success = 0;
                 int failed = 0;
                 int ambiguous = 0;
+                bool sawLocked = false;
                 for (const auto& pay: _pendingPayouts) {
                     const std::string& addr = pay.first;
                     double amt = pay.second;
@@ -331,6 +377,7 @@ void PoolDashboard::processInput() {
                         addLog("    -> VERIFY via 'listtransactions' before re-sending; recorded as PENDING.");
                         ambiguous++;
                     } else if (result.substr(0, 5) == "ERROR") {
+                        if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
                         addLog("  FAIL " + addr + ": " + result);
                         failed++;
                     } else {
@@ -340,11 +387,18 @@ void PoolDashboard::processInput() {
                         success++;
                     }
                 }
+                // Re-lock if we opened it, so the wallet isn't left spendable.
+                if (unlockedNow) walletLock(rpcUser, rpcPass, rpcPort);
                 _pendingPayouts.clear();
                 std::string summary = "Payout complete: " + std::to_string(success) + " sent, " +
                         std::to_string(failed) + " failed";
                 if (ambiguous > 0) summary += ", " + std::to_string(ambiguous) + " PENDING (reconcile!)";
                 addLog(summary);
+                if (sawLocked) {
+                    addLog("Wallet is ENCRYPTED and locked. Fix: add 'poolwalletpassphrase=<your passphrase>'");
+                    addLog("  to pool.cfg (pool auto-unlocks for each payout), OR run in the DigiByte console:");
+                    addLog("  walletpassphrase \"<passphrase>\" 120   then retry the payout.");
+                }
             } else {
                 _pendingPayouts.clear();
                 addLog("Payout cancelled.");
@@ -426,16 +480,29 @@ void PoolDashboard::processInput() {
                     if (totalWeight <= 0.0) {
                         addLog("Cannot execute: no node has a payout weight yet (coverage x reliability still building).");
                     } else {
+                        // Aggregate by payout ADDRESS: several nodes (peerIds) can
+                        // share one address, and we must not send it a separate
+                        // (fee-bearing) tx per node. Sum the per-node shares into
+                        // one send per distinct address. Order-preserving.
                         _pendingPayouts.clear();
+                        std::map<std::string, size_t> addrIdx;
                         for (const auto& t: targets) {
                             double amt = spend * t.weight / totalWeight;
-                            if (amt > 0.0) _pendingPayouts.push_back(std::make_pair(t.payoutAddress, amt));
+                            if (amt <= 0.0) continue;
+                            auto it = addrIdx.find(t.payoutAddress);
+                            if (it == addrIdx.end()) {
+                                addrIdx[t.payoutAddress] = _pendingPayouts.size();
+                                _pendingPayouts.push_back(std::make_pair(t.payoutAddress, amt));
+                            } else {
+                                _pendingPayouts[it->second].second += amt;
+                            }
                         }
                         addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
                         addLog("Budget: " + budgetMode);
                         char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
                         addLog("Total " + std::string(totalBuf) + " DGB across " +
-                                std::to_string(_pendingPayouts.size()) + " node(s):");
+                                std::to_string(targets.size()) + " node(s) -> " +
+                                std::to_string(_pendingPayouts.size()) + " payment(s):");
                         for (const auto& t: targets) {
                             double amt = spend * t.weight / totalWeight;
                             char line[176];
