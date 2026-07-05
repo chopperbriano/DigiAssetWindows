@@ -25,8 +25,25 @@ always-on box). It asks only for your DGB payout address. Full walkthrough:
 > below. If you just want to run a node and earn DGB, use the one line above.
 
 **Two ways to take part:**
-- 🖥️ **Host a node and earn DGB** — use the one-liner above. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
-- 🏦 **Run your own pool** (accept nodes, verify them, pay hosts) — guide: **[POOL-SETUP.md](POOL-SETUP.md)**.
+- 🖥️ **Host a node and earn DGB** — the one-liner above. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
+- 🏦 **Run your own pool** (accept nodes, verify them, pay hosts) — one command deploys the whole pool (node stack + `DigiAssetPoolServer.exe` + HTTPS website + auto-start). In an **Administrator PowerShell**:
+  ```powershell
+  iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-pool.ps1 -OutFile "$env:TEMP\setup-pool.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-pool.ps1"
+  ```
+  Full guide: **[POOL-SETUP.md](POOL-SETUP.md)**.
+
+## Repository layout
+| Path | What |
+|---|---|
+| `setup-digiasset.ps1` | **Node** installer (the one-liner). |
+| `setup-pool.ps1` | **Pool** installer (the one-liner). |
+| `node/` | Node operator helpers: `monitor-node.ps1`, `stop-node.ps1`, `update-binaries.ps1`. |
+| `snapshots/` | Fast-sync tooling: `make-snapshot.ps1` (create), `seed-digibyte.ps1` (consume). |
+| `pool/` | Pool server C++ (`pool/*.cpp`) + `pool/deploy/` website/ops scripts (Caddy, start/backup). |
+| `src/`, `cli/` | The node/analyzer C++ and command-line client. See **[ARCHITECTURE.md](ARCHITECTURE.md)**. |
+| `example.cfg` | Fully-commented `config.cfg` reference. |
+
+Paths on an installed machine: DigiByte in `C:\DigiByte` (blockchain in `C:\DigiByte\Data`, `digibyte.conf` in `C:\DigiByte`); the node + pool in `C:\DigiAssetWindows`.
 
 ## Table of Contents
 1. [How It Works (Architecture)](#how-it-works-architecture)

@@ -1165,9 +1165,10 @@ function Invoke-Install {
     if ($staged) { Log "  installer staged at $InstalledScript" 'OK' }
     else { Log "  WARNING: could not stage $InstalledScript (node will start directly instead)." 'WARN' }
 
-    # Drop the companion tools next to the node so they are always handy.
+    # Drop the companion tools next to the node so they are always handy. They
+    # live in node/ in the repo but are staged FLAT into C:\DigiAssetWindows.
     foreach ($tool in 'monitor-node.ps1','stop-node.ps1') {
-        try { Get-File "https://raw.githubusercontent.com/$Repo/master/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
+        try { Get-File "https://raw.githubusercontent.com/$Repo/master/node/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
     }
     # Node logon task. If the script is staged, use the dependency-aware launcher
     # (waits for IPFS + DigiByte). If not, fall back to launching the node exe
