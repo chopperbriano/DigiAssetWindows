@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.14.0'
+$SCRIPT_VERSION = '2.15.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -776,9 +776,12 @@ function Write-NodeConfig($rpc) {
         # label and CRITICALs trying to mint one from a wallet that may not exist.
         # Add any missing psp0 payout line so an older/partial config still works.
         $existing = Get-Content $NodeConfig
-        if ($PayoutAddress -and -not ($existing -match '^psp0payout=')) {
-            Add-Content -Path $NodeConfig -Value @("psp0subscribe=1","psp0payout=$PayoutAddress") -Encoding ASCII
-            Log '  config.cfg existed - added missing local-pool payout (psp0).' 'OK'
+        $add = @()
+        if ($PayoutAddress -and -not ($existing -match '^psp0payout=')) { $add += @("psp0subscribe=1","psp0payout=$PayoutAddress") }
+        if (-not ($existing -match '^verifydatabasewrite=')) { $add += 'verifydatabasewrite=0' }   # fast path
+        if ($add.Count -gt 0) {
+            Add-Content -Path $NodeConfig -Value $add -Encoding ASCII
+            Log '  config.cfg existed - added missing psp0 payout / fast-path settings.' 'OK'
         } else {
             Log '  config.cfg already exists - leaving it untouched.'
         }
@@ -791,7 +794,10 @@ function Write-NodeConfig($rpc) {
         # Both get a real payout address so neither needs to mint one from the wallet.
         "psp0subscribe=1","psp0payout=$PayoutAddress",
         "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
-        "pruneage=5760","bootstrapchainstate=1"
+        # Fast-path analyzer settings: verifydatabasewrite=0 syncs ~10x faster
+        # (~1 day vs ~10), storenonassetutxo=0 keeps the DB small + fast, pruneage
+        # keeps ~1 day of prunable history, bootstrapchainstate pulls chain.db.
+        "verifydatabasewrite=0","storenonassetutxo=0","pruneage=5760","bootstrapchainstate=1"
     )
     Set-Content -Path $NodeConfig -Value $lines -Encoding ASCII
     Log "  + config.cfg (pool=$PoolServer, payout=$PayoutAddress)" 'OK'
