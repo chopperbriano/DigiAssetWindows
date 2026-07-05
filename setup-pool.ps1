@@ -162,7 +162,7 @@ if (-not $Domain) {
 if ($Domain) {
     $deploy = Join-Path $Root 'deploy'
     New-Item -ItemType Directory -Force -Path (Join-Path $deploy 'site') | Out-Null
-    foreach ($rel in 'setup-caddy.ps1','Caddyfile','site/index.html','site/favicon.svg') {
+    foreach ($rel in 'setup-caddy.ps1','Caddyfile','site/index.html','site/favicon.svg','site/qrcode.min.js') {
         try { Get-File "$Repo/pool/deploy/$rel" (Join-Path $deploy ($rel -replace '/','\')) } catch { Say "  (could not fetch $rel)" 'Yellow' }
     }
     Start-Process powershell.exe -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"$($deploy)\setup-caddy.ps1`" -Domain `"$Domain`" -PoolPort 14028") -Wait

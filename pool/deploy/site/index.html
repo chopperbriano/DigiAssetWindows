@@ -151,7 +151,7 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
 </div>
 
 <!-- QR generator (graceful fallback: if it fails to load, the address text still shows). -->
-<script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs@04f46c6/qrcode.min.js"></script>
+<script src="qrcode.min.js"></script>
 <script>
 (function () {
   var fmt = function (n) { return (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 4 }) + " DGB"; };
