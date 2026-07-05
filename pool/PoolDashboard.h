@@ -58,6 +58,10 @@ private:
     PoolServer& _server;
     PoolVerifier& _verifier;
     std::string _configPath;
+    // Cached pool-wallet spendable balance (DGB) for the status row - refreshed
+    // every ~30s so render() doesn't hit DigiByte RPC every frame. -1 = unknown.
+    double _cachedWalletBalance{-1.0};
+    int64_t _walletBalanceCheckedAt{0};
     std::atomic<bool> _running{false};
     std::atomic<bool> _awaitingPayoutConfirm{false};
     // Per-node amount (DGB) computed at [E] time and reused on Y confirm, so the

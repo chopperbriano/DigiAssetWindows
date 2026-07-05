@@ -330,7 +330,7 @@ void PoolDashboard::processInput() {
             if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
             if (targets.empty()) addLog("No eligible nodes. Nodes must be verified within 24h.");
             else if (spend < 0) addLog("Could not read wallet balance (check rpcuser/rpcpassword/rpcport).");
-            else if (spend == 0) addLog("No budget. Set poolpayoutpercent=<%> (balance-based) or poolspendperperiod=<DGB>.");
+            else if (spend == 0) addLog("No budget (" + budgetMode + "). If the pool wallet is empty, fund it (sweep DGB from the treasury); otherwise set poolpayoutpercent/poolspendperperiod.");
             else {
                 double perNode = spend / (double) targets.size();
                 char perBuf[64]; snprintf(perBuf, sizeof(perBuf), "%.8f", perNode);
@@ -382,7 +382,7 @@ void PoolDashboard::processInput() {
                 if (spend < 0) {
                     addLog("Cannot execute: could not read wallet balance (RPC error). Check rpcuser/rpcpassword/rpcport.");
                 } else if (spend == 0) {
-                    addLog("Cannot execute: no budget. Set poolpayoutpercent=<%> (balance-based) or poolspendperperiod=<DGB>.");
+                    addLog("Cannot execute: budget is 0 (" + budgetMode + "). Fund the pool wallet (sweep DGB from the treasury), or set poolpayoutpercent/poolspendperperiod.");
                 } else {
                     double perNode = spend / (double) targets.size();
                     _pendingPerNode = perNode;
@@ -521,6 +521,35 @@ void PoolDashboard::render() {
         << cell("Permanent", formatNumber(permAssets) + " / " + std::to_string(permPages) + " pages",
                 FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
         << "\n";
+
+    // Row: Pool wallet balance - the payout budget source. Refresh at most every
+    // ~30s (getbalance RPC) so render() stays cheap; RED at 0 makes "no budget"
+    // obvious, because budget = poolpayoutpercent x THIS balance.
+    {
+        int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        if (nowSec - _walletBalanceCheckedAt > 30) {
+            auto pcfg = readPoolConfig(_configPath);
+            int rport = 14022;
+            try { rport = std::stoi(cfgGet(pcfg, "rpcport", "14022")); } catch (...) {}
+            _cachedWalletBalance = getWalletBalance(cfgGet(pcfg, "rpcuser"), cfgGet(pcfg, "rpcpassword"), rport);
+            _walletBalanceCheckedAt = nowSec;
+        }
+        std::string balStr;
+        const char* balColor;
+        if (_cachedWalletBalance < 0.0) {
+            balStr = "RPC error / wallet not loaded";
+            balColor = FG_YELLOW;
+        } else {
+            char b[48];
+            snprintf(b, sizeof(b), "%.4f DGB", _cachedWalletBalance);
+            balStr = b;
+            balColor = _cachedWalletBalance > 0.0 ? FG_GREEN : FG_RED;
+        }
+        out << ERASE_LINE << "  "
+            << cell("Pool wallet", balStr, balColor, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("Payouts spend", "from this wallet", FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+            << "\n";
+    }
 
     // Row: Payout status + real ledger totals.
     {
