@@ -36,8 +36,13 @@ public:
     // observedIp is the node's public IP as seen at registration (used to
     // geolocate it for the world map); a blank observedIp leaves any
     // previously stored address untouched.
+    // A node's `secret` is bound on first registration. A later registration for
+    // the same peerId may only change payoutAddress if it presents the matching
+    // secret - this stops a payout-address takeover by re-POSTing a victim's
+    // peerId (audit M1). A mismatched secret is rejected entirely.
     void upsertNode(const std::string& peerId,
                     const std::string& payoutAddress,
+                    const std::string& secret = "",
                     const std::string& observedIp = "");
 
     // Dial-back verification state. The PoolVerifier thread calls these
@@ -115,6 +120,10 @@ public:
     void updateNodeScores(const std::string& peerId, double coverageObs, bool hasCoverageSample, bool verifyOk);
 
     // Record a completed payout in the ledger.
+    // Record a payout whose send RESULT was ambiguous (RPC timeout after the tx
+    // may have broadcast): a pending ledger row (paidTxid NULL) that advances the
+    // once-per-period guard so a re-run can't blindly double-pay. (audit M7)
+    void recordPendingPayout(const std::string& payoutAddress, int64_t amountDgbSat);
     void recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,
                       const std::string& txid);
 

@@ -440,6 +440,12 @@ void mctrivia::probeListEndpoint() {
     if (!payout.empty()) {
         body << ",\"payout\":\"" << payout << "\"";
     }
+    // Include our persistent identity secret so the pool can bind this peerId to
+    // us on first registration and reject any later payout-address change that
+    // doesn't present the matching secret (payout-address takeover guard, M1).
+    if (!_secretCode.empty()) {
+        body << ",\"secret\":\"" << _secretCode << "\"";
+    }
     body << "}";
 
     const std::string url = _baseUrl + "/list/" + std::to_string(floorHeight) + ".json";

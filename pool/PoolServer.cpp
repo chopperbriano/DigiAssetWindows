@@ -799,7 +799,9 @@ void PoolServer::handleKeepalive(const std::string& body, const std::string& cli
     if (addrIt != form.end() && peerIt != form.end()
         && !addrIt->second.empty() && !peerIt->second.empty()) {
         try {
-            _db.upsertNode(peerIt->second, addrIt->second, clientIp);
+            auto secIt = form.find("secret");
+            std::string secret = (secIt != form.end()) ? secIt->second : "";
+            _db.upsertNode(peerIt->second, addrIt->second, secret, clientIp);
         } catch (...) {}
     }
     // Match mctrivia's server response exactly — existing clients parse it
@@ -815,9 +817,10 @@ void PoolServer::handleList(const std::string& path, const std::string& body, co
     // Body is JSON: {"height":N,"version":V,"show":bool,"peerId":"...","payout":"..."}
     std::string peerId = jsonField(body, "peerId");
     std::string payout = jsonField(body, "payout");
+    std::string secret = jsonField(body, "secret");
     if (!peerId.empty() && !payout.empty()) {
         try {
-            _db.upsertNode(peerId, payout, clientIp);
+            _db.upsertNode(peerId, payout, secret, clientIp);
         } catch (...) {}
     }
 

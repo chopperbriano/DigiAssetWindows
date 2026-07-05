@@ -131,6 +131,8 @@ void PoolDatabase::buildSchema() {
     // split proportional to coverageScore * reliabilityScore.
     tryAddColumn("ALTER TABLE nodes ADD COLUMN coverageScore    REAL NOT NULL DEFAULT 0;");
     tryAddColumn("ALTER TABLE nodes ADD COLUMN reliabilityScore REAL NOT NULL DEFAULT 0;");
+    // win.77 anti-takeover: the per-node secret bound on first registration.
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN secret TEXT NOT NULL DEFAULT '';");
 
     // permanent_assets rows are imported from the first-run snapshot of
     // mctrivia's /permanent/<page>.json or added later by the operator.
@@ -184,39 +186,69 @@ void PoolDatabase::buildSchema() {
 
 void PoolDatabase::upsertNode(const std::string& peerId,
                               const std::string& payoutAddress,
+                              const std::string& secret,
                               const std::string& observedIp) {
     std::lock_guard<std::mutex> lk(_mutex);
     int64_t now = nowUnix();
 
-    // Use INSERT ... ON CONFLICT to atomic upsert. Keep firstSeen on
-    // conflict (preserve the original), update the rest. lastAddr is only
-    // overwritten when we actually observed an IP this time: NULLIF(?, '')
-    // turns a blank observedIp into NULL, and COALESCE then preserves the
-    // previously stored address rather than wiping it.
-    const char* sql =
-        "INSERT INTO nodes (peerId, payoutAddress, firstSeen, lastSeen, lastAddr) "
-        "VALUES (?, ?, ?, ?, NULLIF(?, '')) "
-        "ON CONFLICT(peerId) DO UPDATE SET "
-        " payoutAddress = excluded.payoutAddress, "
-        " lastSeen      = excluded.lastSeen, "
-        " lastAddr      = COALESCE(excluded.lastAddr, nodes.lastAddr);";
+    // Look up whether this peerId is already bound, and to which secret.
+    std::string storedSecret;
+    bool exists = false;
+    {
+        sqlite3_stmt* q = nullptr;
+        if (sqlite3_prepare_v2(_db, "SELECT secret FROM nodes WHERE peerId = ?;", -1, &q, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(q, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(q) == SQLITE_ROW) {
+                exists = true;
+                const unsigned char* s = sqlite3_column_text(q, 0);
+                if (s) storedSecret = (const char*) s;
+            }
+            sqlite3_finalize(q);
+        }
+    }
 
+    if (!exists) {
+        // First registration: bind peerId -> secret + payoutAddress.
+        sqlite3_stmt* stmt = nullptr;
+        const char* ins =
+            "INSERT INTO nodes (peerId, payoutAddress, secret, firstSeen, lastSeen, lastAddr) "
+            "VALUES (?, ?, ?, ?, ?, NULLIF(?, ''));";
+        if (sqlite3_prepare_v2(_db, ins, -1, &stmt, nullptr) != SQLITE_OK) return;
+        sqlite3_bind_text(stmt, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, secret.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 4, now);
+        sqlite3_bind_int64(stmt, 5, now);
+        sqlite3_bind_text(stmt, 6, observedIp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return;
+    }
+
+    // Existing node. A payoutAddress change is only honored if the secret matches
+    // (or the row predates secrets - stored empty - in which case we adopt the
+    // first one we see). A mismatched secret is rejected ENTIRELY so an attacker
+    // can't touch a victim's row at all. (audit M1)
+    bool secretOk = storedSecret.empty() || (!secret.empty() && secret == storedSecret);
+    if (!secretOk) {
+        fprintf(stderr, "[POOL] rejected registration for peerId=%s (secret mismatch) - possible payout-address takeover attempt\n", peerId.c_str());
+        fflush(stderr);
+        return;
+    }
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        throw std::runtime_error(std::string("prepare upsertNode failed: ") +
-                                 sqlite3_errmsg(_db));
-    }
-    sqlite3_bind_text(stmt, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+    const char* upd =
+        "UPDATE nodes SET payoutAddress = ?, "
+        " secret = CASE WHEN secret = '' THEN ? ELSE secret END, "
+        " lastSeen = ?, lastAddr = COALESCE(NULLIF(?, ''), lastAddr) "
+        "WHERE peerId = ?;";
+    if (sqlite3_prepare_v2(_db, upd, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt, 1, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, secret.c_str(), -1, SQLITE_TRANSIENT);   // adopt if previously empty
     sqlite3_bind_int64(stmt, 3, now);
-    sqlite3_bind_int64(stmt, 4, now);
-    sqlite3_bind_text(stmt, 5, observedIp.c_str(), -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(stmt);
+    sqlite3_bind_text(stmt, 4, observedIp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
     sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        throw std::runtime_error(std::string("upsertNode step failed: ") +
-                                 sqlite3_errmsg(_db));
-    }
 }
 
 void PoolDatabase::recordVerifySuccess(const std::string& peerId) {
@@ -379,6 +411,23 @@ void PoolDatabase::recordPayout(const std::string& payoutAddress, int64_t amount
     }
 }
 
+void PoolDatabase::recordPendingPayout(const std::string& payoutAddress, int64_t amountDgbSat) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    // paidTxid NULL = attempted-but-unconfirmed: excluded from paid totals, but
+    // its owedAt still advances the once-per-period guard (getLastPayoutAt). (M7)
+    const char* sql =
+        "INSERT INTO payouts_ledger (payoutAddress, amountDgbSat, owedAt, paidTxid, paidAt) "
+        "VALUES (?, ?, ?, NULL, NULL);";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt, 1, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, amountDgbSat);
+    sqlite3_bind_int64(stmt, 3, now);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 double PoolDatabase::getPaidTotalDgb() {
     std::lock_guard<std::mutex> lk(_mutex);
     const char* sql = "SELECT COALESCE(SUM(amountDgbSat), 0) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";
@@ -407,7 +456,9 @@ unsigned int PoolDatabase::getPaidCount() {
 
 int64_t PoolDatabase::getLastPayoutAt() {
     std::lock_guard<std::mutex> lk(_mutex);
-    const char* sql = "SELECT COALESCE(MAX(paidAt), 0) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";
+    // Count ANY attempt (paid OR pending/ambiguous), so an ambiguous send blocks
+    // an immediate re-run for the period - not just confirmed payouts. (audit M7)
+    const char* sql = "SELECT COALESCE(MAX(owedAt), 0) FROM payouts_ledger;";
     sqlite3_stmt* stmt = nullptr;
     int64_t last = 0;
     if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {

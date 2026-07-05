@@ -117,9 +117,13 @@ namespace {
     }
 
     // Send amountDgb to a single address via DigiByte Core's sendtoaddress RPC.
-    // On success returns the txid; on any failure returns a string starting
-    // "ERROR: " (HTTP error, RPC error envelope, or a non-string result). The
-    // caller relies on that prefix to avoid recording a failed send as paid.
+    // On success returns the txid; on a DEFINITE failure returns a string
+    // starting "ERROR: " (HTTP error, RPC error envelope, or a non-string
+    // result - the send certainly did not happen). On an AMBIGUOUS failure -
+    // a transport-level exception (timeout / dropped connection) where the tx
+    // MAY already have broadcast - returns a string starting "TIMEOUT: ". The
+    // caller must treat TIMEOUT as "possibly sent": record a pending ledger row
+    // and reconcile against the wallet before ever re-sending. (audit M7)
     std::string sendToAddress(const std::string& rpcUser, const std::string& rpcPass,
                               int rpcPort, const std::string& address, double amountDgb) {
         // Never send to an unvalidated address (rejects garbage + JSON injection). (audit MUST-FIX #8)
@@ -138,7 +142,9 @@ namespace {
         try {
             status = CurlHandler::postJson(url, body, respBody, 30000);
         } catch (const std::exception& e) {
-            return std::string("ERROR: ") + e.what();
+            // Transport failed AFTER we handed the request off: the tx may or may
+            // not have broadcast. Ambiguous - flag as TIMEOUT, never as ERROR. (M7)
+            return std::string("TIMEOUT: ") + e.what();
         }
 
         if (status < 200 || status >= 300) {
@@ -309,12 +315,22 @@ void PoolDashboard::processInput() {
                 // reliability) computed and shown at [E] time.
                 int success = 0;
                 int failed = 0;
+                int ambiguous = 0;
                 for (const auto& pay: _pendingPayouts) {
                     const std::string& addr = pay.first;
                     double amt = pay.second;
                     int64_t amtSat = (int64_t)(amt * 100000000.0);
                     std::string result = sendToAddress(rpcUser, rpcPass, rpcPort, addr, amt);
-                    if (result.substr(0, 5) == "ERROR") {
+                    if (result.substr(0, 7) == "TIMEOUT") {
+                        // Ambiguous: the tx MAY have broadcast. Record a pending
+                        // ledger row so the period guard blocks a blind re-run,
+                        // and tell the operator to reconcile manually. (audit M7)
+                        _db.recordPendingPayout(addr, amtSat);
+                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amt);
+                        addLog("  TIMEOUT " + addr + " " + std::string(ab) + " DGB - MAY have sent: " + result);
+                        addLog("    -> VERIFY via 'listtransactions' before re-sending; recorded as PENDING.");
+                        ambiguous++;
+                    } else if (result.substr(0, 5) == "ERROR") {
                         addLog("  FAIL " + addr + ": " + result);
                         failed++;
                     } else {
@@ -325,8 +341,10 @@ void PoolDashboard::processInput() {
                     }
                 }
                 _pendingPayouts.clear();
-                addLog("Payout complete: " + std::to_string(success) + " sent, " +
-                        std::to_string(failed) + " failed");
+                std::string summary = "Payout complete: " + std::to_string(success) + " sent, " +
+                        std::to_string(failed) + " failed";
+                if (ambiguous > 0) summary += ", " + std::to_string(ambiguous) + " PENDING (reconcile!)";
+                addLog(summary);
             } else {
                 _pendingPayouts.clear();
                 addLog("Payout cancelled.");
