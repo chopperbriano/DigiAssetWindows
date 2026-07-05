@@ -252,10 +252,10 @@ int main(int /*argc*/, char** /*argv*/) {
     int port = readConfigInt(cfg, "poolport", 14028);
     std::string dbPath = cfg.count("pooldbpath") ? cfg["pooldbpath"] : "pool.db";
     // Payouts are OFF by default. The operator flips this to 1 in pool.cfg
-    // ONLY after Phase 3 is wired up, the pool's payout wallet is funded,
-    // and the dry-run commands have been tested. Until then, clients see
-    // "registered (no payouts yet)" instead of "active", so nobody thinks
-    // they're earning DGB when they aren't.
+    // once the payout wallet is funded and a [P] dry-run looks right. Until
+    // then clients see "registered (no payouts yet)" instead of "active", so
+    // nobody thinks they're earning DGB when they aren't. When enabled, [E]
+    // sends REAL DGB via the local DigiByte wallet.
     bool payoutsEnabled = readConfigInt(cfg, "poolpayouts", 0) != 0;
     // IPFS HTTP API base the verifier uses for swarm-connect dial-back.
     // Defaults to the same localhost Kubo that DigiAssetWindows itself talks to.
@@ -266,12 +266,12 @@ int main(int /*argc*/, char** /*argv*/) {
     std::cout << "  db: " << dbPath << "\n";
     std::cout << "  port: " << port << "\n";
     std::cout << "  ipfsApi: " << ipfsApi << "\n";
-    std::cout << "  poolpayouts: " << (payoutsEnabled ? "ENABLED" : "disabled (Phase 1 default)") << "\n";
+    std::cout << "  poolpayouts: " << (payoutsEnabled ? "ENABLED" : "disabled (default)") << "\n";
     if (payoutsEnabled) {
-        std::cout << "\n  !!! WARNING: poolpayouts=1 is set but Phase 3 automated payout\n"
-                  << "  !!! distribution has not shipped yet. Connected clients WILL report\n"
-                  << "  !!! 'Payment: active' but no DGB will actually move unless you manually\n"
-                  << "  !!! send it. Set poolpayouts=0 until Phase 3 lands.\n\n";
+        std::cout << "\n  Note: poolpayouts=1 - pressing [E] sends REAL DGB from the local\n"
+                  << "  DigiByte wallet, weighted by each node's coverage x reliability.\n"
+                  << "  Ensure the wallet is funded (and poolwalletpassphrase is set in\n"
+                  << "  pool.cfg if it is encrypted). Use [P] first for a dry-run preview.\n\n";
     }
 
     // Open / initialize the database.

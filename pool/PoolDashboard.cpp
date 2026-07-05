@@ -567,8 +567,7 @@ void PoolDashboard::render() {
     auto separator = [&]() { out << ERASE_LINE << std::string(w, '-') << "\n"; };
 
     // Centered title — same style as DigiAsset for Windows header.
-    std::string title = "DigiAsset Pool Server for Windows " + std::string(VERSION_STRING) +
-                        "  (Phase 1 - experimental)";
+    std::string title = "DigiAsset Pool Server for Windows " + std::string(VERSION_STRING);
     int pad = (w - (int) title.size()) / 2;
     out << BOLD << FG_BRIGHT_WHITE << ERASE_LINE
         << std::string(pad > 0 ? pad : 0, ' ') << title << RESET << "\n";
@@ -733,7 +732,6 @@ void PoolDashboard::render() {
     }
 
     // Key hints row — pinned at the bottom thanks to the padding above.
-    // Phase 3 keys dimmed since they're placeholders.
     out << ERASE_LINE
         << " [Q] Quit  [N] Nodes  [A] Assets  [H] Help"
         << "  [P] Preview  [E] Execute payout";
