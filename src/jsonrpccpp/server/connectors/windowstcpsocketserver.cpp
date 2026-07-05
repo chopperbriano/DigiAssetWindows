@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Winsock2 implementation of the TCP JSON-RPC server connector (bundled
+ * libjson-rpc-cpp dependency). This is the connector actually used by the
+ * Windows node and pool-server builds to expose their JSON-RPC interface.
+ * The listening socket runs its accept loop on a dedicated Windows thread;
+ * each accepted client is handled on its own worker thread that reads a
+ * delimiter-terminated request, dispatches it, and sends the response.
+ * A file-scope initializer object drives WSAStartup/WSACleanup for the process.
+ */
+
 #include "windowstcpsocketserver.h"
 
 #include <cstdio>
@@ -33,6 +44,15 @@ WindowsTcpSocketServer::WindowsTcpSocketServer(const std::string &ipToBind, cons
 
 WindowsTcpSocketServer::~WindowsTcpSocketServer() {}
 
+/**
+ * @brief Creates and binds the listening socket, then spawns the accept loop.
+ *
+ * No-op returning false if already running. Creates a non-blocking, reusable
+ * TCP socket bound to ipToBind:port, calls listen(), then starts LaunchLoop on
+ * a new Windows thread. Terminates the process (ExitProcess(3)) if the thread
+ * cannot be created.
+ * @return true if listening started successfully, false otherwise.
+ */
 bool WindowsTcpSocketServer::StartListening() {
   if (!this->running) {
     // Create and bind socket here.
@@ -76,6 +96,13 @@ bool WindowsTcpSocketServer::StartListening() {
   }
 }
 
+/**
+ * @brief Signals the accept loop to stop, waits for it, and closes the socket.
+ *
+ * Clears the running flag, blocks until the listen thread exits, then closes
+ * the listening socket. Returns false if the server was not running.
+ * @return true if the server was running and has been stopped.
+ */
 bool WindowsTcpSocketServer::StopListening() {
   if (this->running) {
     this->running = false;
@@ -87,6 +114,16 @@ bool WindowsTcpSocketServer::StopListening() {
   }
 }
 
+/**
+ * @brief Sends an RPC response over a client socket and cleanly closes it.
+ *
+ * Ensures the response ends with the delimiter character, writes it to the
+ * client socket (whose fd is passed through addInfo), then performs a clean
+ * close of the connection.
+ * @param response The response payload to send.
+ * @param addInfo The client socket fd, reinterpreted from a void pointer.
+ * @return true if the full response was written successfully.
+ */
 bool WindowsTcpSocketServer::SendResponse(const string &response, void *addInfo) {
   bool result = false;
   int connection_fd = reinterpret_cast<intptr_t>(addInfo);
@@ -107,6 +144,14 @@ bool WindowsTcpSocketServer::SendResponse(const string &response, void *addInfo)
   return result;
 }
 
+/**
+ * @brief Thread entry point for the accept loop.
+ *
+ * Casts lp_data back to the owning server instance and runs its ListenLoop
+ * until stopped.
+ * @param lp_data The WindowsTcpSocketServer instance pointer.
+ * @return Always 0.
+ */
 DWORD WINAPI WindowsTcpSocketServer::LaunchLoop(LPVOID lp_data) {
   WindowsTcpSocketServer *instance = reinterpret_cast<WindowsTcpSocketServer *>(lp_data);
   ;
@@ -117,6 +162,15 @@ DWORD WINAPI WindowsTcpSocketServer::LaunchLoop(LPVOID lp_data) {
             // a memory leak.
 }
 
+/**
+ * @brief Accept loop: dispatches each new client to its own worker thread.
+ *
+ * Runs while running is true. accept()s connections (non-blocking, sleeping
+ * briefly when none are pending), switches each accepted socket back to
+ * blocking mode, and spawns a GenerateResponse thread with a heap-allocated
+ * parameter block. If the worker thread cannot be created, the parameters are
+ * freed and the connection is cleanly closed.
+ */
 void WindowsTcpSocketServer::ListenLoop() {
   while (this->running) {
     SOCKET connection_fd = INVALID_SOCKET;
@@ -145,6 +199,16 @@ void WindowsTcpSocketServer::ListenLoop() {
   }
 }
 
+/**
+ * @brief Per-client worker thread: reads a request, dispatches, replies.
+ *
+ * Takes ownership of the heap-allocated GenerateResponseParameters (deleting
+ * them), reads from the client socket until the delimiter is seen, runs the
+ * request through ProcessRequest, and sends the response (which also closes the
+ * connection).
+ * @param lp_data Pointer to a GenerateResponseParameters block.
+ * @return Always 0.
+ */
 DWORD WINAPI WindowsTcpSocketServer::GenerateResponse(LPVOID lp_data) {
   struct GenerateResponseParameters *params = reinterpret_cast<struct GenerateResponseParameters *>(lp_data);
   WindowsTcpSocketServer *instance = params->instance;
@@ -172,6 +236,15 @@ DWORD WINAPI WindowsTcpSocketServer::GenerateResponse(LPVOID lp_data) {
             // a memory leak.
 }
 
+/**
+ * @brief Writes a full message to a socket, looping over partial sends.
+ *
+ * Repeatedly calls send() until the whole buffer is written or an error occurs;
+ * on error it cleanly closes the socket.
+ * @param fd The client socket file descriptor.
+ * @param toWrite The message to send.
+ * @return true if the message was fully written without error.
+ */
 bool WindowsTcpSocketServer::WriteToSocket(const SOCKET &fd, const string &toWrite) {
   bool fullyWritten = false;
   bool errorOccured = false;
@@ -190,6 +263,16 @@ bool WindowsTcpSocketServer::WriteToSocket(const SOCKET &fd, const string &toWri
   return fullyWritten && !errorOccured;
 }
 
+/**
+ * @brief Waits (up to timeout ms) for the client to close the TCP session.
+ *
+ * Polls recv() once per millisecond so the server side avoids lingering in
+ * TIME_WAIT, which under many connections could exhaust sockets.
+ * @param fd The client socket file descriptor.
+ * @param timeout Maximum wait in milliseconds.
+ * @return true if the client closed (or was polled at least once), false if it
+ *         had already closed before the first poll.
+ */
 bool WindowsTcpSocketServer::WaitClientClose(const SOCKET &fd, const int &timeout) {
   bool ret = false;
   int i = 0;
@@ -202,6 +285,13 @@ bool WindowsTcpSocketServer::WaitClientClose(const SOCKET &fd, const int &timeou
   return ret;
 }
 
+/**
+ * @brief Force-closes a socket by resetting it (SO_LINGER with 0 timeout).
+ *
+ * Sends a TCP RST instead of a graceful FIN so the local side skips TIME_WAIT.
+ * @param fd The client socket file descriptor.
+ * @return 0 on success, or the failing setsockopt/closesocket return value.
+ */
 int WindowsTcpSocketServer::CloseByReset(const SOCKET &fd) {
   struct linger so_linger;
   so_linger.l_onoff = 1;
@@ -214,6 +304,14 @@ int WindowsTcpSocketServer::CloseByReset(const SOCKET &fd) {
   return closesocket(fd);
 }
 
+/**
+ * @brief Cleanly closes a connection while avoiding TIME_WAIT.
+ *
+ * Waits for the client to close first (WaitClientClose); if it does, closes
+ * normally, otherwise resets the socket via CloseByReset.
+ * @param fd The client socket file descriptor.
+ * @return The closesocket()/CloseByReset() return value.
+ */
 int WindowsTcpSocketServer::CleanClose(const SOCKET &fd) {
   if (WaitClientClose(fd)) {
     return closesocket(fd);
@@ -224,6 +322,9 @@ int WindowsTcpSocketServer::CleanClose(const SOCKET &fd) {
 
 // This is inspired from SFML to manage Winsock initialization. Thanks to them!
 // ( http://www.sfml-dev.org/ ).
+// RAII helper: a single file-scope instance (serverGlobalInitializer) calls
+// WSAStartup at process load and WSACleanup at unload, so Winsock is ready
+// before any socket in this connector is used.
 struct ServerSocketInitializer {
   ServerSocketInitializer() {
     WSADATA init;

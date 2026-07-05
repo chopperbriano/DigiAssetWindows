@@ -16,6 +16,13 @@
 #include <string>
 #include <vector>
 
+// Thread-safe sqlite wrapper holding all durable pool-server state: the
+// registered-node table (payout address, first/last seen, dial-back
+// verification counters, last observed IP), the permanent-assets list and its
+// per-page done/daily metadata, the payouts ledger, and a key/value runtime
+// config store. Every public method takes an internal mutex, so it is safe to
+// call from the HTTP worker threads, the verifier thread, and the dashboard
+// thread concurrently. Builds/migrates its schema on construction.
 class PoolDatabase {
 public:
     explicit PoolDatabase(const std::string& dbPath);

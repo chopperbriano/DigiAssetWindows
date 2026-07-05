@@ -2,6 +2,23 @@
 // Created by mctrivia on 30/01/23.
 // Krzysztof Okupski's libbitcoin-api-cpp for reference
 //
+// DigiByteCore.h - C++ wrapper around a DigiByte Core full node's JSON-RPC
+// interface. This is how the node (and pool server) talk to the underlying
+// digibyted daemon: it owns the HTTP JSON-RPC client, serializes calls under a
+// shared mutex, and exposes one typed method per RPC (getblock,
+// getrawtransaction, wallet, mining, raw-tx, etc.) returning the structs from
+// DigiByteCore_Types.h. Connection settings come from a config file.
+//
+// Key node-specific additions over the reference library:
+//  - getBlockVerbose(): fetches a block with verbosity 2 and pre-loads every
+//    transaction into an in-memory TX cache, so the block processor can pull
+//    each TX via getRawTransaction() without an extra RPC round-trip.
+//  - the capitalized wrapper methods (getBlockCount, getBlockHash, getBlock,
+//    getRawTransaction, listUnspent, getAddressInfo) route through
+//    errorCheckAPI() to convert raw JSON-RPC faults into the friendlier nested
+//    exception types.
+//  - _useAssetPort selects an alternate RPC port (rpcassetport) when set.
+//
 
 #ifndef DIGIBYTECORE_CONFIGDIGIBYTECORE_H
 #define DIGIBYTECORE_CONFIGDIGIBYTECORE_H
@@ -41,6 +58,14 @@ namespace jsonrpc {
     class Client;
 } // namespace jsonrpc
 
+/**
+ * Typed C++ facade over a DigiByte Core node's JSON-RPC API. Holds the HTTP
+ * client/connection, serializes every call through a static mutex, and offers
+ * one method per RPC returning the structs in DigiByteCore_Types.h. Also keeps
+ * a per-block transaction cache and simple call-count/timing profiling. Not
+ * connected until makeConnection() succeeds; methods requiring a connection
+ * throw exceptionDigiByteCoreNotConnected otherwise.
+ */
 class DigiByteCore {
     std::unique_ptr<jsonrpc::HttpClient> httpClient = nullptr;
     std::unique_ptr<jsonrpc::Client> client = nullptr;
@@ -51,11 +76,13 @@ class DigiByteCore {
 
     std::string _configFileName = "config.cfg";
 
+    // Wraps an RPC lambda: throws if not connected, and translates raw
+    // DigiByteException failures into the class's own exception types.
     template<typename fn_t>
     auto errorCheckAPI(fn_t fn) -> decltype(fn());
 
-    long long _runTime = 0;
-    unsigned int _runCount = 0;
+    long long _runTime = 0;      // cumulative RPC time (microseconds) for profiling
+    unsigned int _runCount = 0;  // number of RPC calls made, for profiling
 
     // TX cache for prefetched data (loaded before processing a block)
     std::mutex _txCacheMutex;
@@ -63,6 +90,7 @@ class DigiByteCore {
 
 
 public:
+    // Address format requested from getnewaddress.
     enum AddressTypes {
         LEGACY,
         SEGWIT,
@@ -70,6 +98,8 @@ public:
     };
 
 
+    // Returns a formatted one-line row of accumulated RPC profiling stats:
+    // total time, average time per call, and call count.
     std::string printProfilingInfo() {
         long long totalDuration = _runTime;
         int transactions = _runCount;
@@ -240,6 +270,8 @@ public:
     ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║███████║
     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
      */
+    // Base exception for this wrapper; what() prefixes the message with
+    // "DigiByte Core Exception: ".
     class exception : public std::exception {
     protected:
         std::string _lastErrorMessage;
@@ -254,12 +286,15 @@ public:
         }
     };
 
+    // Thrown when the node was reachable before but a call now fails to reach
+    // (or is refused by) DigiByte Core.
     class exceptionCoreOffline : public exception {
     public:
         explicit exceptionCoreOffline()
             : exception("Core Offline") {}
     };
 
+    // Thrown when a connection-requiring call runs before makeConnection().
     class exceptionDigiByteCoreNotConnected : public exception {
     public:
         explicit exceptionDigiByteCoreNotConnected()

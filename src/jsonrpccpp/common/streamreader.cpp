@@ -1,3 +1,8 @@
+// streamreader.cpp - Implementation of StreamReader, the low-level helper the
+// libjson-rpc-cpp framework uses to read a delimited JSON-RPC message off a
+// file descriptor (e.g. a TCP/pipe socket). It underpins the RPC transports
+// used by both the node (DigiAssetWindows.exe) and the pool server. The
+// constructor allocates a fixed read buffer that is freed by the destructor.
 #include "streamreader.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +15,12 @@ StreamReader::StreamReader(size_t buffersize) : buffersize(buffersize), buffer(s
 
 StreamReader::~StreamReader() { free(buffer); }
 
+// Read a full delimited message from file descriptor fd into target.
+// Repeatedly reads up to buffersize bytes, appending each chunk to target,
+// until the delimiter byte appears in the most recent chunk. On any read()
+// error (negative return) it returns false. On success it removes the trailing
+// delimiter character (pop_back) and returns true. Note: the delimiter is only
+// searched for within the latest buffer read, not across the whole target.
 bool StreamReader::Read(std::string &target, int fd, char delimiter) {
   ssize_t bytesRead;
   do {

@@ -1,6 +1,19 @@
 //
 // Created by mctrivia on 30/01/23.
 //
+
+// Database.h
+// Declares the Database class - the node's single SQLite-backed store of all
+// chain-derived state. It holds the analyzed blockchain data the node produces
+// while scanning DigiByte: assets (DigiAssets and their metadata/CID/rules),
+// UTXOs, blocks, exchange rates, KYC records, votes, DigiByte-Domain mappings,
+// the IPFS pin/download job queue, Permanent Storage Pool membership (pspFiles/
+// pspAssets), unknown op_returns, and encrypted keys. It also computes periodic
+// algo/address statistics. Every query is a pre-compiled Statement (see
+// Database_Statement.h) accessed through a LockedStatement for thread safety.
+// This one class underpins both deployables: the node uses it as its chain
+// index, and the pool server uses the Permanent/PSP tables to track pinned CIDs.
+
 #ifndef SHA256_LENGTH
 #define SHA256_LENGTH 32
 #endif
@@ -36,10 +49,13 @@
 #include <unordered_map>
 #include <vector>
 
+// A deferred CREATE INDEX request: its index name and the SQL to build it.
+// Queued during setup and applied lazily by executePerformanceIndex().
 struct PerformanceIndex {
     std::string name;
     std::string command;
 };
+// One row of per-time-window address statistics (see updateAddressStats).
 struct AddressStats {
     unsigned int time;            //time block start
     unsigned int created;         //number of addresses created for the first time
@@ -53,6 +69,7 @@ struct AddressStats {
     unsigned int total;           //total number of addresses that have ever existed up to this point
 };
 
+// One row of per-time-window, per-mining-algo block statistics (see updateAlgoStats).
 struct AlgoStats {
     unsigned int time;   //time block start
     unsigned int algo;   //algo number
@@ -62,16 +79,19 @@ struct AlgoStats {
     double difficultyAvg;
 };
 
+// Tally of votes cast to a given address (for a voting asset).
 struct VoteCount {
     std::string address;
     uint64_t count;
 };
 
+// Quantity held of a single asset variant, keyed by its assetIndex.
 struct AssetCount {
     unsigned int assetIndex;
     uint64_t count;
 };
 
+// Minimal block summary (height/hash/time/algo) used by list queries.
 struct BlockBasics {
     unsigned int height;
     std::string hash;
@@ -82,6 +102,13 @@ struct BlockBasics {
 
 
 
+// The node's SQLite chain-analysis store. Owns the sqlite3 connection and a
+// large set of pre-prepared Statements (one per query, declared below). Public
+// methods are grouped by table (assets, blocks, exchange, kyc, utxos, votes,
+// ipfs jobs, DigiByte-Domains, Permanent/PSP, stats). Most methods run a bound
+// LockedStatement and throw a Database::exception subclass on failure. A few
+// caches (flags, exchange-watch addresses, master domain ids, and a two-
+// generation non-asset-UTXO cache) live in RAM to avoid DB/RPC round-trips.
 class Database {
 private:
     sqlite3* _db = nullptr;
@@ -180,6 +207,9 @@ private:
     Statement _stmtGetEncryptedKey;
 
 public:
+    // Builds a formatted table (as a string) of every prepared statement's
+    // accumulated lock time, average time per use, and use count. Diagnostic
+    // helper for spotting slow queries; does not touch the database itself.
     std::string printProfilingInfo() {
         // Header
         std::ostringstream oss;
@@ -274,6 +304,8 @@ public:
         return result;
     }
 
+    // Formats one row of the profiling table for the named statement: total
+    // lock time, average per transaction, and transaction count.
     std::string printStatementInfo(const std::string& name, const Statement& stmt) {
         long long totalDuration = stmt.getTotalLockDuration();
         int transactions = stmt.getLockCount();
@@ -350,6 +382,12 @@ public:
 
     //indexes
     bool indexExists(const std::string& indexName);
+    // Queues (but does not yet create) a covering index on the given table over
+    // the listed columns. Each column may include a sort direction (e.g.
+    // "height DESC"); the index name is derived from the table and column names.
+    // No-op if an index of that derived name already exists. The queued index is
+    // materialized later by executePerformanceIndex(), so building it never
+    // blocks the caller. Variadic in the column list.
     template<typename... Columns>
     void addPerformanceIndex(const std::string& table, Columns... cols) {
         // Generate the index name
@@ -544,6 +582,10 @@ public:
     ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║███████║
     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
      */
+    // Base class for all Database errors. what() prefixes the stored message
+    // with "Database Exception: ". The subclasses below specialize it per
+    // failure kind (open, SQL command, insert/select/update/delete, statement
+    // creation, reset, and requested-data-pruned).
     class exception : public std::exception {
     protected:
         std::string _lastErrorMessage;
@@ -617,6 +659,8 @@ public:
             : exception("Reset failed") {}
     };
 
+    // Thrown when a caller requests history that has been pruned from the DB
+    // (and cannot be recovered from the wallet/RPC).
     class exceptionDataPruned : public exception {
     public:
         explicit exceptionDataPruned()

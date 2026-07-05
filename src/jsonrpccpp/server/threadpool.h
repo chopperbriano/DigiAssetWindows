@@ -21,6 +21,12 @@ freely, subject to the following restrictions:
 distribution.
 */
 
+// Header-only fixed-size worker thread pool (the well-known progschj/ThreadPool,
+// vendored here under the jsonrpc namespace). A fixed set of worker threads pull
+// tasks off a shared queue; enqueue() hands back a std::future for each result.
+// Used to serve JSON-RPC requests concurrently without spawning a thread per
+// request. Entirely inline - no matching .cpp.
+
 #ifndef THREAD_POOL_H
 #define THREAD_POOL_H
 
@@ -35,11 +41,19 @@ distribution.
 #include <vector>
 
 namespace jsonrpc {
+  // A pool of worker threads sharing one task queue. Construct with the desired
+  // worker count; enqueue callables to run on the pool; the destructor stops and
+  // joins every worker.
   class ThreadPool {
   public:
+    // Launch a pool with the given number of worker threads.
     ThreadPool(size_t);
+    // Queue a callable (with its bound arguments) for execution on a worker
+    // thread and return a std::future for its result. Throws std::runtime_error
+    // if the pool has already been stopped.
     template <class F, class... Args>
     auto enqueue(F &&f, Args &&...args) -> std::future<typename std::result_of<F(Args...)>::type>;
+    // Signal all workers to stop once the queue drains, then join them.
     ~ThreadPool();
 
   private:

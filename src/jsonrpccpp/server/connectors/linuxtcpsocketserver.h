@@ -7,6 +7,19 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * ROLE IN DIGIASSET FOR WINDOWS:
+ * Part of the vendored libjson-rpc-cpp library that provides the JSON-RPC
+ * transport used by the node and pool server. This header declares the
+ * Linux/UNIX implementation of the TCP socket server connector, built on the
+ * POSIX socket API. It listens on an IPv4 address/port, accepts client
+ * connections, and services each on its own worker thread (via
+ * AbstractThreadedServer). This is the Linux backend for the cross-platform
+ * TcpSocketServer facade (tcpsocketserver.cpp); the Windows build instead
+ * selects WindowsTcpSocketServer, so this file is compiled out of this fork
+ * and kept only for upstream parity.
+ */
+
 #ifndef JSONRPC_CPP_LINUXTCPSOCKETSERVERCONNECTOR_H_
 #define JSONRPC_CPP_LINUXTCPSOCKETSERVERCONNECTOR_H_
 
@@ -41,8 +54,24 @@ namespace jsonrpc {
 
     virtual ~LinuxTcpSocketServer();
 
+    /**
+     * @brief Creates the listening socket, binds it to ipToBind:port and
+     *        starts listening (non-blocking, SO_REUSEADDR, backlog 5).
+     * @returns true on success, false if any socket/bind/listen call fails.
+     */
     virtual bool InitializeListener();
+    /**
+     * @brief Accepts a pending client connection on the listening socket.
+     * @returns The accepted client's file descriptor, or a negative value if
+     *          no connection is currently ready / on error.
+     */
     virtual int CheckForConnection();
+    /**
+     * @brief Reads one delimited JSON-RPC request from the client, dispatches
+     *        it to the handler, writes back the response, then cleanly closes
+     *        the connection (avoiding TIME_WAIT via CleanClose).
+     * @param connection The accepted client socket file descriptor.
+     */
     virtual void HandleConnection(int connection);
 
   protected:

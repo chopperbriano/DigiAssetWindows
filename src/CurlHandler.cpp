@@ -2,6 +2,13 @@
 // Created by mctrivia on 01/02/24.
 //
 
+// CurlHandler.cpp
+// Implementation of the CurlHandler namespace HTTP helpers. libcurl is globally
+// initialized once via a static_block. Each thread lazily creates and reuses a
+// single CURL easy handle (thread_local) so the underlying session/connection
+// (and TCP handshake) is preserved across calls on that thread. Response bodies
+// are accumulated into a std::string or streamed to a FILE via write callbacks.
+
 #include "CurlHandler.h"
 #include "static_block.hpp"
 #include <map>
@@ -21,6 +28,10 @@ namespace CurlHandler {
         // WinHTTP session and connection handles (avoids TCP handshake per request)
         thread_local CURL* tl_curl = nullptr;
 
+        // Returns this thread's reusable CURL easy handle, creating it on first
+        // use and otherwise resetting all previously-set options (so a prior
+        // request's settings don't leak into the next) while keeping the live
+        // connection. Returns nullptr only if curl_easy_init() fails.
         CURL* acquireHandle() {
             if (!tl_curl) {
                 tl_curl = curl_easy_init();
@@ -53,6 +64,9 @@ namespace CurlHandler {
         }
     } // namespace
 
+    // Blocking HTTP GET. Accumulates the response body into a string and
+    // returns it. timeout in ms (0 disables). Throws exceptionTimeout on
+    // timeout, runtime_error on handle-init failure or other curl errors.
     string get(const string& url, unsigned int timeout) {
         CURL* curl = acquireHandle();
         if (!curl) {
@@ -72,6 +86,10 @@ namespace CurlHandler {
         return readBuffer;
     }
 
+    // Blocking HTTP POST. Builds an "&"-joined key=value body from data, sends
+    // it, and returns the response body. timeout in ms (0 disables). Throws
+    // exceptionTimeout on timeout, runtime_error on other curl errors.
+    // Note: keys/values are not URL-encoded by this helper.
     string post(const string& url, const map<string, string>& data, unsigned int timeout) {
         //preprocess post data
         string postData;
@@ -102,6 +120,11 @@ namespace CurlHandler {
         return readBuffer;
     }
 
+    // Blocking POST of a raw JSON body (Content-Type: application/json). Writes
+    // the response body into responseBody and returns the HTTP status code.
+    // A non-2xx status is NOT an error here - only transport/network failures
+    // throw (exceptionTimeout on timeout, runtime_error otherwise). The
+    // temporary header list is always freed before returning/throwing.
     long postJson(const string& url, const string& body, string& responseBody, unsigned int timeout) {
         CURL* curl = acquireHandle();
         if (!curl) {
@@ -138,6 +161,10 @@ namespace CurlHandler {
         return statusCode;
     }
 
+    // Blocking HTTP GET that streams the response body straight to fileName
+    // (opened "wb", truncating any existing file) instead of buffering it.
+    // timeout in ms (0 disables). Throws runtime_error if the file cannot be
+    // opened, exceptionTimeout on timeout, runtime_error on other curl errors.
     void getDownload(const string& url, const string& fileName, unsigned int timeout) {
         CURL* curl = acquireHandle();
         if (!curl) {
@@ -168,6 +195,11 @@ namespace CurlHandler {
         }
     }
 
+    // Blocking form-urlencoded HTTP POST that streams the response body straight
+    // to fileName (opened "wb", truncating any existing file). Body is the
+    // "&"-joined key=value pairs from data (not URL-encoded). timeout in ms
+    // (0 disables). Throws runtime_error if the file cannot be opened,
+    // exceptionTimeout on timeout, runtime_error on other curl errors.
     void postDownload(const string& url, const string& fileName, const map<string, string>& data, unsigned int timeout) {
         //preprocess post data
         string postData;

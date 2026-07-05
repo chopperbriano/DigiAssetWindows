@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "resyncmetadata".
+// Node-side JSON-RPC handler that re-pins all IPFS metadata for every
+// Permanent Storage Pool the node is subscribed to (calls repinAllFiles on
+// each subscribed pool). Returns immediately with true; the actual downloads
+// happen asynchronously in the background. Dispatched by the node's RPC server.
 
 #include "AppMain.h"
 #include "RPC/Response.h"

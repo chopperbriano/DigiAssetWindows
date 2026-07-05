@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "getdomainaddress": implements the JSON-RPC handler that resolves a
+// DigiByte-Domain name to the DigiByte address that currently controls it, delegating
+// the lookup to DigiByteDomain. Reports distinct errors for unknown vs. revoked
+// domains. Registered with the node's RPC server; part of the node deployable
+// (DigiAssetWindows.exe).
+//
 
 #include "AppMain.h"
 #include "DigiByteDomain.h"

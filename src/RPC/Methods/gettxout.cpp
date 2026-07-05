@@ -1,6 +1,12 @@
 //
 // Created by RenzoDD on 16/04/24.
 //
+// RPC method "gettxout" for the DigiAsset node's JSON-RPC server.
+// Overrides DigiByte Core's gettxout: forwards to the local DigiByte Core wallet
+// to fetch the unspent output, then augments it with DigiAsset-layer data from the
+// node's own Database (raw DigiByte sats plus any DigiAssets held by that UTXO).
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

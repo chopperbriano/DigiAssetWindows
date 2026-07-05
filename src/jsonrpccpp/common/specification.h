@@ -7,9 +7,20 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Core vocabulary for the JSON-RPC procedure-specification format used by
+ * libjson-rpc-cpp (the bundled RPC library backing the node's and pool
+ * server's RPC endpoints). Defines the JSON key names that appear in a
+ * procedure spec file plus the enums that classify a procedure (method vs.
+ * notification) and the JSON value types its parameters/return may take.
+ * Consumed by SpecificationParser (spec -> Procedure objects) and
+ * SpecificationWriter (Procedure objects -> spec).
+ */
+
 #ifndef JSONRPC_CPP_SPECIFICATION_H
 #define JSONRPC_CPP_SPECIFICATION_H
 
+// JSON object key holding a procedure's name in the specification format.
 #define KEY_SPEC_PROCEDURE_NAME "name"
 #define KEY_SPEC_PROCEDURE_METHOD "method"             // legacy format -> use name now
 #define KEY_SPEC_PROCEDURE_NOTIFICATION "notification" // legacy format -> use name now

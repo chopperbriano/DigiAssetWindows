@@ -7,6 +7,15 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Part of the bundled libjson-rpc-cpp library that powers the JSON-RPC layer
+ * used to talk to the DigiByte Core full node (and to expose RPC endpoints).
+ * This header defines the canonical table of JSON-RPC error codes and a helper
+ * to map a numeric code to a human-readable message. The codes cover the
+ * official JSON-RPC 2.0 spec errors plus library-specific server/client errors.
+ */
+
 #ifndef JSONRPC_CPP_ERRORS_H_
 #define JSONRPC_CPP_ERRORS_H_
 
@@ -18,6 +27,12 @@
 namespace jsonrpc {
   class JsonRpcException;
 
+  /**
+   * Central registry of JSON-RPC error codes and their messages.
+   * Exposes the standard and library-specific error-code constants and a
+   * lookup from code to text. The nested _init object/_initializer static
+   * populates the internal code-to-message map once at static-init time.
+   */
   class Errors {
   public:
     /**
@@ -25,6 +40,11 @@ namespace jsonrpc {
      */
     static std::string GetErrorMessage(int errorCode);
 
+    /**
+     * Static initializer helper: its constructor fills possibleErrors with the
+     * code-to-message pairs. A single static instance (_initializer) runs it
+     * automatically before main().
+     */
     static class _init {
     public:
       _init();

@@ -1,6 +1,31 @@
 //
 // Created by mctrivia on 02/11/23.
 //
+//
+// PermanentStoragePool.h - abstract base class for a Permanent Storage Pool (PSP).
+//
+// A PSP is a scheme by which an asset creator pays (in DGB) to have their
+// asset's IPFS files pinned forever by every node subscribed to that pool.
+// This class is the common interface/behaviour shared by every concrete pool
+// implementation (see PermanentStoragePool/pools/*, e.g. "local" and
+// "mctrivia").  Concrete pools override the pure-virtual hooks to define how a
+// transaction is recognised as belonging to the pool, how the cost is
+// computed, how a transaction is modified to opt in, and how bad content is
+// reported upstream.
+//
+// Roles this base class plays for the node:
+//   - Chain Analyzer side: serialize/deserialize per-transaction metadata
+//     processors and mark assets as belonging to the pool once their files
+//     are pinned.
+//   - Subscriber side: track subscription state + payout address, start/stop,
+//     repin all files, and enumerate pinned files.
+//   - Reporting side: unpin and (optionally) forward reports of bad assets or
+//     bad files.
+//   - Asset-creator side: enable a pool on a transaction and estimate cost.
+//
+// Pool bookkeeping (which assets/files belong to which pool, pin state) lives
+// in the analyzer Database, keyed by this pool's _poolIndex.
+//
 
 #ifndef DIGIASSET_CORE_PERMANENTSTORAGEPOOL_H
 #define DIGIASSET_CORE_PERMANENTSTORAGEPOOL_H
@@ -13,6 +38,15 @@
 #include <string>
 
 
+/**
+ * Abstract base class for every Permanent Storage Pool implementation.
+ *
+ * Holds shared subscription/config state and non-virtual helpers that talk to
+ * the Database, while leaving pool-specific policy (recognition, cost, opt-in,
+ * upstream reporting, metadata) to pure-virtual methods concrete pools must
+ * implement.  Instances are created and owned by PermanentStoragePoolList,
+ * which assigns each pool its _poolIndex.
+ */
 class PermanentStoragePool {
 private:
     bool _subscribed = true;
@@ -68,6 +102,10 @@ public:
     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
      */
 
+    /**
+     * Base exception type for all PSP errors; what() prefixes the stored
+     * message with "Permanent Storage Pool Exception: ".
+     */
     class exception : public std::exception {
     protected:
         std::string _lastErrorMessage;
@@ -82,18 +120,21 @@ public:
         }
     };
 
+    /// Thrown by enable() when the given transaction cannot be made to opt into the pool.
     class exceptionCantEnablePSP : public exception {
     public:
         explicit exceptionCantEnablePSP()
             : exception("Tried to enable PSP on a transaction that wasn't possible to enable") {}
     };
 
+    /// Thrown when a pool fails to load/initialize.
     class exceptionCantLoadPSP : public exception {
     public:
         explicit exceptionCantLoadPSP()
             : exception("Couldn't load the PSP") {}
     };
 
+    /// Thrown by the default report hooks when a pool has no way to forward a bad-content report upstream.
     class exceptionCouldntReport : public exception {
     public:
         explicit exceptionCouldntReport()

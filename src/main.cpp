@@ -1,3 +1,10 @@
+// main.cpp - entry point for the DigiAssetWindows node executable
+// (DigiAssetWindows.exe). Runs the first-launch config wizard, optionally
+// bootstraps the chain database from IPFS, connects to DigiByte Core, opens the
+// local chain.db, starts the IPFS handler, Permanent Storage Pool list, RPC
+// cache, chain analyzer, RPC server, and web server, then idles until a
+// shutdown signal (Ctrl+C/SIGTERM or the dashboard's quit key) and tears down.
+
 #include "AppMain.h"
 #include "ChainAnalyzer.h"
 #include "Config.h"
@@ -17,11 +24,19 @@
 
 // Global flag for graceful shutdown
 static volatile std::sig_atomic_t g_shutdown = 0;
+// Signal handler for SIGINT/SIGTERM: sets the shutdown flag that the various
+// wait loops in main() poll so the node can exit cleanly. Async-signal-safe
+// (only touches the volatile sig_atomic_t flag).
 static void signalHandler(int signal) {
     g_shutdown = 1;
 }
 
 
+// Node process entry point. Wires up and starts every subsystem in dependency
+// order, then blocks until shutdown is requested. Returns 0 on clean exit, -1 on
+// fatal setup failures (bad config, database won't open), 1 on an uncaught
+// exception. Note: the happy path never falls through to `return 0` - it calls
+// std::exit(0) after teardown to kill the detached RPC/web-server threads.
 int main() {
   // Handle Ctrl+C gracefully
   std::signal(SIGINT, signalHandler);

@@ -1,6 +1,19 @@
 //
 // Created by mctrivia on 11/09/23.
 //
+// Server.h - JSON-RPC over HTTP server for the node (RPC::Server class).
+//
+// Listens on the configured rpcassetport, authenticates each request with HTTP
+// Basic Auth against the config's rpcuser/rpcpassword, and dispatches JSON-RPC
+// calls. A method is either served by an in-process custom handler (see
+// RPC/MethodList.h) or, if unknown, forwarded to the backing DigiByte Core
+// wallet via sendcommand. Responses for block-stable commands are cached. Uses
+// its own boost::asio io_context and thread pool to accept and service
+// connections concurrently. This is the RPC surface the node exposes to
+// clients/dashboards; the pool server has its own separate HTTP layer.
+//
+// Constants below are the HTTP status and JSON-RPC error codes returned to
+// callers.
 
 #ifndef DIGIASSET_CORE_RPC_SERVER_H
 #define DIGIASSET_CORE_RPC_SERVER_H
@@ -38,6 +51,10 @@ using boost::asio::ip::tcp;
 
 namespace RPC {
 
+    // JSON-RPC/HTTP server. Construction reads config, opens the listening
+    // socket and spins up the io_context worker pool; start() runs the blocking
+    // accept loop. Custom methods and DigiByte Core pass-through are dispatched
+    // via executeCall().
     class Server {
         std::atomic<uint64_t> _callCounter{0};
 
@@ -59,24 +76,24 @@ namespace RPC {
         bool _showParamsOnError = false;
 
         //functions to handle requests
-        Value parseRequest(tcp::socket& socket);
-        [[noreturn]] void accept();
-        void handleConnection(std::shared_ptr<tcp::socket> socket, uint64_t callNumber);
-        Value handleRpcRequest(const Value& request);
-        static Value createErrorResponse(int code, const std::string& message, const Value& request);
-        static void sendResponse(tcp::socket& socket, const Value& response);
-        bool basicAuth(const std::string& header);
-        static std::string getHeader(const std::string& headers, const std::string& wantedHeader);
-        void run_thread();
+        Value parseRequest(tcp::socket& socket);                                                        // read HTTP request off socket, auth-check, parse JSON body to a Value
+        [[noreturn]] void accept();                                                                     // blocking accept loop: post each connection to the io_context pool
+        void handleConnection(std::shared_ptr<tcp::socket> socket, uint64_t callNumber);                // service one connection end-to-end (parse, dispatch, reply, close)
+        Value handleRpcRequest(const Value& request);                                                   // pull method/params/id from a request and route to executeCall
+        static Value createErrorResponse(int code, const std::string& message, const Value& request);   // build a JSON-RPC error response object
+        static void sendResponse(tcp::socket& socket, const Value& response);                           // serialize response and write HTTP 200 back to the socket
+        bool basicAuth(const std::string& header);                                                      // validate HTTP Basic Auth header against configured user/pass
+        static std::string getHeader(const std::string& headers, const std::string& wantedHeader);      // case-insensitively extract a named header value from raw headers
+        void run_thread();                                                                              // io_context worker-thread body (just calls _io.run())
 
     public:
-        explicit Server(const std::string& fileName = "config.cfg");
+        explicit Server(const std::string& fileName = "config.cfg");    // load config, open listening socket, start worker pool
         ~Server();
 
-        void start();
+        void start();                                                   // run the blocking accept loop until the socket closes
         unsigned int getPort();
-        bool isRPCAllowed(const string& method);
-        Value executeCall(const std::string& methodName, const Json::Value& params, const Json::Value& id = 1);
+        bool isRPCAllowed(const string& method);                        // check method against the rpcallow list (with "*" wildcard default)
+        Value executeCall(const std::string& methodName, const Json::Value& params, const Json::Value& id = 1);  // dispatch one call (cache/custom handler/Core pass-through) and return its JSON result
     };
 
 } // namespace RPC

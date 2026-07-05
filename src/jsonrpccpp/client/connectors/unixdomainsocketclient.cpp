@@ -5,6 +5,12 @@
  * @date    11.05.2015
  * @author  Alexandre Poirot <alexandre.poirot@legrand.fr>
  * @license See attached LICENSE.txt
+ ************************************************************************
+ * Role in DigiAsset for Windows: implements the AF_UNIX JSON-RPC client
+ * connector. Each call opens a socket, connects to the configured path,
+ * writes the delimited request, reads the delimited response, and closes
+ * the socket. POSIX-only (relies on <sys/un.h>); part of the bundled
+ * libjson-rpc-cpp client library and not exercised on the Windows build.
  ************************************************************************/
 
 #include "unixdomainsocketclient.h"
@@ -27,6 +33,15 @@ UnixDomainSocketClient::UnixDomainSocketClient(const std::string &path) : path(p
 
 UnixDomainSocketClient::~UnixDomainSocketClient() {}
 
+// Perform one JSON-RPC round-trip over a Unix domain socket:
+//   1. create an AF_UNIX/SOCK_STREAM socket and connect to this->path;
+//   2. append DEFAULT_DELIMITER_CHAR to message and write it via StreamWriter;
+//   3. read the reply into result via StreamReader up to the same delimiter;
+//   4. close the socket.
+// message is the request; the response is returned in result. Throws
+// JsonRpcException (ERROR_CLIENT_CONNECTOR) on socket create/connect/write/read
+// failure, always closing the fd first. Note: sun_path is copied with a fixed
+// 107-byte cap, so longer paths are silently truncated.
 void UnixDomainSocketClient::SendRPCMessage(const std::string &message, std::string &result) {
   sockaddr_un address;
   int socket_fd;

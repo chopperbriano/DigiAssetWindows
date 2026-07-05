@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "syncstate": exposed through the node's JSON-RPC server to report
+// how far along the node is. It returns the block height DigiByte Core has
+// reached together with the chain analyzer's DigiAsset processing state, letting
+// callers tell whether the node is fully synced and safe to query.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

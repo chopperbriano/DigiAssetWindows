@@ -7,6 +7,14 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Part of the bundled libjson-rpc-cpp library. Implements Procedure: the
+ * variadic constructors that read (name, type) parameter pairs from a va_list,
+ * the accessors/mutators, and the parameter-validation logic (named,
+ * positional, and single-value type checks) for the JSON-RPC layer.
+ */
+
 #include "procedure.h"
 #include "errors.h"
 #include "exception.h"
@@ -16,8 +24,11 @@
 using namespace std;
 using namespace jsonrpc;
 
+// Default ctor: empty method, boolean return, named parameters.
 Procedure::Procedure() : procedureName(""), procedureType(RPC_METHOD), returntype(JSON_BOOLEAN), paramDeclaration(PARAMS_BY_NAME) {}
 
+// Method ctor: reads NULL-terminated (const char* name, int type) pairs from the
+// va_list into the parameter list, then records name, return type and param style.
 Procedure::Procedure(const string &name, parameterDeclaration_t paramType, jsontype_t returntype, ...) {
   va_list parameters;
   va_start(parameters, returntype);
@@ -34,6 +45,8 @@ Procedure::Procedure(const string &name, parameterDeclaration_t paramType, jsont
   this->procedureType = RPC_METHOD;
   this->paramDeclaration = paramType;
 }
+// Notification ctor: same va_list parameter parsing, but marks the procedure as
+// a notification (no response) with a fixed boolean return type.
 Procedure::Procedure(const string &name, parameterDeclaration_t paramType, ...) {
   va_list parameters;
   va_start(parameters, paramType);
@@ -51,6 +64,9 @@ Procedure::Procedure(const string &name, parameterDeclaration_t paramType, ...) 
   this->returntype = JSON_BOOLEAN;
 }
 
+// Entry point for parameter validation: no declared params always passes;
+// otherwise dispatches to positional or named validation according to the
+// declared param style, and fails if the JSON shape doesn't match that style.
 bool Procedure::ValdiateParameters(const Json::Value &parameters) const {
   if (this->parametersName.empty()) {
     return true;
@@ -74,10 +90,14 @@ void Procedure::SetProcedureType(procedure_t type) { this->procedureType = type;
 void Procedure::SetReturnType(jsontype_t type) { this->returntype = type; }
 void Procedure::SetParameterDeclarationType(parameterDeclaration_t type) { this->paramDeclaration = type; }
 
+// Register a parameter in both the by-name map and the by-position vector so it
+// can be validated under either declaration style.
 void Procedure::AddParameter(const string &name, jsontype_t type) {
   this->parametersName[name] = type;
   this->parametersPosition.push_back(type);
 }
+// Validate a by-name (object) request: every declared parameter must be present
+// and of the expected type.
 bool Procedure::ValidateNamedParameters(const Json::Value &parameters) const {
   bool ok = parameters.isObject() || parameters.isNull();
   for (map<string, jsontype_t>::const_iterator it = this->parametersName.begin(); ok == true && it != this->parametersName.end(); ++it) {
@@ -89,6 +109,8 @@ bool Procedure::ValidateNamedParameters(const Json::Value &parameters) const {
   }
   return ok;
 }
+// Validate a by-position (array) request: the array length must equal the number
+// of declared parameters, and each element must match its positional type.
 bool Procedure::ValidatePositionalParameters(const Json::Value &parameters) const {
   bool ok = true;
 
@@ -101,6 +123,8 @@ bool Procedure::ValidatePositionalParameters(const Json::Value &parameters) cons
   }
   return ok;
 }
+// Type-check one JSON value against the expected jsontype_t. Note: unknown
+// expected types fall through and are treated as valid (ok stays true).
 bool Procedure::ValidateSingleParameter(jsontype_t expectedType, const Json::Value &value) const {
   bool ok = true;
   switch (expectedType) {

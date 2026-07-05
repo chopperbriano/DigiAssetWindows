@@ -17,6 +17,10 @@ namespace jsonrpc {
 
   /**
    * @brief The BatchResponse class provides a simple interface for handling batch responses.
+   *
+   * Holds the parsed replies to a JSON-RPC batch (see BatchCall), indexed by the
+   * request id returned from BatchCall::addCall, and lets the node/pool fetch
+   * each individual result or its error code/message.
    */
   class BatchResponse {
   public:
@@ -38,6 +42,9 @@ namespace jsonrpc {
      */
     Json::Value getResult(int id);
 
+    /**
+     * @brief getResult overload writing into `result`; yields null on error.
+     */
     void getResult(Json::Value &id, Json::Value &result);
 
     /**
@@ -53,8 +60,14 @@ namespace jsonrpc {
      */
     std::string getErrorMessage(Json::Value &id);
 
+    /**
+     * @brief integer-id convenience overload of getErrorMessage.
+     */
     std::string getErrorMessage(int id);
 
+    /**
+     * @brief hasErrors returns true if any call in the batch failed.
+     */
     bool hasErrors();
 
   private:

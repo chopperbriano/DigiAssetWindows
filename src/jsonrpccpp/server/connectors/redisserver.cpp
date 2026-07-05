@@ -7,6 +7,16 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * ROLE IN DIGIASSET FOR WINDOWS:
+ * Implementation of RedisServer, the Redis-queue JSON-RPC connector from
+ * vendored libjson-rpc-cpp. A background pthread blocks on BRPOP of the
+ * configured queue; each message encodes "<reply-queue>!<json-request>",
+ * which is parsed, dispatched to the base handler, and the result LPUSH-ed
+ * back onto the reply queue. Depends on hiredis; not built into the Windows
+ * node or pool server, retained for upstream parity.
+ */
+
 #include "redisserver.h"
 
 using namespace jsonrpc;
@@ -54,8 +64,19 @@ bool ProcessRedisReply(redisReply *req, std::string &ret_queue, std::string &req
   return true;
 }
 
+/**
+ * @brief Stores connection settings; does not yet connect (see StartListening).
+ * @param host Redis server address. @param port Redis port. @param queue List to consume requests from.
+ */
 RedisServer::RedisServer(std::string host, int port, std::string queue) : running(false), host(host), port(port), queue(queue), con(NULL) {}
 
+/**
+ * @brief Connects to Redis and spawns the background listening thread.
+ *
+ * No-op returning the current state if already running. Establishes the
+ * hiredis connection and, on success, starts ListenLoop on a new pthread.
+ * @returns true if listening (connected and thread started), false otherwise.
+ */
 bool RedisServer::StartListening() {
   if (this->running) {
     return this->running;
@@ -78,6 +99,10 @@ bool RedisServer::StartListening() {
   return this->running;
 }
 
+/**
+ * @brief Signals the listen loop to stop, joins the thread, and frees the connection.
+ * @returns true once stopped (also true if it was not running).
+ */
 bool RedisServer::StopListening() {
   if (!this->running) {
     return true;
@@ -90,6 +115,11 @@ bool RedisServer::StopListening() {
   return !(this->running);
 }
 
+/**
+ * @brief LPUSH-es the JSON-RPC response onto the client's reply queue.
+ * @param response The response payload. @param ret_queue The reply queue name.
+ * @returns true if Redis acknowledged the push (integer reply > 0), false otherwise.
+ */
 bool RedisServer::SendResponse(const std::string &response, const std::string &ret_queue) {
   redisReply *ret;
   ret = (redisReply *)redisCommand(con, "LPUSH %s %s", ret_queue.c_str(), response.c_str());
@@ -107,6 +137,10 @@ bool RedisServer::SendResponse(const std::string &response, const std::string &r
   return true;
 }
 
+/**
+ * @brief pthread entry point: casts p_data back to a RedisServer and runs ListenLoop.
+ * @param p_data Pointer to the RedisServer instance. @returns NULL.
+ */
 void *RedisServer::LaunchLoop(void *p_data) {
   RedisServer *instance = reinterpret_cast<RedisServer *>(p_data);
   ;
@@ -114,6 +148,12 @@ void *RedisServer::LaunchLoop(void *p_data) {
   return NULL;
 }
 
+/**
+ * @brief Background loop: while running, BRPOP-s a request (1s block) off the
+ *        queue, skips nil/malformed messages, dispatches valid requests via
+ *        ProcessRequest, and sends the response back with SendResponse. Frees
+ *        every hiredis reply it receives.
+ */
 void RedisServer::ListenLoop() {
   while (this->running) {
     redisReply *req = NULL;

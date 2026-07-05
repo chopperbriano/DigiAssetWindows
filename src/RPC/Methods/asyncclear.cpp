@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 11/04/24.
 //
+// RPC method handler: "asyncclear".
+//
+// Part of the node's JSON-RPC surface. Async RPC results are cached on disk as
+// files under cache/ keyed by a hash of the original call (method + params).
+// This handler deletes the cached result for a given async call so it can be
+// re-run (see asyncstart to queue a job and asyncget to fetch its result).
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

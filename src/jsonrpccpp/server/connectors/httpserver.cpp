@@ -5,6 +5,13 @@
  * @date    31.12.2012
  * @author  Peter Spiess-Knafl <dev@spiessknafl.at>
  * @license See attached LICENSE.txt
+ *
+ * Implementation of HttpServer, a libmicrohttpd-backed JSON-RPC server
+ * connector. This is the primary transport by which the DigiAsset node and the
+ * DigiAsset pool server expose their JSON-RPC HTTP API: it accepts POST bodies
+ * as JSON-RPC requests, routes them to per-URL handlers, answers CORS
+ * pre-flight OPTIONS requests, and can optionally run over TLS or bound to
+ * loopback only.
  ************************************************************************/
 
 #include "httpserver.h"
@@ -19,6 +26,9 @@ using namespace std;
 
 #define BUFFERSIZE 65536
 
+// Per-connection state attached to each libmicrohttpd request via con_cls:
+// accumulates the uploaded request body and carries the owning server plus the
+// HTTP status code to return.
 struct mhd_coninfo {
   struct MHD_PostProcessor *postprocessor;
   MHD_Connection *connection;
@@ -27,11 +37,17 @@ struct mhd_coninfo {
   int code;
 };
 
+// Construct the server bound to `port` with a `threads`-sized worker pool. If
+// both sslcert and sslkey paths are given the daemon runs over TLS. The daemon
+// is not started until StartListening() is called.
 HttpServer::HttpServer(int port, const std::string &sslcert, const std::string &sslkey, int threads)
     : AbstractServerConnector(), port(port), threads(threads), running(false), path_sslcert(sslcert), path_sslkey(sslkey), daemon(NULL), bindlocalhost(false) {}
 
 HttpServer::~HttpServer() {}
 
+// Resolve the connection handler for a request URL. A global handler set via
+// SetHandler() takes precedence; otherwise the per-URL handler registered with
+// SetUrlHandler() is returned, or NULL if none matches.
 IClientConnectionHandler *HttpServer::GetHandler(const std::string &url) {
   if (AbstractServerConnector::GetHandler() != NULL)
     return AbstractServerConnector::GetHandler();
@@ -46,6 +62,12 @@ HttpServer &HttpServer::BindLocalhost() {
   return *this;
 }
 
+// Start the embedded microhttpd daemon (idempotent while already running).
+// Selects the best available event backend (epoll/poll/select), then starts in
+// one of three modes: loopback-bound plaintext (BindLocalhost), TLS when both
+// cert and key paths are set, or plain HTTP otherwise. All requests are routed
+// to HttpServer::callback with a worker thread pool of size `threads`.
+// @return true if the daemon started (running), false on failure.
 bool HttpServer::StartListening() {
   if (!this->running) {
     const bool has_epoll = (MHD_is_feature_supported(MHD_FEATURE_EPOLL) == MHD_YES);
@@ -94,6 +116,8 @@ bool HttpServer::StartListening() {
   return this->running;
 }
 
+// Stop the microhttpd daemon if running and clear the running flag.
+// @return always true.
 bool HttpServer::StopListening() {
   if (this->running) {
     MHD_stop_daemon(this->daemon);
@@ -102,6 +126,10 @@ bool HttpServer::StopListening() {
   return true;
 }
 
+// Queue an HTTP response body for the connection identified by addInfo (an
+// mhd_coninfo*). Sets Content-Type: application/json and permissive CORS,
+// using the status code stored on the connection.
+// @return true if microhttpd accepted the response.
 bool HttpServer::SendResponse(const string &response, void *addInfo) {
   struct mhd_coninfo *client_connection = static_cast<struct mhd_coninfo *>(addInfo);
   struct MHD_Response *result = MHD_create_response_from_buffer(response.size(), (void *)response.c_str(), MHD_RESPMEM_MUST_COPY);
@@ -114,6 +142,9 @@ bool HttpServer::SendResponse(const string &response, void *addInfo) {
   return ret == MHD_YES;
 }
 
+// Queue the empty-body reply to a CORS pre-flight OPTIONS request, advertising
+// the allowed methods/headers (POST, OPTIONS) and permissive CORS.
+// @return true if microhttpd accepted the response.
 bool HttpServer::SendOptionsResponse(void *addInfo) {
   struct mhd_coninfo *client_connection = static_cast<struct mhd_coninfo *>(addInfo);
   struct MHD_Response *result = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_MUST_COPY);
@@ -128,11 +159,21 @@ bool HttpServer::SendOptionsResponse(void *addInfo) {
   return ret == MHD_YES;
 }
 
+// Register a handler for requests to a specific URL path and clear any global
+// handler so per-URL routing takes effect.
 void HttpServer::SetUrlHandler(const string &url, IClientConnectionHandler *handler) {
   this->urlhandler[url] = handler;
   this->SetHandler(NULL);
 }
 
+// libmicrohttpd access-handler callback, invoked (possibly repeatedly) per
+// request. On the first call it allocates the per-connection mhd_coninfo. For
+// POST it accumulates the upload body across calls, then on the final call
+// routes it to the matching handler and sends the JSON-RPC response (or a 500
+// if no handler is registered). OPTIONS yields the CORS pre-flight reply; any
+// other method yields 405. The connection state is freed after the reply.
+// @param cls the HttpServer* passed at daemon start.
+// @return MHD_YES to keep processing, MHD_NO on failure.
 HttpServer::MicroHttpdResult HttpServer::callback(void *cls, MHD_Connection *connection, const char *url, const char *method, const char *version,
                                                   const char *upload_data, size_t *upload_data_size, void **con_cls) {
   (void)version;

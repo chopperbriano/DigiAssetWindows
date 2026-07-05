@@ -2,6 +2,15 @@
 // Created by mctrivia on 14/06/23.
 //
 
+// DigiAssetRules.h - Declares DigiAssetRules, the set of optional transfer restrictions that can be
+// attached to a DigiAsset at issuance and enforced by the node when validating transfers. Rules are
+// encoded bit-packed in the issuance transaction's OP_RETURN and decoded here; supported rule types
+// are approval/signers, royalties (with an optional exchange-rate denomination), geofence (KYC
+// country allow/deny), vote options and expiry, and deflation (mandatory burn). This header also
+// declares the getters DigiAsset::checkRulesPass() consults, the setters used when building rules
+// programmatically, JSON serialization for the API, and the free serialize/deserialize functions
+// (friends) that persist rules to/from the database blob format.
+
 #ifndef DIGIASSET_CORE_DIGIASSETRULES_H
 #define DIGIASSET_CORE_DIGIASSETRULES_H
 
@@ -11,6 +20,10 @@
 #include "DigiByteCore_Types.h"
 #include <jsonrpccpp/server.h>
 
+// Holds the decoded transfer rules for one asset. A default-constructed instance has _noRules=true
+// (no restrictions). Fields are populated either by the decoding constructor (from chain data), by
+// the setters, or by deserialize(). _rewritable records whether a later issuance may replace these
+// rules. serialize/deserialize are friends so they can read/write the private fields directly.
 class DigiAssetRules {
     bool _noRules = true;
     bool _rewritable = false;
@@ -29,6 +42,8 @@ class DigiAssetRules {
 
     std::string _voteLabelsCID; //empty if labels have been processed already
 
+    // Per-rule bit-stream decoders, each invoked by the constructor after its 4-bit rule header has
+    // been read. Each advances dataStream past its rule's payload and fills the matching fields.
     void decodeApproval(const getrawtransaction_t& txData, BitIO& dataStream);
     void decodeRoyaltyUnits(const getrawtransaction_t& txData, BitIO& dataStream);
     void decodeRoyalties(const getrawtransaction_t& txData, BitIO& dataStream);

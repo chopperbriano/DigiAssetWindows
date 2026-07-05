@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 18/08/23.
 //
+// Threaded.cpp - Implementation of the Threaded background-worker base class.
+//
+// Runs the worker lifecycle on a dedicated std::thread: startupFunction() once,
+// then mainFunction() repeatedly (optionally fanned out across up to _parallels
+// std::async sub-tasks per iteration) until stop() sets _stopRequest, then
+// shutdownFunction() once. Exceptions escaping the overridable functions are
+// caught and logged as CRITICAL so a single failing iteration cannot crash the
+// whole node/pool. See Threaded.h for the subclass override points.
 
 #include "Threaded.h"
 #include "Log.h"
@@ -9,7 +17,12 @@
 using namespace std;
 
 /**
- * This function handles the new thread
+ * Worker-thread entry point. Runs startupFunction() once (aborting the thread
+ * if it throws), then loops launching mainFunction() as std::async sub-tasks,
+ * capping concurrency at _parallels and reaping finished futures, until
+ * _stopRequest is set. Waits for all outstanding sub-tasks, calls
+ * shutdownFunction(), then clears _stopRequest and _running so the thread can
+ * be started again. All exceptions from the overridable functions are logged.
  */
 void Threaded::_threadFunction() {
     //startup thread
@@ -124,6 +137,11 @@ Threaded::~Threaded() {
     stop();
 }
 
+/**
+ * Sets how many mainFunction() sub-tasks the loop may run concurrently. With
+ * the default of 1 the loop is effectively serial (one iteration at a time).
+ * @param max maximum number of in-flight sub-task futures
+ */
 void Threaded::setMaxParallels(size_t max) {
     _parallels = max;
 }

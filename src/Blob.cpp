@@ -1,11 +1,20 @@
 //
 // Created by mctrivia on 07/04/23.
 //
+// Blob.cpp - implementation of the Blob owning binary buffer (see Blob.h).
+// Handles the malloc/free lifetime of the byte buffer and the conversions
+// between raw bytes, hex text and vectors used throughout the node/pool.
 
 #include "Blob.h"
 #include <cstring>
 #include <stdexcept>
 
+/**
+ * Construct from a raw memory block, copying length bytes into an owned buffer.
+ * @param data - source pointer to copy from
+ * @param length - number of bytes to copy
+ * @throws std::exception if the allocation fails
+ */
 Blob::Blob(const void* data, int length) {
     //reserve needed memory
     _data = (unsigned char*) malloc(length);
@@ -18,6 +27,11 @@ Blob::Blob(const void* data, int length) {
     _length = length;
 }
 
+/**
+ * Convert a single hex digit character to its 0-15 value.
+ * Accepts 0-9, A-F and a-f.
+ * @throws std::invalid_argument if the character is not a hex digit
+ */
 int char2int(char input) {
     if (input >= '0' && input <= '9') {
         return input - '0';
@@ -31,6 +45,11 @@ int char2int(char input) {
     throw std::invalid_argument("Invalid input string");
 }
 
+/**
+ * Construct from a hex string, decoding each pair of nibbles into one byte.
+ * @param hex - hex text; must contain an even number of characters
+ * @throws std::invalid_argument if the length is odd or a character is not hex
+ */
 Blob::Blob(const std::string& hex) {
     //get number of bytes and make sure not an odd number of nibles
     _length = hex.length();
@@ -48,9 +67,13 @@ Blob::~Blob() {
     free(_data);
 }
 
+// Nibble value (0-15) -> lowercase hex character, used by toHex().
 constexpr char hexmap[] = {'0', '1', '2', '3', '4', '5', '6', '7',
                            '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
 
+/**
+ * Return the stored bytes as a lowercase hex string (two chars per byte).
+ */
 std::string Blob::toHex() const {
     std::string s(_length * 2, ' ');
     for (size_t i = 0; i < _length; ++i) {
@@ -68,6 +91,9 @@ size_t Blob::length() const {
     return _length;
 }
 
+/**
+ * Return a copy of the stored bytes as a std::vector<uint8_t>.
+ */
 std::vector<uint8_t> Blob::vector() const {
     std::vector<uint8_t> result(_length);
     if (_length > 0) {
@@ -76,6 +102,10 @@ std::vector<uint8_t> Blob::vector() const {
     return result;
 }
 
+/**
+ * Construct from a byte vector, copying its contents into an owned buffer.
+ * @param data - source bytes to copy
+ */
 Blob::Blob(const std::vector<uint8_t>& data) {
     //convert string to byte array
     _length = data.size();
@@ -85,6 +115,11 @@ Blob::Blob(const std::vector<uint8_t>& data) {
     }
 }
 
+/**
+ * Copy constructor - deep-copies the other Blob's buffer.
+ * A zero-length source leaves this Blob with a null buffer and length 0.
+ * @throws std::bad_alloc if the allocation fails
+ */
 Blob::Blob(const Blob& other) : _data(nullptr), _length(0) {
     if (other._length > 0) {
         _data = (unsigned char*)malloc(other._length);
@@ -94,6 +129,12 @@ Blob::Blob(const Blob& other) : _data(nullptr), _length(0) {
     }
 }
 
+/**
+ * Copy assignment - frees the current buffer then deep-copies the other Blob's.
+ * Guards against self-assignment and leaves a null buffer for a zero-length
+ * source.
+ * @throws std::bad_alloc if the allocation fails
+ */
 Blob& Blob::operator=(const Blob& other) {
     if (this != &other) { // Protect against self-assignment
         // Free the existing resource.

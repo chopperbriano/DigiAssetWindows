@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method handler: "addressstats". Registered in the node's JSON-RPC
+// dispatch table (RPC/MethodList) and served by the RPC server. Reads
+// pre-aggregated per-time-frame address statistics (counts of new/used
+// addresses, balance-threshold buckets, quantum-insecure and totals) from the
+// chain-analyzer Database and returns them as a JSON array. Read-only; touches
+// no wallet or IPFS state.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

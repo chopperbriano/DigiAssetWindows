@@ -7,6 +7,15 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// ---------------------------------------------------------------------------
+// Role in DigiAsset for Windows:
+//   Declares LinuxSerialPortClient, the POSIX serial-port implementation of
+//   the IClientConnector transport interface used by libjson-rpc-cpp's client.
+//   It carries JSON-RPC request/response frames over a serial device. This is
+//   a Linux/UNIX-only connector and is not compiled into the Windows node or
+//   pool-server builds; it is kept for source completeness of the vendored lib.
+// ---------------------------------------------------------------------------
+
 #ifndef JSONRPC_CPP_LINUXSERIALPORTCLIENT_H_
 #define JSONRPC_CPP_LINUXSERIALPORTCLIENT_H_
 

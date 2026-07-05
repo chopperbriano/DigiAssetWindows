@@ -22,6 +22,13 @@ class PoolDatabase;
 class PoolServer;
 class PoolVerifier;
 
+// Owns the pool server's live console UI: a background thread that repeatedly
+// renders a status screen (node counts, verification/probe stats, payout
+// ledger totals, uptime) from the injected db/server/verifier, and reads
+// single keypresses to drive operator actions - notably the [P] payout
+// preview and the [E]/Y guarded batch payout. Holds no state of its own beyond
+// a bounded in-memory log buffer and the pending payout amount; all durable
+// data lives in PoolDatabase.
 class PoolDashboard {
 public:
     // configPath = path to pool.cfg, re-read on each [E] press so
@@ -35,9 +42,13 @@ public:
     // printing plain lines.
     static bool enableVT100();
 
+    // Clear the screen and spawn the refresh thread (idempotent). Call stop()
+    // (or destroy) to join it.
     void start();
     void stop();
 
+    // Append a line to the scrolling log area (thread-safe; oldest lines are
+    // dropped past MAX_LOG_LINES).
     void addLog(const std::string& line);
 
     bool quitRequested() const { return _quit.load(); }

@@ -1,6 +1,21 @@
 //
 // Created by mctrivia on 10/04/23.
 //
+// BitIO.h - declares the BitIO bit-stream class plus its supporting structs and
+// encoding constants.
+//
+// BitIO is the low-level serializer at the heart of the chain analyzer: it packs
+// and unpacks data at bit granularity (not just whole bytes) so DigiAsset data
+// can be squeezed into Bitcoin/DigiByte OP_RETURN outputs as compactly as
+// possible.  It provides random-access read/write/insert of arbitrary bit runs,
+// several space-efficient string encodings (Alpha, UTF-8, Hex, 3B40), a custom
+// fixed-precision number format, IEEE-754 doubles, Bitcoin script data headers
+// (OP_RETURN / push opcodes) and a variable-length "xBit" key encoding.  It is
+// used both to build the OP_RETURN payloads the node broadcasts and to decode
+// the ones it reads back off chain.
+//
+// The BITIO_* macros below define fill styles, the character sets for each string
+// encoder, the encoder id numbers and Bitcoin op-code constants.
 
 #ifndef DIGIBYTECORE_BITIO_H
 #define DIGIBYTECORE_BITIO_H
@@ -62,6 +77,9 @@ struct xBitValue {
 
 /**
  * When using the make and decode best string functions you need to provide an array of header options
+ * Each option pairs an xBit-encoded header value with the encoder (BITIO_ENCODE_*)
+ * that header selects, so makeBestString can pick the smallest encoding and
+ * getBestString can recognize which encoder was used.
  */
 struct stringHeaderOption {
     xBitValue header;   //xBit encoded header value should this option be chosen
@@ -76,6 +94,15 @@ const std::vector<stringHeaderOption> defaultHeaderOptions = {
 };
 
 
+/**
+ * Random-access bit stream.
+ * Stores the packed bits in a vector of 64-bit longs (_bits), tracks the total
+ * bit count (_length) and a read/write cursor (_position).  Bits are laid out
+ * MSB-first within each long.  The public API lets callers read, overwrite,
+ * insert, append and copy arbitrary-length bit runs, encode/decode strings and
+ * numbers, and build/parse Bitcoin OP_RETURN payloads.  The private helpers
+ * handle bit masks, position arithmetic and argument validation.
+ */
 class BitIO {
     std::vector<uint64_t> _bits;
     size_t _position = 0;

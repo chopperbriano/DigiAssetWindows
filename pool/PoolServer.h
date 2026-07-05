@@ -28,9 +28,18 @@
 
 class PoolDatabase;
 
+// The pool exe's HTTP front door. Owns the listen socket and worker
+// threads, and routes each request to a handler that reads/writes the
+// shared PoolDatabase. Lifetime: constructed once in pool/main.cpp, bound
+// in the ctor, then start()ed after the first-run snapshot; stop()ped and
+// deleted on shutdown. All public getters/setters are thread-safe (atomics
+// or _statsMutex-guarded) since the dashboard thread reads them live.
 class PoolServer {
 public:
+    // Bind the listen socket on `port` (throws on bind failure) and hold a
+    // reference to the shared `db`. Does NOT begin accepting — call start().
     PoolServer(PoolDatabase& db, unsigned int port);
+    // Stops the server (best-effort) and joins threads.
     ~PoolServer();
 
     PoolServer(const PoolServer&) = delete;
@@ -106,7 +115,11 @@ private:
     std::map<std::string, std::string> _geoCache;
     std::string _cachedNodesJson = "[]";
 
+    // Blocking accept loop (runs on _acceptThread): accepts sockets and
+    // posts each to the io_context thread pool for handling.
     void acceptLoop();
+    // Reads one HTTP request off `socket`, dispatches via handleRequest, and
+    // writes the response. `id` is a per-connection counter for logging.
     void handleConnection(boost::asio::ip::tcp::socket socket, uint64_t id);
 
     // HTTP handlers. Each returns (statusCode, contentType, body) via
@@ -119,12 +132,25 @@ private:
                        std::string& outContentType,
                        std::string& outBody);
 
+    // GET /permanent/<page>.json — serves one page of the permanent asset
+    // list (assetId/txHash -> CIDs) that clients pin, mirroring mctrivia's
+    // wire format. Parses the page number out of `path`.
     void handlePermanent(const std::string& path, int& outStatus, std::string& outBody);
+    // POST /keepalive — a registered node checking in. Records the node's
+    // liveness (keyed off `body` + `clientIp`) in the pool database.
     void handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody);
+    // GET/POST /list/<floor>.json — registers a payout address and returns
+    // the assets a node should pin at/above the given payout floor. Reports
+    // the pool's payout-enabled state so the client shows an honest status.
     void handleList(const std::string& path, const std::string& body, const std::string& clientIp, int& outStatus, std::string& outBody);
+    // GET /nodes.json — public list of registered/verified nodes.
     void handleNodes(std::string& outBody);
+    // GET /map.json — geolocated node points for the landing-page world map.
     void handleMap(std::string& outBody);
+    // GET /bad.json — assets/CIDs flagged as bad (skip-pin list).
     void handleBad(std::string& outBody);
+    // GET /pool/stats.json — public donation/treasury page: cached wallet
+    // available balance, treasury received/balance, and node geo points.
     void handleStats(std::string& outBody);
 };
 

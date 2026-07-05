@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "getdgbequivalent": implements the JSON-RPC handler that converts an
+// amount denominated in an on-chain exchange-rate feed (identified by an address and
+// a rate index 0-9) into the equivalent value in DigiByte satoshis, using the latest
+// rate the node has indexed. Refuses to answer when chain sync is too far behind for
+// the rate to be trustworthy. Registered with the node's RPC server; part of the
+// node deployable (DigiAssetWindows.exe).
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

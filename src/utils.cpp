@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 14/01/24.
 //
+// utils.cpp - implementations of the small, general-purpose helpers in the
+// utils:: namespace used across the node and pool server (string/JSON helpers,
+// file utilities, random code generation, big-number modulo, console progress
+// bar, and interactive console prompts). See utils.h for the declarations.
+//
 
 #include "utils.h"
 #include <algorithm>
@@ -71,6 +76,11 @@ namespace utils {
     }
 
 
+    /**
+     * Returns whether a file exists at the given path.
+     * @param fileName - path to test
+     * @return true if stat() succeeds for the path
+     */
     bool fileExists(const std::string& fileName) {
         //see if this is first run
         struct stat buffer {};
@@ -98,6 +108,14 @@ namespace utils {
     }
 
 
+    /**
+     * Copies a file byte-for-byte from sourcePath to destinationPath (binary mode),
+     * overwriting the destination if it exists. Prints an error to stderr and
+     * returns false if either file fails to open or the copy fails.
+     * @param sourcePath
+     * @param destinationPath
+     * @return true on success
+     */
     bool copyFile(const std::string& sourcePath, const std::string& destinationPath) {
         std::ifstream source(sourcePath, std::ios::binary);
         std::ofstream destination(destinationPath, std::ios::binary);
@@ -156,6 +174,14 @@ namespace utils {
         return size;
     }
 
+    /**
+     * Computes numerator % divisor where numerator is a 256-bit unsigned integer
+     * stored big-endian in 32 bytes. Works byte by byte to avoid needing 256-bit
+     * arithmetic. Caller must ensure divisor is non-zero.
+     * @param numerator - 32-byte big-endian value
+     * @param divisor
+     * @return the 64-bit remainder
+     */
     uint64_t mod256by64(const array<uint8_t, 32>& numerator, uint64_t divisor) {
         uint64_t remainder = 0;
 
@@ -172,6 +198,11 @@ namespace utils {
 
 
 
+    /**
+     * Blocks reading from stdin until the user enters Y or N (case-insensitive),
+     * re-prompting on any other input.
+     * @return true for Y, false for N
+     */
     bool getAnswerBool() {
         char input;
         while (true) {
@@ -188,6 +219,14 @@ namespace utils {
         }
     }
 
+    /**
+     * Blocks reading a full line from stdin and parsing it as an integer within
+     * [min, max], re-prompting until a valid in-range number is entered. Ignores a
+     * leading pending newline/EOF so it composes with prior formatted extractions.
+     * @param min - lowest accepted value
+     * @param max - highest accepted value
+     * @return the entered integer
+     */
     int getAnswerInt(int min, int max) {
         string inputLine;
         int input;
@@ -213,6 +252,13 @@ namespace utils {
         }
     }
 
+    /**
+     * Blocks reading a full line from stdin, re-prompting until it matches the
+     * given regex (or accepting any line when regexPattern is empty). Ignores a
+     * leading pending newline/EOF so it composes with prior formatted extractions.
+     * @param regexPattern - ECMAScript regex the whole line must match, or "" for any input
+     * @return the entered line
+     */
     string getAnswerString(const string& regexPattern) {
         string input;
         regex pattern(regexPattern);

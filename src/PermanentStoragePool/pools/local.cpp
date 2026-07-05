@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 12/11/23.
 //
+//
+// local.cpp - implementation of the "Local Storage" PSP (see local.h).
+//
+// Backs the pool with a small SQLite database (local.db) holding two tables:
+//   pin  (cid)     - CIDs the operator has opted into pinning
+//   bad  (assetId) - asset ids flagged as bad
+// The database is opened lazily on first use. There is no network activity and
+// no cost; start()/stop() are no-ops.
+//
 
 #include "local.h"
 #include "AppMain.h"
@@ -11,6 +20,14 @@ void local::start() {
 void local::stop() {
     //not needed for local only storage
 }
+
+/**
+ * Opts a transaction's issued asset into the local pool by inserting its CID
+ * into the local "pin" table. Unlike a real pool this does not modify the
+ * on-chain transaction. Loads the db first.
+ * @param tx  issuance transaction whose asset CID is added to the pin table
+ * @throws exceptionCantEnablePSP if the insert does not complete
+ */
 void local::enable(DigiByteTransaction& tx) {
     //make sure database enabled
     loadDB();
@@ -63,6 +80,13 @@ string local::serializeMetaProcessor(const DigiByteTransaction& tx) {
 unique_ptr<PermanentStoragePoolMetaProcessor> local::deserializeMetaProcessor(const string& serializedData) {
     return unique_ptr<PermanentStoragePoolMetaProcessor>(new localMetaProcessor(serializedData, _poolIndex));
 }
+
+/**
+ * Lazily opens (creating if necessary) local.db and prepares all reusable SQL
+ * statements. No-op if the db handle is already open. On a first run the
+ * tables are built before statements are prepared.
+ * @throws exceptionCantLoadPSP if the database cannot be opened
+ */
 void local::loadDB() {
     //check if already loaded
     if (_db != nullptr) return;
@@ -83,11 +107,21 @@ void local::loadDB() {
     //create needed statements
     initializeDBValues();
 }
+/**
+ * First-run probe. stat()s local.db and returns true when the call fails,
+ * i.e. when the file is absent. Callers use the result as a "this is the first
+ * run, build the tables" flag.
+ */
 bool local::localExists() const {
     struct stat buffer {};
     return (stat(PSP_LOCAL_DB_FILENAME, &buffer) != 0);
 }
 
+/**
+ * Creates the empty "pin" and "bad" tables. Called once, on first run, from
+ * loadDB().
+ * @throws exceptionCantLoadPSP if the CREATE TABLE statements fail
+ */
 void local::buildTables() {
     char* zErrMsg = 0;
     int rc;
@@ -103,6 +137,11 @@ void local::buildTables() {
         throw exceptionCantLoadPSP();
     }
 }
+/**
+ * Prepares the five reusable prepared statements (membership check, bad check,
+ * pin insert, bad insert, pin delete) against the open database.
+ * @throws exceptionCantLoadPSP if any statement fails to compile
+ */
 void local::initializeDBValues() {
     const char* sql10 = "SELECT 1 FROM pin WHERE cid LIKE ?;";
     int rc = sqlite3_prepare_v2(_db, sql10, strlen(sql10), &_stmtCheckIfPartOfPool, nullptr);
@@ -124,6 +163,11 @@ void local::initializeDBValues() {
     rc = sqlite3_prepare_v2(_db, sql14, strlen(sql14), &_stmtDiableFromPool, nullptr);
     if (rc != SQLITE_OK) throw exceptionCantLoadPSP();
 }
+/**
+ * Returns true if assetId appears in the local "bad" table. Short-circuits to
+ * false when no local.db exists yet (nothing has been flagged). Loads the db
+ * on demand.
+ */
 bool local::isAssetBad(const std::string& assetId) {
     //check if there is a local psp.  to save time assume there is if already loaded
     if ((_db == nullptr) && (!localExists())) return false;
@@ -137,6 +181,11 @@ bool local::isAssetBad(const std::string& assetId) {
     int rc = sqlite3_step(_stmtCheckIfBad);
     return (rc == SQLITE_ROW);
 }
+/**
+ * Records assetId in the local "bad" table. Since this pool has no upstream
+ * server, "reporting" just means persisting locally.
+ * @throws exceptionCouldntReport if the insert does not complete
+ */
 void local::_reportAssetBad(const std::string& assetId) {
     //load db(does nothing if already loaded)
     loadDB();
@@ -147,6 +196,12 @@ void local::_reportAssetBad(const std::string& assetId) {
     int rc = sqlite3_step(_stmtMarkBad);
     if (rc != SQLITE_DONE) throw exceptionCouldntReport();
 }
+/**
+ * Reacts to a file being flagged bad by removing its CID from the local "pin"
+ * table (DELETE), so the node stops pinning it. There being no upstream server,
+ * nothing is forwarded.
+ * @throws exceptionCouldntReport if the delete does not complete
+ */
 void local::_reportFileBad(const string& cid) {
     //load db(does nothing if already loaded)
     loadDB();

@@ -1,6 +1,12 @@
 //
 // Created by RenzoDD on 05/04/24.
 //
+// RPC method "listassetissuances" for the DigiAsset node's JSON-RPC server.
+// A node-specific (non-Core) method: given an assetId, returns every issuance
+// transaction for that asset from the node's Database (assetIndex, txid, amount,
+// height, cid), covering the initial issuance and any later re-issuances.
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

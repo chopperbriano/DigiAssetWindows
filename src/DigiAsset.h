@@ -2,6 +2,15 @@
 // Created by mctrivia on 07/06/23.
 //
 
+// DigiAsset.h - Declares the DigiAsset class, the in-memory representation of a single DigiAsset
+// (or a quantity of one) as tracked by the node's chain analyzer. It knows how to decode an asset
+// out of a DigiByte transaction's OP_RETURN payload (issuance), how to rebuild itself from a
+// database row, and how to serialize itself to JSON for the API. It carries the asset's identity
+// (assetId, on-chain metadata CID, issuer KYC), its transfer rules (DigiAssetRules), and helpers to
+// enforce those rules on a set of transaction inputs/outputs. Both the node and the pool server use
+// this class; the pool server additionally queries Permanent Storage Pool membership (getPspMembership)
+// and whether a pool has flagged the asset as bad (isBad).
+
 #ifndef DIGIASSET_CORE_DIGIASSET_H
 #define DIGIASSET_CORE_DIGIASSET_H
 
@@ -19,6 +28,10 @@
 #include <map>
 #include <string>
 
+// Represents one DigiAsset type (and optionally a held quantity of it). Instances are created three
+// ways: decoded from an issuance transaction, rebuilt from the database, or default-constructed and
+// filled in. Assets loaded from chain/DB are write-protected (_enableWrite=false) unless the owner
+// calls setOwned(); this guards against accidentally mutating consensus-derived data.
 class DigiAsset {
 
     bool _existingAsset = false; //set to true if an existing asset
@@ -50,13 +63,20 @@ class DigiAsset {
     std::vector<int> _pspMembership = {-1};
 
     //functions to help process chain data
+    // Decodes an issuance transaction body into this object; returns false if it is not a valid issuance.
     bool
     processIssuance(const getrawtransaction_t& txData, unsigned int height, unsigned char version, unsigned char opcode,
                     BitIO& dataStream);
+    // Derives the base58 assetId from the issuing transaction's first input and the issuance flags.
     std::string calculateAssetId(const vin_t& firstVin, uint8_t issuanceFlags) const;
+    // Reconstructs the simplified scriptPubKey used to hash unlocked-asset ids from a transaction input.
     static std::vector<uint8_t> calcSimpleScriptPubKey(const vin_t& vinData);
+    // Writes ripemd160(sha256(data)) (20 bytes) into result starting at startIndex. Two overloads for
+    // string and byte-vector inputs.
     static void insertSRHash(const std::string& dataToHash, std::vector<uint8_t>& result, size_t startIndex);
     static void insertSRHash(std::vector<uint8_t> dataToHash, std::vector<uint8_t>& result, size_t startIndex);
+    // For unlocked aggregable assets, reconciles rules encoded in this issuance against any pre-existing
+    // rules in the database (older rules win unless they were declared rewritable).
     void handleRulesConflict();
 
     friend class DigiAsset_calcSimpleScriptPubKey_Test;
@@ -77,14 +97,19 @@ public:
 
     //constructors
     DigiAsset() = default;
+    // Constructs an asset by decoding an issuance transaction; throws exceptionInvalidIssuance if the
+    // transaction does not describe a valid issuance.
     DigiAsset(const getrawtransaction_t& txData, unsigned int height, unsigned char version,
               unsigned char opcode, BitIO& dataStream);
 
     //helper functions for preprocessing asset
+    // Inspects a transaction's OP_RETURN output for a DigiAsset header; outputs the version, opcode
+    // (0 if not a DigiAsset tx) and a BitIO stream positioned just past the 32-bit header.
     static void decodeAssetTxHeader(const getrawtransaction_t& txData, unsigned char& version, unsigned char& opcode,
                                     BitIO& dataStream);
 
     //constructor intended for use by Database only
+    // Rebuilds an asset from stored database fields (write-protected existing asset).
     DigiAsset(uint64_t assetIndex, const std::string& assetId, const std::string& cid, const KYC& issuer,
               const DigiAssetRules& rules,
               unsigned int heightCreated, unsigned int heightUpdated, uint64_t amount);

@@ -13,6 +13,14 @@
 #include <jsonrpccpp/common/jsonparser.h>
 
 namespace jsonrpc {
+  /**
+   * @brief Builder for a JSON-RPC 2.0 batch request.
+   *
+   * Collects multiple method calls (and notifications) into one JSON array and
+   * serializes it, letting the node/pool bundle many DigiByte Core RPC calls
+   * into a single HTTP request. Returned call ids are used to match entries in
+   * the corresponding BatchResponse.
+   */
   class BatchCall {
   public:
     BatchCall();

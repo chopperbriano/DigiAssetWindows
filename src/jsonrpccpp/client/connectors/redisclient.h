@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// ---------------------------------------------------------------------------
+// Role in DigiAsset for Windows:
+//   Declares RedisClient, the redis/hiredis implementation of the
+//   IClientConnector transport used by libjson-rpc-cpp's JSON-RPC client.
+//   Requests are queued to a redis list and replies are read back from a
+//   per-request reply queue (see the class comment below for the protocol).
+//   Requires hiredis; a Linux/UNIX-oriented connector that is not compiled
+//   into the Windows node or pool-server builds, kept for source completeness
+//   of the vendored library.
+// ---------------------------------------------------------------------------
+
 #ifndef JSONRPC_CPP_REDISCLIENT_H_
 #define JSONRPC_CPP_REDISCLIENT_H_
 

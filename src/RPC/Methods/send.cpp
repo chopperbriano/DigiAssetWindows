@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "send".
+// Node-side JSON-RPC handler that mirrors DigiByte Core's "send" but adds
+// DigiByte Domain support: any output key that is a domain is resolved to its
+// address before the (modified) params are forwarded to DigiByte Core's wallet.
+// Result is passed straight back to the caller. Dispatched by the node's RPC
+// server.
 
 #include "AppMain.h"
 #include "DigiByteDomain.h"

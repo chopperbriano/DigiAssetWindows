@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 06/06/23.
 //
+// KYC.cpp - implementation of the KYC class (see KYC.h). Decodes on-chain KYC
+// verify/revoke transactions using the DigiByte OP_RETURN "kyc" data format,
+// validates that they were authored by an authorized verifier address, and
+// exposes accessors plus a validity check for a given chain height. Part of the
+// node's chain analysis of DigiAsset issuer identity.
+//
 
 #include "KYC.h"
 #include "BitIO.h"
@@ -49,6 +55,16 @@ unsigned int KYC::processTX(const getrawtransaction_t& txData, unsigned int heig
     return NA;
 }
 
+/**
+ * Attempts to decode txData as a KYC verification transaction.
+ * The tx must have 3-4 outputs: vout[0]=600 sat to the validated address,
+ * vout[1]=0 sat OP_RETURN carrying the "kyc" data (country code + name or hash),
+ * and be signed by an authorized verifier (address behind the last input).
+ * On success, populates this record's address/country/name/hash/heightCreated
+ * (clearing any pre-loaded revoke state for a different address) and returns true.
+ * Returns false and leaves the object untouched if the tx is not a valid verify.
+ * @param addressGetterFunction - maps a spent utxo (txid, output index) to the address that created it
+ */
 bool KYC::processKYCVerify(const getrawtransaction_t& txData, unsigned int height,
                            std::function<std::string(std::string, unsigned int)>& addressGetterFunction) {
     //check there are 3 or 4 outputs
@@ -118,6 +134,15 @@ bool KYC::processKYCVerify(const getrawtransaction_t& txData, unsigned int heigh
     return true;
 }
 
+/**
+ * Attempts to decode txData as a KYC revocation transaction.
+ * The tx must have >=2 outputs: vout[0]=601 sat to a verifier address,
+ * vout[1]=0 sat OP_RETURN carrying the "kyc" header, and be authored by an
+ * authorized verifier. The revoked address is the one that created vout[0] of
+ * this tx. On success, sets heightRevoked (clearing any pre-loaded verify data
+ * for a different address) and returns true; otherwise returns false unchanged.
+ * @param addressGetterFunction - maps a utxo (txid, output index) to the address that created it
+ */
 bool KYC::processKYCRevoke(const getrawtransaction_t& txData, unsigned int height,
                            std::function<std::string(std::string, unsigned int)>& addressGetterFunction) {
     //check there are at least 2 outputs
@@ -201,6 +226,13 @@ int KYC::getHeightRevoked() const {
     return _heightRevoked;
 }
 
+/**
+ * Reports whether this address held a valid (non-revoked) KYC record at a height.
+ * @param height - chain height to test; -1 means "latest scanned"
+ * @return false if the record is empty, if height precedes creation, or if the
+ *         record was revoked at/before height (with -1 treated as after any
+ *         revocation); true otherwise.
+ */
 bool KYC::valid(int height) const {
     if (_heightCreated == -1) return false;                       //empty
     if ((height > -1) && (height < _heightCreated)) return false; //before created

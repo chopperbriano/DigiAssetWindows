@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 21/03/24.
 //
+// RPC method handler: "debugwaittimes".
+//
+// Part of the node's JSON-RPC surface. A diagnostic/profiling method that
+// collects wait-time and profiling info from the Database, DigiByte Core
+// connection, and Chain Analyzer, and returns it as a JSON array of text lines
+// to help identify performance bottlenecks.
+//
 #include "AppMain.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"

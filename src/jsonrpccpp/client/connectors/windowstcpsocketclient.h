@@ -7,6 +7,10 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// Role in the node/pool: declares WindowsTcpSocketClient, the Winsock2-based
+// IClientConnector implementation used on Windows to carry JSON-RPC traffic
+// between the embedded client and the local DigiByte Core daemon over TCP.
+
 #ifndef JSONRPC_CPP_WINDOWSTCPSOCKETCLIENT_H_
 #define JSONRPC_CPP_WINDOWSTCPSOCKETCLIENT_H_
 

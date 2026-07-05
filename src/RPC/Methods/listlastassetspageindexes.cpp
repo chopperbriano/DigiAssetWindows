@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 07/04/24.
 //
+// RPC method "listlastassetspageindexes".
+// Node-side JSON-RPC handler that returns a paginated map of the most recently
+// issued DigiAssets. It wraps listlastassets and, instead of the asset data
+// itself, emits a compact set of {start, skips} index groups so a UI can page
+// through assets by assetIndex. Registered in RPC/MethodList and dispatched by
+// the node's RPC server.
 
 #include "AppMain.h"
 #include "RPC/MethodList.h"

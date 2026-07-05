@@ -3,6 +3,11 @@
 // This class was created to provide a single point of getting classes that should
 // have a single instance throughout the app
 //
+// AppMain.cpp - implementation of the node exe's service-locator singleton.
+// Stores raw pointers to the app's shared subsystems (it does not own them);
+// each strict get*() logs CRITICAL via Log and throws runtime_error when the
+// subsystem has not been set yet. See AppMain.h for the full class overview.
+//
 
 #include "AppMain.h"
 #include "Log.h"
@@ -15,6 +20,9 @@ using namespace std;
 AppMain* AppMain::_pinstance = nullptr;
 mutex AppMain::_mutex;
 
+// Return the single AppMain instance, lazily constructing it on first call.
+// Thread-safe: guarded by _mutex. The instance is intentionally never freed
+// (lives for the whole process).
 AppMain* AppMain::GetInstance() {
     lock_guard<mutex> lock(_mutex);
     if (_pinstance == nullptr) {

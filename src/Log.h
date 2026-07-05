@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 04/10/23.
 //
+// Log.h - declares the Log singleton, the node/pool process's central logger.
+//
+// A single shared Log instance routes messages to the console (or to the
+// ConsoleDashboard when one is attached) and, optionally, appends them to a log
+// file. Each message carries a severity LogLevel; independent thresholds control
+// what reaches the screen versus the file. All logging is mutex-guarded so it is
+// safe to call from the node's many worker threads.
+//
 
 #ifndef DIGIASSET_CORE_LOG_H
 #define DIGIASSET_CORE_LOG_H
@@ -14,6 +22,7 @@
 
 using namespace std;
 
+// Windows headers define an ERROR macro; undefine it so our ERROR enumerator compiles.
 #ifdef ERROR
 #undef ERROR
 #endif
@@ -22,6 +31,7 @@ class ConsoleDashboard; // forward declaration
 
 class Log {
 public:
+    // Message severities in ascending order; numeric gaps leave room for future levels.
     enum LogLevel {
         DEBUG = 0,
         INFO = 10,
@@ -44,7 +54,9 @@ protected:
 public:
     Log(Log& other) = delete;
     void operator=(const Log&) = delete;
+    // Returns the singleton, creating it on first call.
     static Log* GetInstance();
+    // Returns the singleton (creating it if needed) and opens the given log file on it.
     static Log* GetInstance(const std::string& fileName);
 
     /**
@@ -57,10 +69,13 @@ private:
     ConsoleDashboard* _dashboard = nullptr;
 
 public:
+    // Open (append mode) the file that messages at/above the file threshold are written to.
     void setLogFile(const string& filename);
     void setMinLevelToScreen(LogLevel level);
     void setMinLevelToFile(LogLevel level);
+    // Attach a dashboard; while set, screen output is routed to it instead of std::cout.
     void setDashboard(ConsoleDashboard* dashboard);
+    // Format and emit a message to screen and/or file according to the level thresholds.
     void addMessage(const string& message, LogLevel level = INFO);
 
 

@@ -5,6 +5,11 @@
  * @date    25.10.2016
  * @author  Jean-Daniel Michaud <jean.daniel.michaud@gmail.com>
  * @license See attached LICENSE.txt
+ *
+ * Declares FileDescriptorServer, a POSIX file-descriptor JSON-RPC server
+ * connector: it services newline-delimited requests over a pair of open file
+ * descriptors (input/output). One of several transport back-ends in the bundled
+ * libjson-rpc-cpp; not compiled on the Windows node/pool build.
  ************************************************************************/
 
 #ifndef JSONRPC_CPP_FILEDESCRIPTORSERVERCONNECTOR_H_
@@ -34,6 +39,8 @@ namespace jsonrpc {
      */
     FileDescriptorServer(int inputfd, int outputfd);
 
+    // AbstractThreadedServer hooks (see abstractthreadedserver.h): open/verify
+    // the descriptors, poll inputfd for data, and read/dispatch/write one request.
     virtual bool InitializeListener();
     virtual int CheckForConnection();
     virtual void HandleConnection(int connection);
@@ -44,6 +51,7 @@ namespace jsonrpc {
     StreamReader reader;
     StreamWriter writer;
 
+    // fcntl-based checks that fd is open for reading / writing respectively.
     bool IsReadable(int fd);
     bool IsWritable(int fd);
 

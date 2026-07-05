@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// getoldstreamkey.cpp - RPC method implementation for the node
+// (DigiAssetWindows.exe). Registered in the RPC::Methods dispatch table and
+// exposed over the JSON-RPC server. Legacy compatibility shim that emulates
+// the old DigiAsset Stream service: given a stream key it queues/serves the
+// request via OldStream. Deprecated - retained only for old clients and
+// should not be used by new projects.
+//
 
 #include "AppMain.h"
 #include "OldStream.h"

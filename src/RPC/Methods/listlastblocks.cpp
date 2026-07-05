@@ -1,6 +1,11 @@
 //
 // Created by RenzoDD on 06/04/24.
 //
+// RPC method "listlastblocks".
+// Node-side JSON-RPC handler that reads the most recently processed blocks from
+// the node's Database (getLastBlocks) and returns them as JSON objects
+// (height, hash, time, algo). Used by clients/dashboards to show chain-sync
+// progress. Dispatched by the node's RPC server.
 
 #include "AppMain.h"
 #include "RPC/Response.h"

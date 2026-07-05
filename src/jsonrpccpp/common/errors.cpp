@@ -7,6 +7,11 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// Role in the node/pool: defines the numeric JSON-RPC error codes (the standard
+// -326xx set plus this library's server/client codes) and their default text.
+// A static initializer populates the code->message table at load time; both the
+// node and the pool server surface these when an RPC call fails.
+
 #include "errors.h"
 #include "exception.h"
 
@@ -31,6 +36,12 @@ const int Errors::ERROR_SERVER_PROCEDURE_SPECIFICATION_SYNTAX = -32007;
 const int Errors::ERROR_CLIENT_CONNECTOR = -32003;
 const int Errors::ERROR_CLIENT_INVALID_RESPONSE = -32001;
 
+/**
+ * @brief Populates the static code->message table.
+ *
+ * Runs once via the file-scope Errors::_initializer instance, mapping each known
+ * error code to a default human-readable description.
+ */
 Errors::_init::_init() {
   // Official Errors
   possibleErrors[ERROR_RPC_INVALID_REQUEST] = "INVALID_JSON_REQUEST: The JSON "
@@ -58,6 +69,12 @@ Errors::_init::_init() {
   possibleErrors[ERROR_SERVER_CONNECTOR] = "Server connector error";
 }
 
+/**
+ * @brief Looks up the default message for an error code.
+ *
+ * @param errorCode A JSON-RPC error code.
+ * @return The registered description, or an empty string if the code is unknown.
+ */
 std::string Errors::GetErrorMessage(int errorCode) {
   if (possibleErrors.find(errorCode) == possibleErrors.end()) {
     return "";

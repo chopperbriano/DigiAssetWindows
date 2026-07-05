@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 11/09/23.
 //
+// Server.cpp - Implementation of the node's JSON-RPC/HTTP server (RPC::Server).
+//
+// Accepts HTTP connections on the configured RPC port, verifies HTTP Basic
+// Auth, parses the JSON-RPC request, and dispatches it: cached block-stable
+// results are returned immediately, in-process custom methods are invoked from
+// the `methods` table, and anything else is forwarded to DigiByte Core. This
+// fork deliberately includes individual boost::asio sub-headers to dodge the
+// no-op <boost/asio.hpp> stub on the include path (see notes below and in the
+// header). See RPC/Server.h for the class overview and error-code constants.
 
 #include "RPC/Server.h"
 #include "AppMain.h"
@@ -108,6 +117,16 @@ namespace RPC {
     ███████║███████╗   ██║   ╚██████╔╝██║
     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝
      */
+    /**
+     * Builds the RPC server from a config file. Reads rpcuser/rpcpassword,
+     * rpcassetport (default 14024), rpcthreads (default 16), the rpcallow map
+     * and rpcdebugshowparamsonerror; spins up the worker thread pool running
+     * _io.run(); then opens, binds and listens on the TCP acceptor. Throws (and
+     * logs CRITICAL) if any step fails. Does NOT begin accepting connections —
+     * call start() for that. See the inline notes re: _workGuard/_acceptor being
+     * members to keep the io_context alive and avoid the boost::asio stub.
+     * @param fileName path to the config file (default "config.cfg")
+     */
     Server::Server(const string& fileName)
         : _io(),
           _workGuard(boost::asio::make_work_guard(_io)),
@@ -176,6 +195,10 @@ namespace RPC {
         }
     }
 
+    /**
+     * Destructor. Joins every worker thread in the pool so the io_context's
+     * threads are fully torn down before the object is destroyed.
+     */
     Server::~Server() {
         // Wait for all threads in the pool to exit.
         for (auto& thread: _thread_pool) {
@@ -185,10 +208,22 @@ namespace RPC {
         }
     }
 
+    /**
+     * Worker-thread body: runs the io_context event loop. Blocks in _io.run()
+     * processing posted connection-handling work until the io_context is
+     * stopped or runs out of work (kept alive by _workGuard).
+     */
     void Server::run_thread() {
         _io.run();
     }
 
+    /**
+     * Enters the blocking accept loop (accept()). Returns only when the loop
+     * exits — i.e. the listening socket has died and the server can no longer
+     * receive requests. On exit it logs CRITICAL and clears AppMain's RPC
+     * server pointer so the dashboard reports RPC as down rather than showing a
+     * stale "up" from a dangling pointer.
+     */
     void Server::start() {
         Log* log = Log::GetInstance();
         try {
@@ -216,6 +251,14 @@ namespace RPC {
      ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝
      */
 
+    /**
+     * Infinite accept loop. For each incoming connection it assigns a
+     * monotonically increasing call number, blocks in _acceptor.accept(), then
+     * posts handleConnection() onto the io_context so a pool thread services it
+     * while this loop goes back to accepting. Per-connection accept errors are
+     * caught and logged at DEBUG so one bad connection never breaks the loop.
+     * Marked [[noreturn]] — it only leaves by throwing (propagated to start()).
+     */
     void Server::accept() {
         Log* log = Log::GetInstance();
         while (true) {
@@ -233,6 +276,17 @@ namespace RPC {
         }
     }
 
+    /**
+     * Services a single accepted connection end-to-end on a pool thread: parses
+     * the request, dispatches it via handleRpcRequest(), and writes back either
+     * the result or a JSON-RPC error response, then closes the socket (via
+     * SocketRAII). Silently drops liveness-probe/empty connections (the "empty"
+     * DigiByteException) without replying. Optionally logs request params on
+     * error when rpcdebugshowparamsonerror is set, and always logs the call's
+     * duration in microseconds at DEBUG.
+     * @param socket shared socket for this connection (closed on return)
+     * @param callNumber sequence id used only for correlating log lines
+     */
     void Server::handleConnection(std::shared_ptr<tcp::socket> socket, uint64_t callNumber) {
         Log* log = Log::GetInstance();
 
@@ -292,6 +346,16 @@ namespace RPC {
         log->addMessage("RPC call #" + std::to_string(callNumber) + " finished in " + to_string(std::chrono::duration_cast<std::chrono::microseconds>(duration).count()) + " us", Log::DEBUG);
     }
 
+    /**
+     * Reads a full HTTP request off the socket and returns its parsed JSON body.
+     * Reads the first chunk, splits headers from body at the blank line, rejects
+     * empty reads ("empty") and header-less requests, enforces Basic Auth via
+     * basicAuth(), then reads the remainder of the body up to Content-Length and
+     * parses it as JSON. Throws DigiByteException on empty/malformed request,
+     * failed auth (HTTP_UNAUTHORIZED) or JSON parse error (RPC_PARSE_ERROR).
+     * @param socket connected client socket to read from
+     * @return the parsed JSON-RPC request document
+     */
     Value Server::parseRequest(tcp::socket& socket) {
         // Read the HTTP request headers
         char data[1024];
@@ -343,6 +407,15 @@ namespace RPC {
         return doc;
     }
 
+    /**
+     * Extracts a single HTTP header's value from the raw header block. Matching
+     * is case-insensitive on the header name, but the returned value is sliced
+     * from the original (case-preserved) text. Throws DigiByteException
+     * (HTTP_BAD_REQUEST) if the header is absent.
+     * @param headers raw header block (everything before the blank line)
+     * @param wantedHeader header name to look up, e.g. "Content-Length"
+     * @return the header's value with no surrounding "Name: " or CRLF
+     */
     string Server::getHeader(const string& headers, const string& wantedHeader) {
         //find the auth header
         string lowerHeaders = headers;
@@ -357,6 +430,13 @@ namespace RPC {
         return headers.substr(start + headerLength, end - start - headerLength);
     }
 
+    /**
+     * Validates HTTP Basic Auth. Pulls the Authorization header, strips the
+     * "Basic " prefix, base64-decodes the credentials and compares them against
+     * the configured "user:password".
+     * @param headers raw HTTP header block
+     * @return true if the supplied credentials match the configured ones
+     */
     // Basic authentication function
     bool Server::basicAuth(const string& headers) {
         string authHeader = getHeader(headers, "Authorization");
@@ -368,6 +448,19 @@ namespace RPC {
         return (decoded == _username + ":" + _password);
     }
 
+    /**
+     * Core dispatch for one RPC call. Rejects methods not permitted by the
+     * rpcallow list (throws RPC_FORBIDDEN_BY_SAFE_MODE). Returns a cached
+     * response if one is still valid. Otherwise invokes the in-process handler
+     * from the `methods` table, or falls back to forwarding the call to DigiByte
+     * Core via sendcommand — marking non-block-stable Core commands (those not
+     * in cacheableRpcCommands) as non-cacheable. The resulting response is added
+     * to the cache and returned as JSON.
+     * @param methodName RPC method name
+     * @param params JSON params array (or null)
+     * @param id JSON-RPC id echoed back in the response (default 1)
+     * @return the JSON-RPC result/response for this call
+     */
     Value Server::executeCall(const std::string& methodName, const Json::Value& params, const Json::Value& id) {
         AppMain* app = AppMain::GetInstance();
 
@@ -400,6 +493,14 @@ namespace RPC {
         return response.toJSON(id);
     }
 
+    /**
+     * Validates and unpacks a parsed JSON-RPC request, then dispatches it.
+     * Extracts the optional "id" (null if absent), requires a string "method"
+     * (else RPC_METHOD_NOT_FOUND), and requires "params" — if present — to be an
+     * array (else RPC_INVALID_PARAMS). Forwards to executeCall().
+     * @param request parsed JSON-RPC request object
+     * @return the JSON-RPC response for the call
+     */
     Value Server::handleRpcRequest(const Value& request) {
         Json::Value id;
 
@@ -426,6 +527,14 @@ namespace RPC {
     }
 
 
+    /**
+     * Builds a JSON-RPC error response object with null result and an
+     * {code, message} error member, echoing the request's id when present.
+     * @param code JSON-RPC error code
+     * @param message human-readable error text
+     * @param request originating request (used only to echo its id)
+     * @return the assembled error response object
+     */
     Value Server::createErrorResponse(int code, const string& message, const Value& request) {
         // Create a JSON-RPC error response
         Json::Value response;
@@ -438,6 +547,13 @@ namespace RPC {
         return response;
     }
 
+    /**
+     * Serializes a JSON response to compact (un-indented) text, wraps it in a
+     * minimal HTTP/1.1 200 OK message with Content-Length and JSON content type,
+     * and writes it to the socket.
+     * @param socket connected client socket to write to
+     * @param response JSON value to send as the body
+     */
     void Server::sendResponse(tcp::socket& socket, const Value& response) {
         Json::StreamWriterBuilder writer;
         writer.settings_["indentation"] = "";
@@ -468,6 +584,15 @@ namespace RPC {
         return _port;
     }
 
+    /**
+     * Decides whether a method may be served, per the config's rpcallow map. An
+     * explicit entry wins; otherwise the cached wildcard default is used, which
+     * is computed once (lazily) from the "*" entry. The temporary self-recursion
+     * guard (_allowRPCDefault set to 0 before the "*" lookup) prevents an
+     * infinite loop while resolving the wildcard.
+     * @param method RPC method name
+     * @return true if the method is allowed
+     */
     bool Server::isRPCAllowed(const string& method) {
         auto it = _allowedRPC.find(method);
         if (it == _allowedRPC.end()) {

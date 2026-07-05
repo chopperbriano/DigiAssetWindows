@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "shutdown": exposed through the node's JSON-RPC server to bring the
+// node to a safe stopping point. It halts the chain analyzer and the IPFS
+// subsystem so no processing is left mid-write, then logs that it is safe for
+// the operator to terminate the process.
+//
 
 #include "AppMain.h"
 #include "Log.h"
@@ -11,7 +16,11 @@
 namespace RPC {
     namespace Methods {
         /**
-        * description of method
+        * Stops the node's background workers so the process can be terminated
+        * cleanly. Calls stop() on the chain analyzer and on the IPFS controller,
+        * then writes a CRITICAL "Safe to shut down" log line. params is ignored.
+        * Returns true, uncached (blocksGoodFor = -1). Note: this does not exit the
+        * process itself; the operator/host still terminates it.
         */
         extern const Response shutdown(const Json::Value& params) {
             AppMain* main=AppMain::GetInstance();

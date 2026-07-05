@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method handler: "getaddresskyc".
+//
+// Part of the node's JSON-RPC surface. Looks up KYC (know-your-customer)
+// verification data recorded on-chain for a single address and returns it as a
+// JSON object. If the address has been verified it includes an ISO 3166-1
+// alpha-3 country code plus either a name or a privacy-preserving hash; if not
+// verified only the address is echoed back. Result is cached for ~1 day (5760
+// blocks) and invalidated whenever that address changes.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

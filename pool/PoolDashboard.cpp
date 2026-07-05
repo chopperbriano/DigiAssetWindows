@@ -1,3 +1,16 @@
+//
+// PoolDashboard.cpp - implementation of the pool server's VT100 console UI.
+//
+// Renders the live status screen every 500 ms and handles operator keypresses.
+// The bulk of the interesting logic is the payout flow: an anonymous-namespace
+// set of helpers re-reads pool.cfg on demand, queries DigiByte Core over
+// JSON-RPC for the wallet balance, computes this period's payout budget
+// (either a percent of the balance or a fixed amount), and sends DGB via
+// sendtoaddress. [P] previews the split read-only; [E] runs the guarded
+// execute path (enabled flag, eligible nodes, once-per-period spend guard,
+// then a Y/N confirm) and records each successful send in the ledger.
+//
+
 #include "PoolDashboard.h"
 #include "CurlHandler.h"
 #include "PoolDatabase.h"
@@ -47,6 +60,7 @@ namespace {
         return oss.str();
     }
 
+    // Render an integer with thousands separators (e.g. 1234567 -> "1,234,567").
     std::string formatNumber(uint64_t n) {
         std::string s = std::to_string(n);
         std::string out;
@@ -61,6 +75,9 @@ namespace {
     }
 }
 
+// Store references to the data sources the render loop reads from and record
+// the start time (used for the Uptime row). Does not start the thread — call
+// start() for that.
 PoolDashboard::PoolDashboard(PoolDatabase& db, PoolServer& server, PoolVerifier& verifier,
                              const std::string& configPath)
     : _db(db), _server(server), _verifier(verifier), _configPath(configPath),
@@ -84,6 +101,10 @@ namespace {
         return out;
     }
 
+    // Send amountDgb to a single address via DigiByte Core's sendtoaddress RPC.
+    // On success returns the txid; on any failure returns a string starting
+    // "ERROR: " (HTTP error, RPC error envelope, or a non-string result). The
+    // caller relies on that prefix to avoid recording a failed send as paid.
     std::string sendToAddress(const std::string& rpcUser, const std::string& rpcPass,
                               int rpcPort, const std::string& address, double amountDgb) {
         // Build the JSON-RPC request for sendtoaddress.
@@ -194,6 +215,9 @@ PoolDashboard::~PoolDashboard() {
     stop();
 }
 
+// Turn on ANSI/VT100 escape-sequence processing for the Windows console so the
+// render() output (colors, cursor positioning) is interpreted rather than
+// printed literally. Returns false if the console can't be put in that mode.
 bool PoolDashboard::enableVT100() {
 #ifdef _WIN32
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -207,6 +231,9 @@ bool PoolDashboard::enableVT100() {
 #endif
 }
 
+// Clear the screen, do a first synchronous render, and launch the background
+// refreshLoop thread. Idempotent — a second call while already running is a
+// no-op.
 void PoolDashboard::start() {
     if (_running.exchange(true)) return;
     std::cout << ESC "2J" << CURSOR_HOME << HIDE_CURSOR << std::flush;
@@ -214,6 +241,8 @@ void PoolDashboard::start() {
     _thread = std::thread([this]() { this->refreshLoop(); });
 }
 
+// Signal the refresh thread to exit, join it, and restore the cursor.
+// Idempotent and safe to call from the destructor.
 void PoolDashboard::stop() {
     if (!_running.exchange(false)) return;
     if (_thread.joinable()) _thread.join();
@@ -226,6 +255,8 @@ void PoolDashboard::addLog(const std::string& line) {
     while (_logLines.size() > MAX_LOG_LINES) _logLines.pop_front();
 }
 
+// Background thread body: poll for keypresses and redraw the screen every
+// 500 ms until stop() clears _running.
 void PoolDashboard::refreshLoop() {
     while (_running.load()) {
         processInput();
@@ -234,6 +265,12 @@ void PoolDashboard::refreshLoop() {
     }
 }
 
+// Drain any pending console keypresses and act on them: Q/Ctrl+C requests
+// quit; N/A/H print counts or help to the log; P previews the payout split;
+// E runs the guarded execute path and arms the Y/N confirm; and when a confirm
+// is armed, Y actually performs the sends (recording each in the ledger) while
+// anything else cancels. Runs only on the dashboard thread, so the non-atomic
+// _pendingPerNode carried from E to Y needs no extra locking.
 void PoolDashboard::processInput() {
 #ifdef _WIN32
     while (_kbhit()) {
@@ -377,6 +414,8 @@ void PoolDashboard::processInput() {
 #endif
 }
 
+// Read the current console window dimensions into _width/_height (clamped to a
+// sane minimum) so render() can lay out and pad to fit the terminal.
 void PoolDashboard::updateConsoleSize() {
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -393,6 +432,11 @@ void PoolDashboard::updateConsoleSize() {
     if (_height < 15) _height = 15;
 }
 
+// Draw the full dashboard in one buffered write: centered title, the aligned
+// two-column status block (listening port, request count, node/verification/
+// probe/permanent counters, payout status and ledger totals, time and uptime),
+// then the scrolling log padded so the key-hint row stays pinned at the bottom.
+// All figures are pulled fresh from the db/server/verifier on each call.
 void PoolDashboard::render() {
     updateConsoleSize();
 

@@ -1,6 +1,20 @@
 //
 // Created by mctrivia on 04/11/23.
 //
+//
+// PermanentStoragePoolList.cpp - constructs the pool list and runs metadata pinning.
+//
+// Registers the IPFS download-complete callback at load time, builds the fixed
+// set of pools in the constructor (local first, then mctrivia), and provides
+// index/iterator access plus pool-count and random-pool selection.  The heart
+// of the file is the metadata flow: processNewMetaData() (called by the Chain
+// Analyzer for each new asset metadata CID) asks every pool to serialize how
+// the transaction maps into that pool, encodes the results into an "extra"
+// instruction string, and schedules an IPFS download of the metadata; when the
+// download finishes, _callbackNewMetadata() parses the metadata's file list and
+// pins the files each matched pool wants (marking the asset as part of the pool
+// only when all its files were pinnable).
+//
 
 #include "PermanentStoragePoolList.h"
 #include "AppMain.h"
@@ -14,6 +28,9 @@
 using namespace std;
 
 // Static block to register our callback function with IPFS Controller
+// Runs once at program load so the IPFS controller can invoke
+// _callbackNewMetadata by name (PSP_CALLBACK_NEWMETADATA_ID) when a scheduled
+// metadata download completes.
 static_block {
     IPFS::registerCallback(PSP_CALLBACK_NEWMETADATA_ID, PermanentStoragePoolList::_callbackNewMetadata);
 }
@@ -27,6 +44,17 @@ static_block {
 ╚██████╗╚██████╔╝██║ ╚████║███████║   ██║   ██║  ██║██║ ╚████║   ██║   ███████║
 ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
  Add new PSP to end of list.
+ */
+/**
+ * Builds the fixed list of pools the node supports.
+ *
+ * Reads the config file, seeds the RNG used by getRandomPool(), then adds each
+ * known pool via addPool() (which assigns its index and initializes it).  The
+ * "local" pool is added first so it is always index 0; new pools must be
+ * appended after it.
+ *
+ * @param configFile Path to the node configuration file.
+ * Side effects: constructs and starts every pool (see setPoolIndexAndInitialize).
  */
 PermanentStoragePoolList::PermanentStoragePoolList(const string& configFile) {
     //read the config file
@@ -130,6 +158,29 @@ void PermanentStoragePoolList::addPool(std::unique_ptr<PermanentStoragePool> poo
 ╚═╝╚═╝     ╚═╝     ╚══════╝     ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝    ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
  */
 
+/**
+ * IPFS download-complete callback: pins the files a new asset's metadata
+ * references for every pool that transaction belongs to.
+ *
+ * Registered under PSP_CALLBACK_NEWMETADATA_ID and invoked by the IPFS
+ * controller once the metadata document downloaded by processNewMetaData() is
+ * available.  It parses the downloaded JSON, requires a "data.urls" array, and
+ * (if under PSP_PIN_METADATA_LIMIT bytes) pins the metadata document itself.
+ * The @p extra string carries the decoding instructions built by
+ * processNewMetaData in the form "a:<assetIndex>,p<poolNum>:<serialized>,...";
+ * for each "p" entry it deserializes that pool's metadata processor and walks
+ * the url list, pinning each IPFS file the processor says to pin (only when the
+ * node is subscribed to that pool).  If every referenced file was pinnable the
+ * asset is marked as part of the pool and, when subscribed, the metadata is
+ * pinned too.  All exceptions are caught and logged as warnings so a bad
+ * metadata document cannot abort processing.
+ *
+ * @param cid     CID of the downloaded metadata document.
+ * @param extra   Encoded asset-index / pool-processor instructions (see above).
+ * @param content The downloaded metadata document body (JSON).
+ * @param failed  Download-failure flag (always false here; no timeout is set).
+ * Side effects: pins IPFS content and updates pool membership in the Database.
+ */
 void PermanentStoragePoolList::_callbackNewMetadata(const string& cid, const string& extra, const string& content, bool failed) {
   try {
     AppMain* main = AppMain::GetInstance();
@@ -221,6 +272,23 @@ void PermanentStoragePoolList::_callbackNewMetadata(const string& cid, const str
     Log::GetInstance()->addMessage("PSP metadata callback unknown exception", Log::WARNING);
   }
 }
+/**
+ * Chain Analyzer entry point: detect which pools an asset belongs to and
+ * schedule download of its metadata for pinning.
+ *
+ * Asks every pool to serializeMetaProcessor(tx); each non-empty result means
+ * the transaction is part of that pool and is appended to an "extra"
+ * instruction string of the form "a:<assetIndex>,p<poolIndex>:<serialized>...".
+ * (Some DEBUG logging dumps the detection result and the transaction outputs.)
+ * It then requests an IPFS download of the metadata @p cid, passing @p extra so
+ * that _callbackNewMetadata() can pin the right files once the download
+ * completes.
+ *
+ * @param tx         The transaction that produced this asset metadata.
+ * @param assetIndex Index of the asset the metadata belongs to.
+ * @param cid        CID of the metadata document to download.
+ * Side effects: schedules an asynchronous IPFS download; writes DEBUG log lines.
+ */
 void PermanentStoragePoolList::processNewMetaData(const DigiByteTransaction& tx, unsigned int assetIndex, const string& cid) {
     //compute the decoding instructions
     string extra = "a:" + to_string(assetIndex);

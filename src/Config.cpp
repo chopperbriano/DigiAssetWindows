@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 05/09/23.
 //
+// Config implementation — parses and serializes the `key=value` config file.
+// refresh() reads the file into both a parsed map (_values) and a verbatim
+// line list (_rawLines) so write() can round-trip the file without discarding
+// comments or reordering keys. The typed getters convert on demand and the
+// setters keep both views in sync.
+//
 
 #include "Config.h"
 #include <fstream>
@@ -20,6 +26,13 @@ void Config::clear() {
     _keyToLineIndex.clear();
 }
 
+/**
+ * Reloads the file named by _fileName from disk. Clears current state, then reads
+ * every line preserving order — blank and `#` comment lines are kept in _rawLines
+ * but not parsed, while `key=value` lines additionally populate _values and the
+ * key->line-index map. Strips a trailing CR so CRLF files don't accumulate \r.
+ * Throws exceptionConfigFileMissing if the file cannot be opened.
+ */
 void Config::refresh() {
     //clear any existing values
     clear();
@@ -84,6 +97,10 @@ void Config::write(string fileName) const {
 }
 
 
+/**
+ * True if value is a valid optionally-signed decimal integer (a leading + or -
+ * followed by one or more digits, nothing else). Empty string is not an integer.
+ */
 bool Config::isInteger(const string& value) {
     //check if empty string
     if (value.empty()) return false;
@@ -106,6 +123,9 @@ bool Config::isInteger(const string& value) {
 }
 
 
+/**
+ * True if value is a recognized boolean literal: "0", "1", "true", or "false".
+ */
 bool Config::isBool(const string& value) {
     //check exactly 1 character
     if (value.length() == 1) {
@@ -116,6 +136,11 @@ bool Config::isBool(const string& value) {
     return ((value == "true") || (value == "false"));
 }
 
+/**
+ * Reports whether key exists and, when type is not UNKNOWN, whether its value
+ * matches that type (INTEGER validates the value parses as an integer; STRING
+ * always matches an existing key). Returns false for unknown type codes.
+ */
 bool Config::isKey(const string& key, unsigned char type) const {
     //check key exists
     if (_values.count(key) == 0) return false;
@@ -150,6 +175,11 @@ string Config::getString(const string& key, const string& defaultValue) const {
     }
 }
 
+/**
+ * Returns key's value parsed as an int. Throws exceptionCorruptConfigFile_Missing
+ * if the key is absent, or exceptionCorruptConfigFile_WrongType if present but
+ * not a valid integer.
+ */
 int Config::getInteger(const string& key) const {
     try {
         string value = _values.at(key);
@@ -160,6 +190,10 @@ int Config::getInteger(const string& key) const {
     }
 }
 
+/**
+ * Returns key's value as an int, or defaultValue if the key is absent. Still
+ * throws exceptionCorruptConfigFile_WrongType if the key exists but is non-numeric.
+ */
 int Config::getInteger(const string& key, int defaultValue) const {
     try {
         string value = _values.at(key);
@@ -170,6 +204,10 @@ int Config::getInteger(const string& key, int defaultValue) const {
     }
 }
 
+/**
+ * Returns key's value as a bool ("true"/"false" or numeric 0/1). Throws
+ * exceptionCorruptConfigFile_Missing if absent, or _WrongType if not a boolean.
+ */
 bool Config::getBool(const string& key) const {
     try {
         string value = _values.at(key);
@@ -182,6 +220,10 @@ bool Config::getBool(const string& key) const {
     }
 }
 
+/**
+ * Returns key's value as a bool, or defaultValue if the key is absent. Still
+ * throws exceptionCorruptConfigFile_WrongType if present but not a boolean.
+ */
 bool Config::getBool(const string& key, bool defaultValue) const {
     try {
         string value = _values.at(key);
@@ -194,6 +236,11 @@ bool Config::getBool(const string& key, bool defaultValue) const {
     }
 }
 
+/**
+ * Collects every key beginning with keyPrefix into a map keyed by the remainder
+ * of the key (prefix stripped), with string values. Used to read grouped config
+ * entries (e.g. all `pinassetextra<mime>` keys) in one call.
+ */
 map<string, string> Config::getStringMap(const string& keyPrefix) const {
     map<string, string> result;
     for (const auto& kv: _values) {
@@ -206,6 +253,10 @@ map<string, string> Config::getStringMap(const string& keyPrefix) const {
     return result;
 }
 
+/**
+ * Like getStringMap but with int values; entries whose value is not a valid
+ * integer are skipped rather than throwing.
+ */
 map<string, int> Config::getIntegerMap(const string& keyPrefix) const {
     std::map<string, int> result;
     for (const auto& kv: _values) {
@@ -219,6 +270,10 @@ map<string, int> Config::getIntegerMap(const string& keyPrefix) const {
     return result;
 }
 
+/**
+ * Like getStringMap but with bool values ("true"/"false" or numeric); entries
+ * whose value is not a valid boolean are skipped rather than throwing.
+ */
 map<string, bool> Config::getBoolMap(const string& keyPrefix) const {
     std::map<string, bool> result;
     for (const auto& kv: _values) {
@@ -239,6 +294,12 @@ map<string, bool> Config::getBoolMap(const string& keyPrefix) const {
 }
 
 
+/**
+ * Sets key to value, updating both the parsed map and the raw-line view: an
+ * existing key's line is rewritten in place (keeping its position among comments
+ * and other keys) and a new key is appended as a fresh line. All other setters
+ * (setInteger/setBool and the *Map variants) funnel through here.
+ */
 void Config::setString(const string& key, const string& value) {
     _values[key] = value;
 
@@ -263,18 +324,24 @@ void Config::setBool(const string& key, bool value) {
     setInteger(key, value);
 }
 
+/**
+ * Writes each map entry as its own config key formed by concatenating key with
+ * the entry's key (e.g. setStringMap("pinassetextra", ...) -> "pinassetextra<k>").
+ */
 void Config::setStringMap(const string& key, const map<string, string>& values) {
     for (const auto& entry: values) {
         setString(key + entry.first, entry.second);
     }
 }
 
+/** Integer-valued counterpart of setStringMap; each value is stringified. */
 void Config::setIntegerMap(const string& key, const map<string, int>& values) {
     for (const auto& entry: values) {
         setString(key + entry.first, to_string(entry.second));
     }
 }
 
+/** Bool-valued counterpart of setStringMap; each value is written as 0 or 1. */
 void Config::setBoolMap(const string& key, const map<string, bool>& values) {
     for (const auto& entry: values) {
         setString(key + entry.first, to_string(entry.second));

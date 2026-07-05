@@ -7,6 +7,11 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// Part of the bundled libjson-rpc-cpp library used by this node/pool to expose
+// its JSON-RPC API. Implements RpcProtocolServerV2: the server-side handler for
+// the JSON-RPC 2.0 protocol (single calls, batch arrays, notifications, and the
+// result/error response formatting). Declared in rpcprotocolserverv2.h.
+
 #include "rpcprotocolserverv2.h"
 #include <iostream>
 #include <jsonrpccpp/common/errors.h>
@@ -16,6 +21,8 @@ using namespace jsonrpc;
 
 RpcProtocolServerV2::RpcProtocolServerV2(IProcedureInvokationHandler &handler) : AbstractProtocolHandler(handler) {}
 
+// Top-level dispatch. An array is treated as a batch, an object as a single
+// request; anything else yields an INVALID_REQUEST error in response.
 void RpcProtocolServerV2::HandleJsonRequest(const Json::Value &req, Json::Value &response) {
   // It could be a Batch Request
   if (req.isArray()) {
@@ -27,6 +34,9 @@ void RpcProtocolServerV2::HandleJsonRequest(const Json::Value &req, Json::Value 
     this->WrapError(Json::nullValue, Errors::ERROR_RPC_INVALID_REQUEST, Errors::GetErrorMessage(Errors::ERROR_RPC_INVALID_REQUEST), response);
   }
 }
+// Validates one request; on success runs the procedure and, if it throws a
+// JsonRpcException, converts it to an error response; on validation failure
+// writes the corresponding protocol error into response.
 void RpcProtocolServerV2::HandleSingleRequest(const Json::Value &req, Json::Value &response) {
   int error = this->ValidateRequest(req);
   if (error == 0) {
@@ -39,6 +49,9 @@ void RpcProtocolServerV2::HandleSingleRequest(const Json::Value &req, Json::Valu
     this->WrapError(req, error, Errors::GetErrorMessage(error), response);
   }
 }
+// Processes each entry of a batch array as an individual request, appending
+// every non-null per-call result to the response array. An empty batch is an
+// INVALID_REQUEST error. (Notifications produce null results and are omitted.)
 void RpcProtocolServerV2::HandleBatchRequest(const Json::Value &req, Json::Value &response) {
   if (req.empty())
     this->WrapError(Json::nullValue, Errors::ERROR_RPC_INVALID_REQUEST, Errors::GetErrorMessage(Errors::ERROR_RPC_INVALID_REQUEST), response);
@@ -51,6 +64,9 @@ void RpcProtocolServerV2::HandleBatchRequest(const Json::Value &req, Json::Value
     }
   }
 }
+// Structural check of a 2.0 request: must be an object with a string method
+// name and the "jsonrpc":"2.0" tag; if present, id must be integral/string/null
+// and params must be object/array/null. Returns false on any violation.
 bool RpcProtocolServerV2::ValidateRequestFields(const Json::Value &request) {
   if (!request.isObject())
     return false;
@@ -66,12 +82,16 @@ bool RpcProtocolServerV2::ValidateRequestFields(const Json::Value &request) {
   return true;
 }
 
+// Assembles a successful 2.0 response: the jsonrpc version tag, the procedure's
+// result value, and the id echoed from the request.
 void RpcProtocolServerV2::WrapResult(const Json::Value &request, Json::Value &response, Json::Value &result) {
   response[KEY_REQUEST_VERSION] = JSON_RPC_VERSION2;
   response[KEY_RESPONSE_RESULT] = result;
   response[KEY_REQUEST_ID] = request[KEY_REQUEST_ID];
 }
 
+// Assembles a 2.0 error response with the given code and message. The id is
+// echoed from the request when it exists and is a valid type, otherwise null.
 void RpcProtocolServerV2::WrapError(const Json::Value &request, int code, const string &message, Json::Value &result) {
   result["jsonrpc"] = "2.0";
   result["error"]["code"] = code;
@@ -84,11 +104,15 @@ void RpcProtocolServerV2::WrapError(const Json::Value &request, int code, const 
   }
 }
 
+// Builds an error response from a JsonRpcException and additionally attaches
+// the exception's data payload under error.data.
 void RpcProtocolServerV2::WrapException(const Json::Value &request, const JsonRpcException &exception, Json::Value &result) {
   this->WrapError(request, exception.GetCode(), exception.GetMessage(), result);
   result["error"]["data"] = exception.GetData();
 }
 
+// A request carrying an id is a method call expecting a reply; without an id it
+// is a fire-and-forget notification.
 procedure_t RpcProtocolServerV2::GetRequestType(const Json::Value &request) {
   if (request.isMember(KEY_REQUEST_ID))
     return RPC_METHOD;

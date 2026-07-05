@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 04/11/23.
 //
+//
+// mctrivia.cpp - implementation of the networked "MCTrivia's PSP" (see
+// mctrivia.h). Contains the two background thread bodies (keepalive + permanent
+// fetcher), the HTTP glue to the pool server, cost/enable logic for asset
+// creators, and the bad-list maintenance. See the header for the historical
+// context on why the on-chain payment path is dead and the /list endpoint is
+// only probed for diagnostics.
+//
 
 #include "mctrivia.h"
 #include "AppMain.h"
@@ -129,6 +137,13 @@ void mctrivia::enable(DigiByteTransaction& tx) {
     //create an output transaction and try to add it to the tx
     tx.addDigiByteOutput(outputAddress, cost);
 }
+/**
+ * Loads this pool's configuration from config.cfg. Reads visibility
+ * (psp1visible), the pool server base URL (psp1server, trailing slashes
+ * stripped), a persistent node identity (psp1secret, generated and written back
+ * on first run), and the permanent-list walker page (psp1permanentpage).
+ * Side effect: may write a freshly generated psp1secret back to config.cfg.
+ */
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool("psp1visible", true);
 
@@ -571,6 +586,11 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     //update the bad list
     updateBadList();
 }
+/**
+ * Returns true if assetId is on the pool's bad list. Refreshes the cached bad
+ * list from the server (updateBadList) when it is older than 20 minutes, then
+ * checks membership.
+ */
 bool mctrivia::isAssetBad(const std::string& assetId) {
     //make sure bad list is populated(there are known bad assets so an empty list means we have not checked yet)
     unsigned int currentTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -580,6 +600,10 @@ bool mctrivia::isAssetBad(const std::string& assetId) {
     auto it = find(_badAssets.begin(), _badAssets.end(), assetId);
     return it != _badAssets.end();
 }
+/**
+ * Forwards a bad-asset report to the pool server via the REPORT call.
+ * @throws exceptionCouldntReport if the server call fails
+ */
 void mctrivia::_reportAssetBad(const std::string& assetId) {
     //send to server
     try {
@@ -588,6 +612,14 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
         throw exceptionCouldntReport();
     }
 }
+
+/**
+ * Fetches /bad.json from the pool server and merges any newly listed bad assets
+ * and bad files into the local caches, calling reportAssetBad/reportFileBad
+ * (internalOnly) so the node unpins/flags them without re-notifying the server.
+ * Only unseen ids are added, so repeated polls don't grow the caches unbounded.
+ * Updates _badTime on success; failures are swallowed and logged at DEBUG.
+ */
 void mctrivia::updateBadList() {
     try {
         //make curl request
@@ -626,6 +658,10 @@ void mctrivia::updateBadList() {
         log->addMessage("Failed to load bad list for mctrivia bad list", Log::DEBUG);
     }
 }
+/**
+ * Forwards a bad-file report to the pool server via the REPORT call.
+ * @throws exceptionCouldntReport if the server call fails
+ */
 void mctrivia::_reportFileBad(const string& cid) {
     //send to server
     try {

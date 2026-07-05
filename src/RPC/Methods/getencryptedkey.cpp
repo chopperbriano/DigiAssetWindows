@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 09/07/24.
 //
+// RPC method "getencryptedkey": implements the JSON-RPC handler that returns the
+// encrypted key blob(s) the node has stored for one or more addresses, hex-encoded.
+// Stops at the first address that has no stored value and records the remaining
+// (unused) addresses so the cache layer can invalidate the result once one of them
+// changes on chain. Registered with the node's RPC server; part of the node
+// deployable (DigiAssetWindows.exe).
+//
 
 #include "AppMain.h"
 #include "DigiByteDomain.h"

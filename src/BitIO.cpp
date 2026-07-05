@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 10/04/23.
 //
+// BitIO.cpp - implementation of the BitIO bit-stream serializer (see BitIO.h).
+//
+// This is the workhorse encoder/decoder used by the node's chain analyzer to
+// pack DigiAsset data into (and read it back out of) Bitcoin/DigiByte OP_RETURN
+// outputs at bit granularity.  It implements the raw bit read/write/insert/
+// append primitives, the mask and position helpers, the four string encoders
+// (Alpha, UTF-8, Hex, 3B40) plus the "best string" chooser, the custom
+// fixed-precision integer format, IEEE-754 double packing, Bitcoin script data
+// headers, and the variable-length xBit key encoding.
 
 #include <stdexcept>
 #include <random>
@@ -166,6 +175,11 @@ void BitIO::invalidCharacter() {
     throw std::out_of_range("invalid character for encoding method");
 }
 
+/**
+ * Returns the index of character within charSet, or throws via
+ * invalidCharacter() if it is not present.  Used by the string encoders to map
+ * a character to its encoded value.
+ */
 size_t BitIO::getCharSetPos(char character, const std::string& charSet) {
     size_t i = charSet.find(character);
     if (i == std::string::npos) {
@@ -183,6 +197,10 @@ void BitIO::invalidEncoder() {
 }
 
 
+/**
+ * Builds a mask with the low (rightmost) length bits set to 1.
+ * @param length - number of low bits to set (0-64)
+ */
 uint64_t BitIO::makeRightMask(size_t length) {
     if (length == 64) {
         return 0xffffffffffffffff;
@@ -190,14 +208,27 @@ uint64_t BitIO::makeRightMask(size_t length) {
     return ((uint64_t) 1 << length) - (uint64_t) 1;
 }
 
+/**
+ * Builds a mask of length set bits shifted left by shiftLeft positions.
+ * @param length - number of contiguous 1 bits
+ * @param shiftLeft - how far left to shift the run of 1 bits
+ */
 uint64_t BitIO::makeCenterMask(size_t length, size_t shiftLeft) {
     return makeRightMask(length) << shiftLeft;
 }
 
+/**
+ * Builds a mask with the high (leftmost) length bits set to 1.
+ * @param length - number of high bits to set (0-64)
+ */
 uint64_t BitIO::makeLeftMask(size_t length) {
     return ~makeRightMask(BITIO_SIZEOF_LONG - length);
 }
 
+/**
+ * Returns a cryptographically-seeded random 64-bit value.
+ * Used by padWidth() when padding with random fill bits.
+ */
 uint64_t BitIO::getRandomLong() {
     std::random_device rd;                                      //get system random source
     std::mt19937_64 eng(rd());                                  //use 64bit mersenne twister
@@ -546,6 +577,14 @@ void BitIO::insertBits(BitIO& value) {
     value.movePositionTo(valuePointerStartPosition);            //return pointer back to where it was
 }
 
+/**
+ * Pads the stream up to the next multiple of `multiple` bits.
+ * If already an exact multiple nothing happens.  The added bits are filled
+ * according to fillStyle: BITIO_FILL_ZEROS (default), BITIO_FILL_ONES or
+ * BITIO_FILL_RANDOM.  Does not move the position cursor.
+ * @param multiple - target bit-length multiple (0 or 1 are no-ops)
+ * @param fillStyle - how to fill the padding bits
+ */
 void BitIO::padWidth(size_t multiple, unsigned char fillStyle) {
     //check if padding needed
     if (multiple <= 1) {
@@ -588,16 +627,26 @@ void BitIO::padWidth(size_t multiple, unsigned char fillStyle) {
     }
 }
 
+/**
+ * Extends the stream by count zero bits at the end (position cursor unchanged).
+ * Relies on the backing vector growing zero-initialized.
+ */
 void BitIO::appendZeros(size_t count) {
     _length += count;                                   //update bits length to new length
     resizeIfNeeded();
 }
 
+/**
+ * Moves the read/write cursor to an absolute bit index (validated against length).
+ */
 void BitIO::movePositionTo(size_t bitIndex) {
     checkPosition(bitIndex);                            //initial error checking
     _position = bitIndex;                                         //move position pointer
 }
 
+/**
+ * Moves the cursor by a signed relative number of bits (validated).
+ */
 void BitIO::movePositionBy(int amount) {
     movePositionTo(_position + amount);
 }
@@ -698,6 +747,15 @@ BitIO BitIO::makeBestString(const std::string& message, size_t lengthBits,
     return best;
 }
 
+/**
+ * Decodes a string previously written by makeBestString.
+ * Reads the xBit header, matches it against headerOptions to learn the encoder,
+ * reads the lengthBits-bit character count, then decodes with the selected
+ * encoder.  Advances the cursor past the whole string.
+ * @param lengthBits - width of the character-count field (must match encoder)
+ * @param headerOptions - the same option set used when encoding
+ * @return the decoded UTF-8 string
+ */
 std::string BitIO::getBestString(size_t lengthBits, const std::vector<stringHeaderOption>& headerOptions) {
     //read header and make sure it is valid
     xBitValue header = getXBit(headerOptions.front().header.xBitLength);
@@ -785,6 +843,15 @@ std::string BitIO::getAlphaString(size_t length) {
     return result;
 }
 
+/**
+ * Encodes a UTF-8 string into a compact BitIO representation.
+ * Re-packs each UTF-8 code point by stripping the redundant continuation-byte
+ * marker bits: 1-byte chars stay 8 bits, and 2/3/4-byte sequences are packed
+ * into 13/19/24 bits respectively.  Throws via invalidCharacter() on malformed
+ * UTF-8 (misplaced or missing continuation bytes, or an over-long lead byte).
+ * @param message - UTF-8 encoded source text
+ * @return BitIO holding the packed encoding
+ */
 BitIO BitIO::makeUTF8String(const std::string& message) {
     BitIO result;
     uint8_t remainingBytes = 0;  //not a truly accurate name
@@ -846,6 +913,13 @@ BitIO BitIO::makeUTF8String(const std::string& message) {
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "cppcoreguidelines-narrowing-conversions"
 
+/**
+ * Decodes a packed UTF-8 string produced by makeUTF8String.
+ * Reads length code points, using leading marker bits to decide the byte-width
+ * of each, and reconstructs standard UTF-8 bytes.  Advances the cursor.
+ * @param length - number of code points to read
+ * @return the decoded UTF-8 string
+ */
 std::string BitIO::getUTF8String(size_t length) {
     std::string result;
 
@@ -920,6 +994,14 @@ std::string BitIO::getHexString(size_t length) {
     return result;
 }
 
+/**
+ * Encodes a string using the 3B40 scheme (40-char set BITIO_CHARSET_3B40).
+ * Packs characters three at a time as a 16-bit base-40 number; a trailing 1 or
+ * 2 leftover characters are written as a 5- or 11-bit remainder.  Throws via
+ * invalidCharacter() for characters outside the 3B40 set.
+ * @param message - source text (only 3B40 characters allowed)
+ * @return BitIO holding the packed encoding
+ */
 BitIO BitIO::make3B40String(const std::string& message) {
     BitIO result;
     const std::string charSet = BITIO_CHARSET_3B40;
@@ -944,6 +1026,13 @@ BitIO BitIO::make3B40String(const std::string& message) {
     return result;
 }
 
+/**
+ * Decodes a 3B40-encoded string produced by make3B40String.
+ * Reads length characters, unpacking groups of three from each 16-bit block and
+ * any 1 or 2 character remainder from a 5- or 11-bit tail.  Advances the cursor.
+ * @param length - number of characters to read
+ * @return the decoded string
+ */
 std::string BitIO::get3B40String(size_t length) {
     std::string result;
     const std::string charSet = BITIO_CHARSET_3B40;
@@ -968,6 +1057,17 @@ std::string BitIO::get3B40String(size_t length) {
     return result;
 }
 
+/**
+ * Encodes an unsigned integer in the custom variable-width fixed-precision
+ * format used for compact on-chain amounts.
+ * Values under 32 use a single byte; larger values are split into a mantissa
+ * plus a power-of-ten exponent so trailing zeros cost no space, and a length
+ * prefix (2 or 3 bits) selects one of the 2- to 7-byte encodings.  When a value
+ * is too large to benefit from an exponent it is stored with exponent 0.
+ * @param value - integer to encode (must be <= 18014398509481983)
+ * @return BitIO holding the encoded number
+ * @throws std::out_of_range if value exceeds the encodable maximum
+ */
 BitIO BitIO::makeFixedPrecision(uint64_t value) {
     checkValueRange(value, (uint64_t) 0,
                     (uint64_t) 18014398509481983);                 //make sure value can be encoded in this encoding method
@@ -1022,6 +1122,12 @@ BitIO BitIO::makeFixedPrecision(uint64_t value) {
     return result;
 }
 
+/**
+ * Decodes a value written by makeFixedPrecision and advances the cursor.
+ * Reads the length prefix to determine the byte width, extracts the mantissa
+ * and (for the multi-byte forms) the exponent, then returns mantissa * 10^exp.
+ * @return the decoded integer value
+ */
 uint64_t BitIO::getFixedPrecision() {
     uint64_t length = getBits(3) + 1;
 
@@ -1056,6 +1162,14 @@ uint64_t BitIO::getFixedPrecision() {
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "cppcoreguidelines-narrowing-conversions"
 
+/**
+ * Encodes a double as its 8-byte IEEE-754 representation into a BitIO object.
+ * Port of the nodejs ieee754 writer; handles sign, NaN/Inf, subnormals and
+ * rounding, emitting bytes in little- or big-endian order.
+ * @param value - the double to encode
+ * @param isLE - true for little-endian byte order (default), false for big-endian
+ * @return BitIO holding the 64-bit encoding
+ */
 BitIO BitIO::makeDouble(double value, bool isLE) {
     /** adapted from nodejs ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
     uint8_t buffer[8];
@@ -1133,6 +1247,13 @@ BitIO BitIO::makeDouble(double value, bool isLE) {
     return result;
 }
 
+/**
+ * Reads 8 bytes at the cursor and reconstructs the IEEE-754 double they encode.
+ * Port of the nodejs ieee754 reader; inverse of makeDouble and advances the
+ * cursor by 64 bits.
+ * @param isLE - true if the bytes are little-endian (default), false for big-endian
+ * @return the decoded double (may be NaN or +/-Inf)
+ */
 double BitIO::getDouble(bool isLE) {
     /** adapted from nodejs ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
     size_t nBytes = 8;

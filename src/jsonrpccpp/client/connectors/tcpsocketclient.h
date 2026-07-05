@@ -5,6 +5,14 @@
  * @date    17.10.2016
  * @author  Alexandre Poirot <alexandre.poirot@legrand.fr>
  * @license See attached LICENSE.txt
+ ************************************************************************
+ * Role in DigiAsset for Windows: declares the TCP JSON-RPC client
+ * connector. This is a thin, OS-agnostic facade that delegates to a
+ * platform-specific implementation (Windows or Linux) so the rest of the
+ * node/pool can talk JSON-RPC to a peer over a TCP socket without caring
+ * about the underlying socket API. (Note: the node's DigiByte RPC calls go
+ * through the HTTP client; this TCP connector is part of the bundled
+ * libjson-rpc-cpp client library.)
  ************************************************************************/
 
 #ifndef JSONRPC_CPP_TCPSOCKETCLIENT_H_

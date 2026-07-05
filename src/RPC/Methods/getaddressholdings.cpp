@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 26/03/24.
 //
+// RPC method handler: "getaddressholdings".
+//
+// Part of the node's JSON-RPC surface. Queries the chain-analysis database for
+// all DigiAsset (and optionally DigiByte) balances currently held by a single
+// address, returning them as a map of assetIndex -> quantity. Result is cached
+// for ~1 day (5760 blocks) and invalidated whenever that address changes.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

@@ -7,6 +7,13 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// Role in the node/pool: this is the Windows (Winsock2) transport that the
+// embedded json-rpc client uses to talk to the local DigiByte Core daemon over
+// a raw TCP socket. Requests built by RpcProtocolClient are written to the
+// socket here, and the server's newline-delimited JSON reply is read back.
+// Every chain query the node/pool makes against digibyted (getblock, gettx,
+// etc.) ultimately flows through SendRPCMessage in this file.
+
 #include "windowstcpsocketclient.h"
 #include <cstdlib>
 #include <iostream>
@@ -27,6 +34,20 @@ WindowsTcpSocketClient::WindowsTcpSocketClient(const std::string &hostToConnect,
 
 WindowsTcpSocketClient::~WindowsTcpSocketClient() {}
 
+/**
+ * @brief Sends one JSON-RPC request over a fresh TCP connection and reads the reply.
+ *
+ * Opens a socket via Connect(), writes the entire @p message (looping until every
+ * byte is sent, re-slicing the string on partial writes), then reads BUFFER_SIZE
+ * chunks into @p result until the delimiter byte (0x0A / newline) is seen. Each
+ * call uses a new connection, which is closed before returning. On any Winsock
+ * send()/recv() failure the socket is closed and a JsonRpcException carrying the
+ * decoded Winsock error text is thrown.
+ *
+ * @param message The serialized JSON-RPC request to transmit.
+ * @param result  Appended with the raw server response (including the delimiter).
+ * @throw JsonRpcException on socket send/recv errors (code ERROR_CLIENT_CONNECTOR).
+ */
 void WindowsTcpSocketClient::SendRPCMessage(const std::string &message, std::string &result) throw(JsonRpcException) {
   SOCKET socket_fd = this->Connect();
   char buffer[BUFFER_SIZE];
@@ -107,6 +128,15 @@ void WindowsTcpSocketClient::SendRPCMessage(const std::string &message, std::str
   closesocket(socket_fd);
 }
 
+/**
+ * @brief Turns a Winsock2 error code into a human-readable string.
+ *
+ * Wraps FormatMessage() to look up the system description for error code @p e,
+ * copying it into a std::string and freeing the buffer FormatMessage allocated.
+ *
+ * @param e A Winsock2 error value (e.g. from WSAGetLastError()).
+ * @return The system's text description of the error.
+ */
 string WindowsTcpSocketClient::GetErrorMessage(const int &e) {
   LPVOID lpMsgBuf;
   lpMsgBuf = (LPVOID) "Unknown error";
@@ -117,6 +147,17 @@ string WindowsTcpSocketClient::GetErrorMessage(const int &e) {
   return message;
 }
 
+/**
+ * @brief Resolves the configured host and returns a connected socket.
+ *
+ * If hostToConnect is already a dotted IPv4 literal, connects to it directly.
+ * Otherwise treats it as a DNS hostname: resolves it with getaddrinfo() and
+ * tries each returned IPv4 address in turn, returning the first that connects.
+ *
+ * @return A connected socket descriptor.
+ * @throw JsonRpcException if the hostname cannot be resolved or no resolved
+ *        address accepts the connection (code ERROR_CLIENT_CONNECTOR).
+ */
 SOCKET WindowsTcpSocketClient::Connect() throw(JsonRpcException) {
   if (this->IsIpv4Address(this->hostToConnect)) {
     return this->Connect(this->hostToConnect, this->port);
@@ -161,6 +202,15 @@ SOCKET WindowsTcpSocketClient::Connect() throw(JsonRpcException) {
   }
 }
 
+/**
+ * @brief Creates a TCP socket and connects it to a specific IPv4 address/port.
+ *
+ * @param ip   Dotted IPv4 address to connect to.
+ * @param port TCP port to connect to.
+ * @return A connected socket descriptor.
+ * @throw JsonRpcException if socket() or connect() fails; the socket is closed
+ *        and the decoded Winsock error text is attached (ERROR_CLIENT_CONNECTOR).
+ */
 SOCKET
 WindowsTcpSocketClient::Connect(const string &ip, const int &port) throw(JsonRpcException) {
   SOCKADDR_IN address;
@@ -225,10 +275,22 @@ WindowsTcpSocketClient::Connect(const string &ip, const int &port) throw(JsonRpc
   return socket_fd;
 }
 
+/**
+ * @brief Reports whether a string is a valid dotted IPv4 literal.
+ *
+ * Uses inet_addr(); a value other than INADDR_NONE means it parsed as IPv4.
+ *
+ * @param ip Candidate address string.
+ * @return true if @p ip is a well-formed IPv4 address, false otherwise.
+ */
 bool WindowsTcpSocketClient::IsIpv4Address(const std::string &ip) { return (inet_addr(ip.c_str()) != INADDR_NONE); }
 
 // This is inspired from SFML to manage Winsock initialization. Thanks to them!
 // ( http://www.sfml-dev.org/ ).
+//
+// RAII guard whose single global instance initializes Winsock (WSAStartup) at
+// program load and tears it down (WSACleanup) at exit, so socket calls in this
+// file work without every caller managing Winsock lifetime.
 struct ClientSocketInitializer {
   ClientSocketInitializer()
 

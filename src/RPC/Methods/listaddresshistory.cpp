@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "listaddresshistory" for the DigiAsset node's JSON-RPC server.
+// A node-specific (non-Core) method: queries the node's Database for the list of
+// txids that a given address participated in, filtered by block-height range and
+// count limit. Availability of results depends on the node's pruning level.
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

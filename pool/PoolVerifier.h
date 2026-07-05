@@ -31,9 +31,16 @@
 
 class PoolDatabase;
 
+// Owns the background dial-back worker thread described in the file header.
+// Constructed once in pool/main.cpp alongside PoolServer, sharing the same
+// PoolDatabase; started/stopped around the server's lifetime. Exposes only
+// live probe counters for the dashboard; all real work happens in loop().
 class PoolVerifier {
 public:
+    // `db` is the shared pool database; `ipfsApiBase` is the local Kubo HTTP
+    // API root used for swarm/connect, findprovs and cat probes.
     PoolVerifier(PoolDatabase& db, const std::string& ipfsApiBase);
+    // Stops the worker thread (via stop()) if still running.
     ~PoolVerifier();
 
     PoolVerifier(const PoolVerifier&) = delete;
@@ -54,6 +61,7 @@ private:
     std::atomic<uint64_t> _probesAttempted{0};
     std::atomic<uint64_t> _probesSucceeded{0};
 
+    // Worker-thread body: the periodic verify cycle. Runs until stop().
     void loop();
 
     // Direct-dial check (swarm/connect). True only if the peer is reachable.

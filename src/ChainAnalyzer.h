@@ -1,6 +1,16 @@
 //
 // Created by mctrivia on 02/02/23.
 //
+// ChainAnalyzer — the node's blockchain indexing engine.
+//
+// Runs on its own worker thread (extends Threaded). It walks the DigiByte
+// chain block-by-block from the local DigiByte Core RPC, hands each transaction
+// to DigiByteTransaction for DigiAsset parsing, and persists the results into
+// the Database. It also handles fork rewinds (rolling back when the local chain
+// reorganizes) and periodic pruning of historical data to keep the DB small.
+// Sync progress (getSync()/getSyncHeight()) is what the ConsoleDashboard and
+// RPC report. This is the core of the DigiAssetWindows.exe node deployable.
+//
 
 #ifndef DIGIBYTECORE_CHAINANALYZER_H
 #define DIGIBYTECORE_CHAINANALYZER_H
@@ -16,6 +26,13 @@
 #include <cmath>
 #include <thread>
 
+/**
+ * Blockchain analyzer/indexer worker. Owns the sync loop that reads blocks from
+ * DigiByte Core, extracts DigiAsset data, writes it to the Database, and prunes
+ * old history. State is exposed as an int (SYNCED / STOPPED / INITIALIZING /
+ * REWINDING / BUSY, or a negative "blocks behind" count while catching up).
+ * Config (prune settings, what to store/pin) loads from and saves to config.cfg.
+ */
 class ChainAnalyzer : public Threaded {
 public:
     //constructor/destructor
@@ -36,7 +53,7 @@ public:
     void setStoreNonAssetUTXO(bool shouldStore);
 
     //running state modifiers
-    void restart(); //erases all data and starts syncing over
+    void restart(); //erases all data and starts syncing over from block 1
 
     //SYNCING is anything <0 where the number is how many blocks behind it is
     static const int SYNCED = 0;
@@ -49,6 +66,13 @@ public:
     int getSync() const;
     unsigned int getSyncHeight() const;
 
+    /**
+     * Builds a formatted multi-line table of accumulated timing stats (total,
+     * average, and count) for the three hot paths: transaction processing,
+     * transaction saving, and address-cache clearing. Read-only; used for
+     * performance diagnostics.
+     * @return the formatted table as a string
+     */
     std::string printProfilingInfo() {
         long long totalDuration = _processTransactionRunTime;
         unsigned int transactions = _processTransactionRunCount;
@@ -84,10 +108,10 @@ public:
 private:
     std::string _configFileName = "config.cfg";
 
-    //thread overrides
-    void startupFunction() override;
-    void mainFunction() override;
-    void shutdownFunction() override;
+    //thread overrides (called by the Threaded base class on its worker thread)
+    void startupFunction() override; //recover DB from last shutdown, set initial height/state
+    void mainFunction() override;    //the sync loop body (rewind + sync); re-entered on error
+    void shutdownFunction() override;//mark state STOPPED on thread exit
 
     //config functions
     void resetConfig();
@@ -130,12 +154,12 @@ private:
     unsigned int _clearAddressCacheRunCount = 0;
 
     //phases functions
-    void phaseRewind();
-    void phaseSync();
-    void phasePrune();
+    void phaseRewind();//detect a fork at the current height and roll the DB back to the fork point
+    void phaseSync();  //main catch-up/tip-follow loop: fetch, process, and store each block
+    void phasePrune(); //drop history older than the prune window when it's time to prune
 
     //process sub functions
-    void processTX(const std::string& txid, unsigned int height);
+    void processTX(const std::string& txid, unsigned int height);//parse one tx, store it, invalidate caches
 
     friend class Database; //so database can modify state
 public:

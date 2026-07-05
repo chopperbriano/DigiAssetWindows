@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 20/05/24.
 //
+// getrandom.cpp - RPC method implementation for the node
+// (DigiAssetWindows.exe). Registered in the RPC::Methods dispatch table and
+// exposed over the JSON-RPC server. Derives a provably-fair pseudo-random
+// number by SHA256-hashing a transaction output (or block) identifier
+// together with the hashes of the 10 blocks up to and including its
+// confirming block, then reducing that digest modulo an optional "out of"
+// bound. Because the inputs are all fixed on-chain data, callers can
+// independently reproduce and verify the result.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

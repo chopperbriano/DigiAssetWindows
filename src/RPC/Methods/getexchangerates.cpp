@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// getexchangerates.cpp - RPC method implementation for the node
+// (DigiAssetWindows.exe). Registered in the RPC::Methods dispatch table and
+// exposed over the JSON-RPC server. Returns the DigiAsset on-chain exchange
+// rates (published by oracle addresses) as of the current sync height or an
+// optional historical block height, reading them from the local database.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

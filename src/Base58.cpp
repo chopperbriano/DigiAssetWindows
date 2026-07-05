@@ -2,6 +2,11 @@
 // Created by mctrivia on 20/06/23.
 // reformatted from https://bitcoin.stackexchange.com/questions/76480/encode-decode-base-58-c
 //
+// Base58.cpp - implementation of the base-58 codec used by the node to convert
+// between raw bytes and the human-safe base-58 text form (e.g. DigiByte
+// addresses).  Uses big-integer style long division/multiplication by 58, with
+// leading-zero bytes preserved as leading '1' characters per the Bitcoin
+// convention.
 
 #include <vector>
 #include <string>
@@ -10,6 +15,7 @@
 
 
 
+// Forward alphabet: index (0-57) -> base-58 character.
 const uint8_t Base58::base58Map[] = {
         '1', '2', '3', '4', '5', '6', '7', '8',
         '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
@@ -19,6 +25,7 @@ const uint8_t Base58::base58Map[] = {
         'h', 'i', 'j', 'k', 'm', 'n', 'o', 'p',
         'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
         'y', 'z'};
+// Reverse lookup: ASCII code (low 7 bits) -> base-58 value, 0xff for invalid.
 const uint8_t Base58::alphaMap[] = {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -30,6 +37,15 @@ const uint8_t Base58::alphaMap[] = {
         0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 
+/**
+ * Encode raw bytes to a base-58 string.
+ * Treats data as a big-endian big integer and repeatedly captures its base-58
+ * digits, then emits them most-significant first.  Every leading zero byte in
+ * the input (except when the input is a single byte) is rendered as a leading
+ * '1' so the byte length is recoverable.
+ * @param data - raw bytes to encode
+ * @return the base-58 encoded string
+ */
 std::string Base58::encode(const std::vector<uint8_t>& data) {
     std::vector<uint8_t> digits((data.size() * 138 / 100) + 1);
     size_t digitslen = 1;
@@ -54,6 +70,15 @@ std::string Base58::encode(const std::vector<uint8_t>& data) {
     return result;
 }
 
+/**
+ * Decode a base-58 string back to raw bytes.
+ * Inverse of encode(): accumulates the base-58 digits into a big integer, then
+ * restores any leading '1' characters as leading zero bytes and reverses the
+ * accumulator into big-endian order.  Invalid characters map through alphaMap
+ * to 0xff and are treated as digit value 255 (input is assumed valid base-58).
+ * @param data - base-58 text to decode
+ * @return the decoded raw byte vector (big-endian)
+ */
 std::vector<uint8_t> Base58::decode(const std::string& data) {
     std::vector<uint8_t> result((data.size() * 138 / 100) + 1);
     size_t resultlen = 1;

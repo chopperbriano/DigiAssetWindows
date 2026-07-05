@@ -7,6 +7,16 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Part of the bundled libjson-rpc-cpp library. Declares Procedure, which
+ * describes a single JSON-RPC method or notification: its name, parameter
+ * names/types, parameter-passing style (by-name vs by-position), and (for
+ * methods) return type. It also validates incoming request parameters against
+ * that declaration. Used by the RPC server/client machinery underpinning the
+ * node's communication with DigiByte Core.
+ */
+
 #ifndef JSONRPC_CPP_PROCEDURE_H_
 #define JSONRPC_CPP_PROCEDURE_H_
 
@@ -20,8 +30,13 @@ namespace jsonrpc {
   typedef std::map<std::string, jsontype_t> parameterNameList_t;
   typedef std::vector<jsontype_t> parameterPositionList_t;
 
+  // Whether a procedure's parameters are matched by name (object) or by position (array).
   typedef enum { PARAMS_BY_NAME, PARAMS_BY_POSITION } parameterDeclaration_t;
 
+  /**
+   * Describes one JSON-RPC procedure (method or notification) and validates
+   * request parameters against its declared parameter names and types.
+   */
   class Procedure {
   public:
     Procedure();
@@ -71,7 +86,9 @@ namespace jsonrpc {
      */
     void AddParameter(const std::string &name, jsontype_t type);
 
+    // Validate a JSON object of parameters against the declared name->type map.
     bool ValidateNamedParameters(const Json::Value &parameters) const;
+    // Validate a JSON array of parameters against the declared positional types (size must match).
     bool ValidatePositionalParameters(const Json::Value &parameters) const;
 
   private:
@@ -106,6 +123,7 @@ namespace jsonrpc {
      */
     parameterDeclaration_t paramDeclaration;
 
+    // Check that one JSON value matches the expected jsontype_t (string/bool/int/real/etc).
     bool ValidateSingleParameter(jsontype_t expectedType, const Json::Value &value) const;
   };
 } /* namespace jsonrpc */

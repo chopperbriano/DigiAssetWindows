@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 06/07/23.
 //
+// DigiAssetTypes.cpp - Implementations for the shared asset value types
+// declared in DigiAssetTypes.h. Provides AssetUTXO's JSON serialization and
+// the serialize()/deserialize() byte-buffer pairs for Signer, ExchangeRate,
+// Royalty, and VoteOption. Each field is (de)serialized in a fixed order via
+// the primitive helpers in serialize.h, so the layout must stay in sync
+// between the two directions for stored records to read back correctly.
+//
 
 #include <cstdint>
 #include <vector>
@@ -11,6 +18,11 @@
 
 using namespace std;
 
+/**
+ * Builds a JSON object describing this UTXO: outpoint (txid/vout), controlling
+ * address, DigiByte value in sats, and an "assets" array holding each contained
+ * DigiAsset's JSON. simplified is passed straight through to DigiAsset::toJSON.
+ */
 Json::Value AssetUTXO::toJSON(bool simplified) const {
     Json::Value jsonUTXO;
     jsonUTXO["txid"] = txid;
@@ -26,6 +38,7 @@ Json::Value AssetUTXO::toJSON(bool simplified) const {
     return jsonUTXO;
 }
 
+// Signer <-> bytes: writes/reads address then weight, in that order.
 void serialize(vector<uint8_t>& serializedData, const Signer& input) {
     serialize(serializedData, input.address);
     serialize(serializedData, input.weight);
@@ -36,6 +49,7 @@ void deserialize(const vector<uint8_t>& serializedData, size_t& i, Signer& outpu
     deserialize(serializedData, i, output.weight);
 }
 
+// ExchangeRate <-> bytes: address, then index, then name.
 void serialize(vector<uint8_t>& serializedData, const ExchangeRate& input) {
     serialize(serializedData, input.address);
     serialize(serializedData, input.index);
@@ -48,6 +62,7 @@ void deserialize(const vector<uint8_t>& serializedData, size_t& i, ExchangeRate&
     deserialize(serializedData, i, output.name);
 }
 
+// Royalty <-> bytes: address, then amount.
 void serialize(vector<uint8_t>& serializedData, const Royalty& input) {
     serialize(serializedData, input.address);
     serialize(serializedData, input.amount);
@@ -58,6 +73,7 @@ void deserialize(const vector<uint8_t>& serializedData, size_t& i, Royalty& outp
     deserialize(serializedData, i, output.amount);
 }
 
+// VoteOption <-> bytes: address, then label.
 void serialize(vector<uint8_t>& serializedData, const VoteOption& input) {
     serialize(serializedData, input.address);
     serialize(serializedData, input.label);

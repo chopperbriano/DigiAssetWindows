@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 30/01/23.
 //
+// DigiByteCore.cpp - Implementation of the DigiByteCore JSON-RPC wrapper (see
+// DigiByteCore.h). Manages the connection lifecycle to a DigiByte Core node
+// (config file -> HTTP JSON-RPC client), funnels every call through the shared
+// sendcommand() mutex, and implements each typed RPC method by building the
+// params array and unpacking the JSON result into a DigiByteCore_Types.h struct.
+// Also implements the per-block TX cache (getBlockVerbose/getRawTransaction)
+// and the errorCheckAPI wrapper that maps low-level faults onto this class's
+// exception types.
+//
 
 #include "DigiByteCore.h"
 #include "Config.h"
@@ -28,6 +37,7 @@ using namespace std;
 
 mutex DigiByteCore::_mutex;
 
+// Destructor: releases the JSON-RPC connection if one is open.
 DigiByteCore::~DigiByteCore() {
     dropConnection();
 }
@@ -281,6 +291,12 @@ blockinfo_t DigiByteCore::getBlockVerbose(const string& hash) {
     });
 }
 
+/**
+ * Returns full transaction data for a txid. Serves from the per-block TX cache
+ * (populated by getBlockVerbose) if present, removing the entry as it is
+ * consumed; otherwise falls back to a verbose getrawtransaction RPC.
+ * Possible Errors: See errorCheckAPI (on the fallback path)
+ */
 getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
     {
         std::lock_guard<std::mutex> lock(_txCacheMutex);
@@ -301,6 +317,7 @@ getrawtransaction_t DigiByteCore::getRawTransaction(const string& txid) {
  */
 // Prefetch infrastructure removed — getBlockVerbose replaces it
 
+// errorCheckAPI-wrapped listunspent (see the lower-level listunspent below).
 vector<unspenttxout_t> DigiByteCore::listUnspent(int minconf, int maxconf, const vector<string>& addresses) {
     return errorCheckAPI([&] {
         return listunspent(minconf,maxconf,addresses);
@@ -308,6 +325,10 @@ vector<unspenttxout_t> DigiByteCore::listUnspent(int minconf, int maxconf, const
 }
 
 
+/**
+ * errorCheckAPI-wrapped getaddressinfo: calls the RPC and unpacks scriptPubKey,
+ * ownership/script/witness flags, and labels into a getaddressinfo_t.
+ */
 getaddressinfo_t DigiByteCore::getAddressInfo(const string& address) {
     return errorCheckAPI([&] {
         //get results from wallet
@@ -332,6 +353,12 @@ getaddressinfo_t DigiByteCore::getAddressInfo(const string& address) {
 
 
 
+/**
+ * Core call primitive: sends one JSON-RPC method+params to DigiByte Core and
+ * returns the raw JSON result. Serialized via _mutex so only one call runs at
+ * a time. Updates the profiling counters. A jsonrpccpp failure is rethrown as a
+ * DigiByteException carrying the code and message.
+ */
 Value DigiByteCore::sendcommand(const string& command, const Value& params) {
     Value result;
     _runCount++;
@@ -359,6 +386,8 @@ string DigiByteCore::IntegerToString(int num) {
     return ss.str();
 }
 
+// Formats an amount as a fixed 8-decimal string (DigiByte's precision), the
+// form Core expects for amounts passed as strings.
 std::string DigiByteCore::RoundDouble(double num) {
     std::ostringstream ss;
     ss.precision(8);
@@ -369,6 +398,7 @@ std::string DigiByteCore::RoundDouble(double num) {
 
 
 /* === General functions === */
+// Calls getinfo and unpacks the node/wallet summary into a getinfo_t.
 getinfo_t DigiByteCore::getinfo() {
     string command = "getinfo";
     Value params, result;
@@ -401,6 +431,8 @@ void DigiByteCore::stop() {
 }
 
 /* === Node functions === */
+// Adds/removes/one-try-connects a peer. `comm` must be "add", "remove", or
+// "onetry"; any other value throws std::runtime_error before the RPC is sent.
 void DigiByteCore::addnode(const string& node, const string& comm) {
 
     if (!(comm == "add" || comm == "remove" || comm == "onetry")) {
@@ -414,6 +446,8 @@ void DigiByteCore::addnode(const string& node, const string& comm) {
     sendcommand(command, params);
 }
 
+// getaddednodeinfo for all added nodes. When dns is true, resolved addresses
+// and connection state are also populated per node.
 vector<nodeinfo_t> DigiByteCore::getaddednodeinfo(bool dns) {
     string command = "getaddednodeinfo";
     Value params, result;
@@ -449,6 +483,7 @@ vector<nodeinfo_t> DigiByteCore::getaddednodeinfo(bool dns) {
     return ret;
 }
 
+// getaddednodeinfo restricted to a single added node (see the overload above).
 vector<nodeinfo_t> DigiByteCore::getaddednodeinfo(bool dns, const std::string& node) {
     string command = "getaddednodeinfo";
     Value params, result;
@@ -644,6 +679,8 @@ multisig_t DigiByteCore::createmultisig(int nrequired, const vector<string>& key
     return ret;
 }
 
+// Requests a new wallet address, mapping the AddressTypes enum to Core's
+// address-type strings ("legacy" / "p2sh-segwit" / "bech32").
 string DigiByteCore::getnewaddress(const string& label, AddressTypes type) {
     string typeStr;
     switch (type) {
@@ -824,6 +861,8 @@ vector<addressinfo_t> DigiByteCore::listreceivedbyaddress(int minconf, bool incl
     return ret;
 }
 
+// gettransaction for a wallet txid (watch=true includes watch-only). Unpacks
+// totals, block context, timestamps, the per-detail breakdown, and raw hex.
 gettransaction_t DigiByteCore::gettransaction(const string& tx, bool watch) {
     string command = "gettransaction";
     Value params, result;
@@ -978,6 +1017,9 @@ std::vector<std::string> DigiByteCore::listlabels(const std::string& purpose) {
     return ret;
 }
 
+// listaddressgroupings: returns groups of addresses believed to share
+// ownership. Each inner array is [address, balance, account?]; the account
+// element is optional and defaults to "" when absent.
 vector<vector<addressgrouping_t>> DigiByteCore::listaddressgroupings() {
     string command = "listaddressgroupings";
     Value params, result;
@@ -1095,6 +1137,9 @@ string DigiByteCore::sendmany(const string& fromaccount, const map<string, doubl
     return result.asString();
 }
 
+// listunspent: wallet UTXOs between minconf and maxconf confirmations. If
+// `addresses` is non-empty it is passed as the RPC's address filter; each
+// result row is unpacked into an unspenttxout_t.
 vector<unspenttxout_t> DigiByteCore::listunspent(int minconf, int maxconf, const vector<string>& addresses) {
     string command = "listunspent";
     Value params, result;
@@ -1186,6 +1231,8 @@ string DigiByteCore::getblockhash(int blocknumber) {
     return result.asString();
 }
 
+// getblock (default verbosity): fills a blockinfo_t including DigiByte's
+// pow_algo_id and the list of txids (hashes only, not full TX data).
 blockinfo_t DigiByteCore::getblock(const string& blockhash) {
     string command = "getblock";
     Value params, result;
@@ -1274,6 +1321,8 @@ mininginfo_t DigiByteCore::getmininginfo() {
 }
 
 
+// listsinceblock: wallet transactions since the given block (empty = all),
+// plus the lastblock hash, filtered by target_confirmations.
 txsinceblock_t DigiByteCore::listsinceblock(const string& blockhash, int target_confirmations) {
     string command = "listsinceblock";
     Value params, result;
@@ -1315,6 +1364,13 @@ txsinceblock_t DigiByteCore::listsinceblock(const string& blockhash, int target_
 
 
 /* === Raw transaction calls === */
+/**
+ * getrawtransaction. With verbose=false only the raw hex is returned. With
+ * verbose=true the full decoded transaction is populated (vin/vout, scripts,
+ * block context). Output values are stored both as DGB and as sats (rounded
+ * from the double). Any bare scriptPubKey "address" field is merged into the
+ * addresses list if not already present.
+ */
 getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool verbose) {
     string command = "getrawtransaction";
     Value params, result;
@@ -1386,6 +1442,8 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
     return ret;
 }
 
+// decodescript: interprets a hex script, returning its disassembly, type,
+// P2SH-wrapped address, required signatures, and addresses.
 decodescript_t DigiByteCore::decodescript(const std::string& hexString) {
     string command = "decodescript";
     Value params, result;
@@ -1407,6 +1465,8 @@ decodescript_t DigiByteCore::decodescript(const std::string& hexString) {
     return ret;
 }
 
+// decoderawtransaction: decodes a raw tx hex string into its structured form
+// (vin/vout, scripts, sequence). Output values are stored as DGB and sats.
 decoderawtransaction_t DigiByteCore::decoderawtransaction(const string& hexString) {
     string command = "decoderawtransaction";
     Value params, result;
@@ -1526,6 +1586,8 @@ string DigiByteCore::createrawtransaction(const vector<txout_t>& inputs, const m
     return result.asString();
 }
 
+// signrawtransaction using only the wallet's keys. Optional `inputs` supply
+// prevout script/redeemScript hints; redeemScript is only sent if non-empty.
 signrawtransaction_t DigiByteCore::signrawtransaction(const string& rawTx, const vector<signrawtxin_t> inputs) {
     string command = "signrawtransaction";
     Value params, result;
@@ -1554,6 +1616,8 @@ signrawtransaction_t DigiByteCore::signrawtransaction(const string& rawTx, const
     return ret;
 }
 
+// signrawtransaction with explicit private keys and a chosen sighash type (see
+// the overload above for the wallet-key-only form).
 signrawtransaction_t DigiByteCore::signrawtransaction(const string& rawTx, const vector<signrawtxin_t> inputs,
                                                       const vector<string>& privkeys, const string& sighashtype) {
     string command = "signrawtransaction";
@@ -1616,6 +1680,8 @@ string DigiByteCore::getrawchangeaddress() {
     return result.asString();
 }
 
+// gettxout: details of the unspent output txid:n (optionally counting the
+// mempool), unpacked into a utxoinfo_t.
 utxoinfo_t DigiByteCore::gettxout(const std::string& txid, int n, bool includemempool) {
     string command = "gettxout";
     Value params, result;

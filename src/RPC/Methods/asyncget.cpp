@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 08/04/24.
 //
+// RPC method handler: "asyncget".
+//
+// Part of the node's JSON-RPC surface. Retrieves the cached result of an async
+// RPC job previously queued via asyncstart. Results are stored on disk under
+// cache/ in a file named by a SHA256 of the call (method + params); this handler
+// recomputes that filename and returns the stored JSON, or false if not yet
+// available. Companion handlers: asyncstart (queue) and asyncclear (delete).
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

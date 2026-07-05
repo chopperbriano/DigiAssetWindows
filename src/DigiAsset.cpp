@@ -2,6 +2,13 @@
 // Created by mctrivia on 07/06/23.
 //
 
+// DigiAsset.cpp - Implements the DigiAsset class declared in DigiAsset.h. Contains the on-chain
+// decode logic (reading a DigiAsset out of a transaction's OP_RETURN, computing its assetId via
+// sha256+ripemd160 hashing, resolving its metadata CID and issuer KYC), the constructors used by
+// the chain analyzer and the database layer, the rule-enforcement checker (checkRulesPass), and
+// JSON serialization for the API. Also defines the static tables of standard vote addresses and
+// standard exchange-rate tracking addresses that issuers can reference to keep issuances small.
+
 #include "DigiAsset.h"
 #include "AppMain.h"
 #include "Base58.h"
@@ -250,12 +257,22 @@ string DigiAsset::calculateAssetId(const vin_t& firstVin, uint8_t issuanceFlags)
  */
 
 
+/**
+ * Constructs an asset directly from an issuance transaction by delegating to processIssuance().
+ * Throws exceptionInvalidIssuance if the transaction is not a valid asset issuance.
+ */
 DigiAsset::DigiAsset(const getrawtransaction_t& txData, unsigned int height, unsigned char version,
                      unsigned char opcode, BitIO& opReturnData) {
     if (!processIssuance(txData, height, version, opcode, opReturnData)) throw DigiAsset::exceptionInvalidIssuance();
 }
 
 
+/**
+ * Rebuilds an already-known asset from database fields. Marks it as an existing, write-protected
+ * asset and derives the locked flag, aggregation type and divisibility back out of the assetId
+ * (except for the special "DigiByte" / assetIndex 1 native-coin case). Throws out_of_range if the
+ * assetId is malformed for that special case.
+ */
 DigiAsset::DigiAsset(uint64_t assetIndex, const string& assetId, const string& cid, const KYC& issuer,
                      const DigiAssetRules& rules,
                      unsigned int heightCreated, unsigned int heightUpdated, uint64_t amount) {

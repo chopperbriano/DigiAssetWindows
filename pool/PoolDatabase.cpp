@@ -1,3 +1,14 @@
+//
+// PoolDatabase.cpp - implementation of the pool server's sqlite state store.
+//
+// One class method per query, each guarded by the instance mutex and using
+// prepared statements. Beyond the straight CRUD accessors (documented on their
+// declarations in PoolDatabase.h) this file also contains the schema
+// builder/migrator and the two hand-rolled JSON builders that serialize a
+// permanent page and the node list into the exact shapes the DigiAsset clients
+// expect. See the header for per-method contracts.
+//
+
 #include "PoolDatabase.h"
 #include <chrono>
 #include <iostream>
@@ -36,6 +47,9 @@ namespace {
     }
 }
 
+// Open (or create) the sqlite file at dbPath, switch it to WAL mode for
+// concurrent reads under the HTTP worker writes, and build/migrate the schema.
+// Throws std::runtime_error if the database can't be opened.
 PoolDatabase::PoolDatabase(const std::string& dbPath) {
     int rc = sqlite3_open(dbPath.c_str(), &_db);
     if (rc != SQLITE_OK) {
@@ -61,6 +75,9 @@ PoolDatabase::~PoolDatabase() {
     }
 }
 
+// Run a fire-and-forget SQL statement (used for PRAGMAs and CREATE TABLE).
+// Throws std::runtime_error on failure. Caller must already hold the mutex
+// where concurrency matters (schema build runs single-threaded at ctor time).
 void PoolDatabase::exec(const char* sql) {
     char* errMsg = nullptr;
     int rc = sqlite3_exec(_db, sql, nullptr, nullptr, &errMsg);
@@ -74,6 +91,9 @@ void PoolDatabase::exec(const char* sql) {
     }
 }
 
+// Create every table (IF NOT EXISTS) and apply the additive column migrations
+// for later versions, so opening either a fresh or an existing pool.db leaves
+// the schema current. Called once from the constructor.
 void PoolDatabase::buildSchema() {
     // Every table uses IF NOT EXISTS so reopening an existing pool.db is a
     // no-op. All columns kept simple — INTEGER for unix times and sizes,

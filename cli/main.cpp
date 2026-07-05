@@ -1,3 +1,16 @@
+//
+// cli/main.cpp - DigiAssetWindows-cli.exe entry point.
+//
+// A thin command-line RPC client for the running DigiAssetWindows node. It
+// takes a command name plus arguments on argv, converts each argument into
+// the right JSON type (array/object, integer, double, bool, or string),
+// forwards the call to the node over JSON-RPC (via DigiByteCore reading the
+// local config.cfg), and prints the result. Handles the common failure cases
+// with friendly messages: node/RPC service down, and commands forbidden by
+// config. This is the operator's "poke the node" tool, separate from the
+// node exe itself.
+//
+
 #include "Config.h"
 #include "Database.h"
 #include "DigiByteCore.h"
@@ -6,6 +19,12 @@
 #include <regex>
 
 
+// Parse argv into a JSON argument array, send the requested command to the
+// local node over RPC, and print the response. argv[1] is the command name;
+// argv[2..] are its arguments, each coerced to the most specific JSON type it
+// matches (bracketed text is parsed as JSON, then integer, double, bool, and
+// finally raw string). Returns 1 if no command was given, otherwise 0 (errors
+// are reported on stdout, not via the exit code).
 int main(int argc, char* argv[]) {
     if (argc < 2) return 1;
 

@@ -1,3 +1,12 @@
+//
+// PoolVerifier.cpp - implementation of the pool's background dial-back
+// checker. Owns a worker thread (loop()) that periodically pulls the
+// least-recently-verified registered peers from PoolDatabase and confirms
+// each is still serving content over IPFS, recording success/failure back
+// to the database so Phase 3 payouts can be gated on real reachability.
+// Talks to the local Kubo node exclusively over its HTTP API via
+// CurlHandler. See pool/PoolVerifier.h for the hybrid-verification rationale.
+//
 #include "PoolVerifier.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
@@ -27,6 +36,9 @@ namespace {
     }
 }
 
+// Hold a reference to the shared pool database and remember the base URL of
+// the local IPFS HTTP API (e.g. http://localhost:5001/api/v0/). Does not
+// start the worker thread — call start().
 PoolVerifier::PoolVerifier(PoolDatabase& db, const std::string& ipfsApiBase)
     : _db(db), _ipfsApiBase(ipfsApiBase) {
     // Ensure trailing slash so `_ipfsApiBase + "swarm/connect"` is well-formed.
@@ -37,16 +49,26 @@ PoolVerifier::~PoolVerifier() {
     stop();
 }
 
+// Launch the verify loop on a background thread. Idempotent: a second call
+// while already running is a no-op.
 void PoolVerifier::start() {
     if (_running.exchange(true)) return;
     _thread = std::thread([this]() { this->loop(); });
 }
 
+// Signal the loop to exit and join the worker thread. Idempotent and safe to
+// call from the destructor.
 void PoolVerifier::stop() {
     if (!_running.exchange(false)) return;
     if (_thread.joinable()) _thread.join();
 }
 
+// Worker-thread body. Runs until stop(): each ~60s iteration pulls a small
+// batch of peers to verify, detects the local node's own peerId (to
+// auto-pass same-machine clients that can't be dialed due to NAT
+// hairpinning), builds the NAT-tolerant provider fallback set from a few
+// sample CIDs (gated on at least one being fetchable), then verifies each
+// peer and records the outcome. Sleeps in 1s steps so shutdown is prompt.
 void PoolVerifier::loop() {
     // One-time small delay so we don't fire probes before the pool server
     // has even logged "accepting connections". Feels nicer for the log.
@@ -121,6 +143,11 @@ void PoolVerifier::loop() {
     }
 }
 
+// Hybrid reachability check for one peer. Returns true if the peer can be
+// dialed directly (strongest proof) OR, failing that, appears in the DHT
+// provider records (`providers`) for content it should be pinning. An empty
+// `providers` set fails closed. Matching is by substring so a bare peerId
+// and a /p2p/<id> multiaddr both resolve.
 bool PoolVerifier::verifyPeer(const std::string& peerIdOrMultiaddr,
                              const std::set<std::string>& providers) {
     // 1) Strongest proof: can we dial the peer right now?
@@ -139,6 +166,10 @@ bool PoolVerifier::verifyPeer(const std::string& peerIdOrMultiaddr,
     return false;
 }
 
+// Ask the local IPFS node (routing/findprovs) who advertises `cid` in the
+// DHT and return the set of provider peerIds. Parses the streamed
+// newline-delimited JSON by hand, collecting the non-empty "ID" fields.
+// Returns an empty set on any error or empty CID (best-effort, never throws).
 std::set<std::string> PoolVerifier::findProviders(const std::string& cid) {
     std::set<std::string> out;
     if (cid.empty()) return out;
@@ -169,6 +200,10 @@ std::set<std::string> PoolVerifier::findProviders(const std::string& cid) {
     return out;
 }
 
+// Return true if `cid` actually resolves over IPFS right now, by catting
+// only its first 256 bytes (proves bitswap can retrieve it without
+// downloading the whole file). A kubo JSON error envelope or empty body
+// means not fetchable. Best-effort; never throws.
 bool PoolVerifier::fetchable(const std::string& cid) {
     if (cid.empty()) return false;
     // Pull only the first chunk — we just need to prove the content resolves
@@ -186,6 +221,11 @@ bool PoolVerifier::fetchable(const std::string& cid) {
     return true;
 }
 
+// Direct-dial reachability check: ask the local IPFS node to swarm/connect
+// to the peer (normalizing a bare peerId to /p2p/<id> so kubo does a DHT
+// lookup). Returns true only on an explicit "success" result; a kubo error
+// envelope, empty body, timeout, or ambiguous response counts as failure so
+// we never mark a dead node reachable. Best-effort; never throws.
 bool PoolVerifier::dialPeer(const std::string& peerIdOrMultiaddr) {
     // Normalize to a multiaddr. If the input already contains '/', assume
     // it's a multiaddr like /ip4/1.2.3.4/tcp/4001/p2p/<id>. If it's a bare

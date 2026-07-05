@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * This header declares the cross-platform TcpSocketServer JSON-RPC connector.
+ * It is a thin facade that, at construction time, instantiates the correct
+ * OS-specific implementation (Linux vs. Windows) and forwards start/stop calls
+ * to it. The node and pool server use JSON-RPC connectors of this family to
+ * expose their RPC interface; on Windows the underlying implementation is
+ * WindowsTcpSocketServer. This file is part of the bundled libjson-rpc-cpp
+ * dependency and only declares the public connector interface.
+ */
+
 #ifndef JSONRPC_CPP_TCPSOCKETSERVERCONNECTOR_H_
 #define JSONRPC_CPP_TCPSOCKETSERVERCONNECTOR_H_
 
@@ -68,6 +79,8 @@ namespace jsonrpc {
     bool StopListening();
 
   protected:
+    /* The OS-specific connector this facade delegates to (WindowsTcpSocketServer
+     * on Windows, LinuxTcpSocketServer on Linux); owned by this instance. */
     AbstractServerConnector *realSocket;
   };
 

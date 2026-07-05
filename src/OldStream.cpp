@@ -1,6 +1,23 @@
 //
 // Created by mctrivia on 24/02/24.
 //
+//
+// OldStream.cpp - implements the legacy "stream" key/value API for the node.
+//
+// This translation layer answers requests in the shape of the original
+// pre-Core DigiAsset stream service, so older third-party clients can keep
+// querying this node unchanged.  Each internal fetcher reads from the local
+// analyzer Database and/or the connected DigiByte Core wallet, then reshapes
+// the data into the legacy JSON structures documented in detail above each
+// function.  Results are returned as RPC::Response objects carrying cache
+// lifetime (setBlocksGoodFor) and cache-invalidation hints so the RPC layer
+// can cache them safely.  getKey() at the bottom is the public dispatcher
+// that inspects the key format and routes to the right fetcher.
+//
+// Note: several fields here are intentionally approximate/placeholder
+// ("hack", "cheat") to satisfy the old schema without recomputing values the
+// analyzer does not track precisely; these are called out in inline comments.
+//
 
 #include "OldStream.h"
 #include "AppMain.h"
@@ -828,6 +845,24 @@ namespace OldStream {
 
 
 
+    /**
+     * Public entry point of the legacy stream API: inspects the key's format
+     * and dispatches to the matching internal fetcher.
+     *
+     * Dispatch rules (checked in order):
+     *   - empty            -> empty response
+     *   - all-digit        -> treated as a block height; resolved to a block hash then getDigiByteBlockData()
+     *   - 64 chars         -> tried as a block hash (getDigiByteBlockData); on failure falls back to a txid (getTxData)
+     *   - starts 'U'/'L'   -> DigiAsset id -> getAssetData()
+     *   - "height"         -> current sync height -> getHeight()
+     *   - "<addr>_utxos"   -> address UTXO list -> getAddressUtxoData() (address is key minus the "_utxos" suffix)
+     *   - "index_"/"data_" -> unsupported, throws std::exception
+     *   - anything else     -> assumed to be an address -> getAddressData()
+     *
+     * @param key The legacy lookup key (see rules above).
+     * @return RPC::Response holding the requested data, shaped per the fetcher.
+     * @throws exception for the unsupported "index_"/"data_" prefixes.
+     */
     RPC::Response getKey(const string& key) {
         if (key.empty()) return {}; //just return empty for empty key
 

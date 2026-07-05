@@ -1,6 +1,15 @@
 //
 // Created by mctrivia on 08/04/24.
 //
+// RPC method handler: "asyncstart".
+//
+// Part of the node's JSON-RPC surface. Queues an RPC call to run in the
+// background (for long-running requests) instead of blocking the caller. A
+// single detached worker thread (started lazily on first use) dequeues jobs,
+// executes the named RPC method against the node's own RPC server, and writes
+// the JSON result to a cache/ file keyed by a SHA256 of the call. Callers poll
+// for the result with asyncget and discard it with asyncclear.
+//
 
 #include "AppMain.h"
 #include "Log.h"

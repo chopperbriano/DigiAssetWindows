@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 27/03/24.
 //
+// getpsp.cpp - RPC method implementation for the node
+// (DigiAssetWindows.exe). Registered in the RPC::Methods dispatch table and
+// exposed over the JSON-RPC server. Returns the JSON description of a single
+// Permanent Storage Pool (PSP) - the pools this node knows about / may
+// participate in - selected by its index in the PermanentStoragePoolList.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

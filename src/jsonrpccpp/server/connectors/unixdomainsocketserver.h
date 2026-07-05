@@ -7,6 +7,15 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Declares the UnixDomainSocketServer JSON-RPC connector (bundled
+ * libjson-rpc-cpp dependency). It derives from AbstractThreadedServer and
+ * serves RPC requests over a POSIX Unix-domain socket. This connector is
+ * POSIX-only (it pulls in <sys/un.h>, <pthread.h>, etc.) and is not compiled
+ * into the Windows node/pool build, which uses WindowsTcpSocketServer instead.
+ */
+
 #ifndef JSONRPC_CPP_UNIXDOMAINSOCKETSERVERCONNECTOR_H_
 #define JSONRPC_CPP_UNIXDOMAINSOCKETSERVERCONNECTOR_H_
 
@@ -38,14 +47,17 @@ namespace jsonrpc {
     UnixDomainSocketServer(const std::string &socket_path, size_t threads = 1);
     virtual ~UnixDomainSocketServer();
 
+    /** Creates, binds and listens on the Unix-domain socket; see .cpp. */
     virtual bool InitializeListener();
+    /** Accepts a pending client (non-blocking); returns its fd or <0. */
     virtual int CheckForConnection();
+    /** Reads one request, dispatches it, writes the reply, closes the fd. */
     virtual void HandleConnection(int connection);
 
   protected:
-    std::string socket_path;
-    int socket_fd;
-    struct sockaddr_un address;
+    std::string socket_path;     /*!< Filesystem path of the listening socket */
+    int socket_fd;               /*!< Listening socket fd (-1 when not open) */
+    struct sockaddr_un address;  /*!< Bind/accept address for the socket */
   };
 
 } /* namespace jsonrpc */

@@ -2,6 +2,15 @@
 // Created by mctrivia on 20/03/24.
 //
 
+// Database_LockedStatement.h
+// RAII wrapper around a single reusable prepared sqlite3 statement (a Statement).
+// The Database keeps one long-lived Statement per query; because sqlite3_stmt is
+// not safe to use from multiple threads at once, callers construct a
+// LockedStatement to gain exclusive access: its constructor locks the owning
+// Statement's mutex and resets the statement, and its destructor releases the
+// lock and records how long it was held (for the Database's per-statement
+// profiling). Provides thin bind/getColumn/executeStep pass-throughs to sqlite3.
+
 #ifndef DIGIASSET_CORE_DATABASE_LOCKEDSTATEMENT_H
 #define DIGIASSET_CORE_DATABASE_LOCKEDSTATEMENT_H
 
@@ -13,6 +22,10 @@
 
 class Statement;
 
+// Scoped exclusive-access handle to a Statement's underlying sqlite3_stmt.
+// Construct one on the stack around a Statement to bind parameters, step, and
+// read columns; the lock is held for the object's lifetime. Bind indexes are
+// 1-based, column indexes are 0-based (per sqlite3 convention).
 class LockedStatement {
 public:
     LockedStatement(Statement& statement);

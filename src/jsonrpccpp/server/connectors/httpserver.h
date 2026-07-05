@@ -5,6 +5,11 @@
  * @date    31.12.2012
  * @author  Peter Spiess-Knafl <dev@spiessknafl.at>
  * @license See attached LICENSE.txt
+ *
+ * Declares HttpServer, the libmicrohttpd-based JSON-RPC HTTP server connector.
+ * This is the transport the DigiAsset node and pool server use to publish their
+ * JSON-RPC API over HTTP(S). Includes the Windows/winsock vs POSIX socket header
+ * shims needed to build the connector on both platforms.
  ************************************************************************/
 
 #ifndef JSONRPC_CPP_HTTPSERVERCONNECTOR_H_
@@ -53,18 +58,24 @@ namespace jsonrpc {
 
     ~HttpServer();
 
-    // Bind to localhost only, deactivates TLS settings
+    // Bind to localhost only, deactivates TLS settings. Returns *this for chaining.
     HttpServer &BindLocalhost();
 
+    // Start / stop the embedded microhttpd daemon.
     virtual bool StartListening();
     virtual bool StopListening();
 
+    // Queue a JSON body response / a CORS pre-flight OPTIONS response for the
+    // connection carried in addInfo (an internal mhd_coninfo*).
     bool virtual SendResponse(const std::string &response, void *addInfo = NULL);
     bool virtual SendOptionsResponse(void *addInfo);
 
+    // Register a handler for a specific URL path (see GetHandler for routing).
     void SetUrlHandler(const std::string &url, IClientConnectionHandler *handler);
 
   private:
+    // Return type of the microhttpd access-handler callback; it changed from
+    // int to MHD_Result in libmicrohttpd 0.9.71 (0x00097002).
 #if MHD_VERSION >= 0x00097002
     typedef MHD_Result MicroHttpdResult;
 #else
@@ -84,9 +95,12 @@ namespace jsonrpc {
     std::map<std::string, IClientConnectionHandler *> urlhandler;
     struct sockaddr_in loopback_addr;
 
+    // microhttpd access-handler entry point (static; `cls` is this HttpServer*).
     static MicroHttpdResult callback(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version,
                                      const char *upload_data, size_t *upload_data_size, void **con_cls);
 
+    // Resolve the handler for a request: global handler if set, else the per-URL
+    // handler, else NULL.
     IClientConnectionHandler *GetHandler(const std::string &url);
   };
 

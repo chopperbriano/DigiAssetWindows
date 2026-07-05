@@ -2,6 +2,12 @@
 // Created by mctrivia on 14/06/23.
 //
 
+// DigiAssetRules.cpp - Implements DigiAssetRules (see DigiAssetRules.h). Contains the bit-stream
+// decoder that unpacks each rule type from an issuance transaction's OP_RETURN, the getters the
+// node uses to enforce the rules on a transfer, programmatic setters, JSON output for the API, the
+// serialize/deserialize routines that persist rules to the database blob, and getVoteOptions()
+// which lazily fetches and validates vote labels from IPFS.
+
 #include "DigiAssetRules.h"
 #include "AppMain.h"
 #include "DigiAsset.h"
@@ -451,6 +457,11 @@ void deserialize(const vector<uint8_t>& serializedData, size_t& i, DigiAssetRule
     }
 }
 
+/**
+ * Returns whether the asset has expired as of the given block height / time. Never-expiring assets
+ * return false; an _expiry at or above MIN_EPOCH_VALUE is treated as a millisecond epoch timestamp
+ * (compared against time, which is in seconds), otherwise it is a block height (compared to height).
+ */
 bool DigiAssetRules::getIfExpired(unsigned int height, uint64_t time) const {
     if (_expiry == EXPIRE_NEVER) return false;
     if (_expiry >= MIN_EPOCH_VALUE) {
@@ -486,6 +497,11 @@ bool DigiAssetRules::getIfGeoFenced() const {
     return (_countryListIsBan || (!_countryList.empty()));
 }
 
+/**
+ * Returns whether an address in the given country may receive the asset under the geofence rule.
+ * True if there is no geofence. Otherwise treats _countryList as an allow-list, or as a deny-list
+ * when _countryListIsBan is set: allowed iff (whitelist && in list) or (blacklist && not in list).
+ */
 bool DigiAssetRules::getIfCountryAllowedToReceive(const string& country) const {
     //easy case kyc not required
     if (!getIfGeoFenced()) return true;

@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * Role in DigiAsset for Windows:
+ * Declares WindowsTcpSocketServer, the Winsock2 TCP JSON-RPC connector used by
+ * the Windows node and pool-server builds to expose their RPC interface. It is
+ * the real implementation that the cross-platform TcpSocketServer facade
+ * delegates to on Windows. It runs an accept loop on its own thread and handles
+ * each client request on a separate worker thread. Part of the bundled
+ * libjson-rpc-cpp dependency; this header only declares the interface and its
+ * per-connection helper members.
+ */
+
 #ifndef JSONRPC_CPP_WINDOWSTCPSOCKETSERVERCONNECTOR_H_
 #define JSONRPC_CPP_WINDOWSTCPSOCKETSERVERCONNECTOR_H_
 

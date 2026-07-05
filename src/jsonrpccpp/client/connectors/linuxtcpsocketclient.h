@@ -7,6 +7,16 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// ---------------------------------------------------------------------------
+// Role in DigiAsset for Windows:
+//   Declares LinuxTcpSocketClient, the POSIX TCP-socket implementation of the
+//   IClientConnector transport used by libjson-rpc-cpp's JSON-RPC client. It
+//   carries delimiter-framed JSON-RPC request/response messages over a TCP
+//   connection. This is a Linux/UNIX-only connector (built on the POSIX
+//   sockets API) and is not compiled into the Windows node or pool-server
+//   builds; it is kept for source completeness of the vendored library.
+// ---------------------------------------------------------------------------
+
 #ifndef JSONRPC_CPP_LINUXTCPSOCKETCLIENT_H_
 #define JSONRPC_CPP_LINUXTCPSOCKETCLIENT_H_
 

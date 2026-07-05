@@ -1,6 +1,15 @@
 //
 // Console Dashboard - in-place TUI for DigiAsset Core
 //
+// Implementation of the node's live terminal dashboard. render() gathers a
+// snapshot of node health each ~500ms and repaints the whole screen using VT100
+// escape sequences (defined below), while a set of detached worker methods
+// (probeRpcServer, pollBitswapStats, checkPermanentCoverage, checkPspRegistration,
+// checkIpfsAnnounce, checkPorts, loadPayoutInfo) refresh the underlying data on
+// their own cadences and publish it into mutex-guarded fields. Keyboard commands
+// are handled by processInput(). Windows-only console/socket code is guarded by
+// _WIN32.
+//
 
 #include "ConsoleDashboard.h"
 #include "AppMain.h"
@@ -60,6 +69,12 @@ ConsoleDashboard::~ConsoleDashboard() {
     stop();
 }
 
+/**
+ * Turns on ENABLE_VIRTUAL_TERMINAL_PROCESSING for the Windows console so the
+ * VT100 escape sequences used by render() are interpreted rather than printed
+ * literally. Must be called once at the very start of main(), before any output.
+ * Returns true on success (always true on non-Windows, where VT100 is native).
+ */
 bool ConsoleDashboard::enableVT100() {
 #ifdef _WIN32
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -73,6 +88,11 @@ bool ConsoleDashboard::enableVT100() {
 #endif
 }
 
+/**
+ * Starts the dashboard: clears the screen, paints one frame immediately on the
+ * calling thread, then launches the background refreshLoop() thread. No-op if
+ * already running.
+ */
 void ConsoleDashboard::start() {
     if (_running) return;
     _running = true;
@@ -85,6 +105,10 @@ void ConsoleDashboard::start() {
     _thread = std::thread(&ConsoleDashboard::refreshLoop, this);
 }
 
+/**
+ * Signals the refresh thread to exit, joins it, and restores cursor visibility.
+ * Safe to call more than once (destructor also calls it).
+ */
 void ConsoleDashboard::stop() {
     _running = false;
     if (_thread.joinable()) {
@@ -94,6 +118,10 @@ void ConsoleDashboard::stop() {
     std::cout << SHOW_CURSOR << std::flush;
 }
 
+/**
+ * Appends a log line to the scrolling message pane, evicting the oldest once the
+ * MAX_MESSAGES cap is reached. Thread-safe; called by Log from any thread.
+ */
 void ConsoleDashboard::addMessage(const std::string& message) {
     std::lock_guard<std::mutex> lock(_msgMutex);
     _messages.push_back(message);
@@ -102,6 +130,10 @@ void ConsoleDashboard::addMessage(const std::string& message) {
     }
 }
 
+/**
+ * Background thread body: poll the keyboard and repaint the screen every 500ms
+ * until _running is cleared.
+ */
 void ConsoleDashboard::refreshLoop() {
     while (_running) {
         processInput();
@@ -110,6 +142,14 @@ void ConsoleDashboard::refreshLoop() {
     }
 }
 
+/**
+ * Non-blocking keyboard handler (Windows). Drains all pending keystrokes and
+ * dispatches single-key commands: Q quit, L toggle log level, P port check,
+ * A list recent assets, F fix IPFS announce, V emit swarm-connect verify
+ * commands, N list pool nodes, H/? help menu, and 1-6 for topic detail. The
+ * network/DB-heavy actions are spawned on detached threads so input stays
+ * responsive.
+ */
 void ConsoleDashboard::processInput() {
 #ifdef _WIN32
     while (_kbhit()) {
@@ -300,6 +340,11 @@ void ConsoleDashboard::processInput() {
 #endif
 }
 
+/**
+ * Refreshes _width/_height from the current console window size (Windows), or a
+ * fixed 80x25 elsewhere, clamped to a minimum of 40x15 so the layout never
+ * underflows.
+ */
 void ConsoleDashboard::updateConsoleSize() {
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -316,6 +361,16 @@ void ConsoleDashboard::updateConsoleSize() {
     if (_height < 15) _height = 15;
 }
 
+/**
+ * Composes and prints one full dashboard frame. It (1) kicks off any due
+ * background probes (PSP status, bitswap, coverage, IPFS announce, RPC) guarding
+ * each spawn behind its mutex and a "last checked" timer, (2) snapshots the
+ * current sync/asset/service state and computes blocks/sec, ETA and progress,
+ * then (3) builds the entire screen into one string (header, aligned status
+ * grid, PSP/payment/serving/coverage rows, sync detail, progress bar, log pane,
+ * and help bar) and writes it in a single flush to minimize flicker. Runs on the
+ * refresh thread, but also once on the main thread from start().
+ */
 void ConsoleDashboard::render() {
     updateConsoleSize();
 
@@ -978,6 +1033,11 @@ void ConsoleDashboard::render() {
 
 // ---- RPC server liveness probe ---------------------------------------------
 
+/**
+ * Background probe of the RPC server's liveness. Treats a non-null AppMain
+ * RPC::Server pointer as "listening", reads the configured rpcassetport (default
+ * 14024) for display, and publishes the result under _rpcProbeMutex for render().
+ */
 void ConsoleDashboard::probeRpcServer() {
     // Trust the pointer in AppMain. main.cpp pins the RPC::Server via a
     // shared_ptr for the whole program lifetime, and the accept loop catches
@@ -1195,6 +1255,11 @@ void ConsoleDashboard::checkPermanentCoverage() {
     NodeStats::instance().setCoverage(tracked, have);
 }
 
+/**
+ * Returns the configured pool base URL (config key psp1server), falling back to
+ * https://pool.digistamp.co and stripping any trailing slashes. Shared by the
+ * PSP registration check and the pool-node listing.
+ */
 std::string ConsoleDashboard::getConfiguredPoolBase() {
     std::string base;
     try {
@@ -1208,6 +1273,13 @@ std::string ConsoleDashboard::getConfiguredPoolBase() {
     return base;
 }
 
+/**
+ * Background check of the configured pool's health. Fetches the pool's
+ * /nodes.json, counts how many nodes it reports online (by counting "id" keys),
+ * and publishes that count plus a "Pool reachable"/"Pool unreachable" status
+ * under _pspStatusMutex. The HTTP fetch is done outside the lock; a success is
+ * timestamped to cache for ~10 min while a failure is left uncached to retry.
+ */
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
 
@@ -1238,6 +1310,13 @@ void ConsoleDashboard::checkPspRegistration() {
     }
 }
 
+/**
+ * [N] command handler. Fetches the configured pool's /nodes.json, parses each
+ * node's id, and logs a capped list showing each node's IP and a shortened
+ * peerId. Scans the full list (not just the shown ones) to self-check whether
+ * this node's own IPFS peerId appears, reporting OK / not-listed / unknown-id.
+ * Output goes to the log pane. Runs on a detached thread.
+ */
 void ConsoleDashboard::listPoolNodes() {
     Log* log = Log::GetInstance();
 
@@ -1341,6 +1420,13 @@ void ConsoleDashboard::listPoolNodes() {
 
 // ---- Payout balance ---------------------------------------------------------
 
+/**
+ * Loads the payout address (config key psp1payout, falling back to psp0payout)
+ * once, then refreshes the address balance at most every 4 hours by querying the
+ * cryptoid.info DGB balance API and formatting it to 4 decimals. On failure the
+ * balance shows "unavailable". Called from render() every frame but rate-limited
+ * internally.
+ */
 void ConsoleDashboard::loadPayoutInfo() {
     if (!_payoutLoaded) {
         try {
@@ -1388,6 +1474,8 @@ void ConsoleDashboard::loadPayoutInfo() {
 // ---- IPFS announce detection & repair --------------------------------------
 
 namespace {
+    // Percent-encodes a string for safe use in a URL query component (leaves the
+    // RFC 3986 unreserved set A-Z a-z 0-9 - _ . ~ untouched).
     std::string urlEncodeComponent(const std::string& s) {
         std::string out;
         out.reserve(s.size() * 3);
@@ -1417,6 +1505,15 @@ namespace {
     }
 }
 
+/**
+ * Background diagnosis of IPFS external reachability. Reads the WAN IP from the
+ * web server; checks whether Kubo's /id already announces an address containing
+ * that IP; if not, probes whether TCP 4001 is externally reachable. Publishes
+ * the findings and a user-facing hint under _ipfsAnnounceMutex — telling the user
+ * to press [F] when the port is open but not announced, that a relay path is
+ * fine when the port is closed, or to restart IPFS after a fix was applied. Bails
+ * quietly if the WAN IP is unknown or the IPFS API is unreachable.
+ */
 void ConsoleDashboard::checkIpfsAnnounce() {
     // Snapshot the WAN IP from the web server (already resolved via ipify at startup)
     AppMain* app = AppMain::GetInstance();
@@ -1483,6 +1580,16 @@ void ConsoleDashboard::checkIpfsAnnounce() {
     }
 }
 
+/**
+ * [F] command handler. Sets Kubo's Addresses.Announce to advertise our WAN IP on
+ * TCP and QUIC 4001 via the IPFS config HTTP API, so a port-forwarded but not-yet
+ * -announced node becomes directly dialable. Guards against misuse: aborts if the
+ * WAN IP is unknown, diagnosis hasn't run, IPFS already announces directly, or
+ * port 4001 isn't reachable. On success it flags _ipfsAnnounceFixApplied so
+ * render() polls aggressively until Kubo (after a manual IPFS Desktop restart)
+ * picks up the change. Returns true if the config was set. Runs on a detached
+ * thread.
+ */
 bool ConsoleDashboard::applyIpfsAnnounceFix() {
     Log* log = Log::GetInstance();
     AppMain* app = AppMain::GetInstance();
@@ -1558,6 +1665,14 @@ bool ConsoleDashboard::applyIpfsAnnounceFix() {
 
 // ---- [V] Verify: dump swarm-connect commands for announced multiaddrs ------
 
+/**
+ * [V] command handler. Fetches Kubo's /id, extracts our peerId and announced
+ * multiaddrs, filters out LAN/loopback/link-local addresses, and logs a
+ * ready-to-paste `ipfs swarm connect <addr>/p2p/<peerId>` line for each public
+ * address plus a follow-up verify command. Lets the user confirm from a remote
+ * box that our announced addresses are actually dialable. Runs on a detached
+ * thread; logs a warning if the API is unreachable or no public addresses exist.
+ */
 void ConsoleDashboard::printSwarmConnectCommands() {
     Log* log = Log::GetInstance();
 
@@ -1663,6 +1778,12 @@ void ConsoleDashboard::printSwarmConnectCommands() {
 
 // ---- Port checking ----------------------------------------------------------
 
+/**
+ * [P] command handler. For each relevant inbound port (IPFS swarm 4001, the web
+ * UI port, DigiByte P2P 12024) asks ifconfig.co/port/<n> to attempt an external
+ * TCP connect back to our WAN IP, and logs each as Open/Closed (WARNING when not
+ * reachable). Aborts if the external IP is unknown. Runs on a detached thread.
+ */
 void ConsoleDashboard::checkPorts() {
     Log* log = Log::GetInstance();
     AppMain* app = AppMain::GetInstance();
@@ -1730,6 +1851,10 @@ std::string ConsoleDashboard::padRight(const std::string& text, int width) {
     return text + std::string(width - (int)text.size(), ' ');
 }
 
+/**
+ * Formats a duration in seconds into a compact human string, auto-scaling to
+ * sec / min / hours / days. Negative input returns "--". Used for ETA and uptime.
+ */
 std::string ConsoleDashboard::formatDuration(double seconds) {
     if (seconds < 0) return "--";
     if (seconds < 60) {
@@ -1750,6 +1875,7 @@ std::string ConsoleDashboard::formatDuration(double seconds) {
     }
 }
 
+/** Formats an integer with thousands separators (e.g. 1234567 -> "1,234,567"). */
 std::string ConsoleDashboard::formatNumber(uint64_t n) {
     std::string s = std::to_string(n);
     // Insert commas
@@ -1761,6 +1887,10 @@ std::string ConsoleDashboard::formatNumber(uint64_t n) {
     return s;
 }
 
+/**
+ * Renders a colored `[####    ]` progress bar of the given width, filled in
+ * proportion to fraction (clamped to 0..1). Includes the VT100 green/reset codes.
+ */
 std::string ConsoleDashboard::progressBar(double fraction, int width) {
     if (fraction < 0.0) fraction = 0.0;
     if (fraction > 1.0) fraction = 1.0;

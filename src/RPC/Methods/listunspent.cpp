@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "listunspent".
+// Node-side JSON-RPC handler that returns UTXOs (both plain DigiByte and
+// DigiAsset-carrying) for the wallet's addresses or a caller-supplied address
+// list. It reads UTXOs from the node's Database (getAddressUTXOs), applies the
+// confirmation-range and query-option filters (amount bounds, sum cap, count
+// cap, asset filtering, detail level), and returns them as JSON. Extends the
+// standard listunspent with per-asset filtering. Dispatched by the node's RPC
+// server.
 
 #include "AppMain.h"
 #include "RPC/Response.h"

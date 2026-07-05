@@ -231,6 +231,14 @@ namespace {
     }
 }
 
+// Entry point for DigiAssetPoolServer.exe. Wires up and runs the whole pool
+// process: install signal handlers, read pool.cfg, open PoolDatabase,
+// construct+configure PoolServer (bind socket, payout flag, donation/stats
+// wallet info), build the PoolVerifier and take-over PoolDashboard, run the
+// one-time first-run snapshot, then start the HTTP server and verifier and
+// block until a shutdown signal or the dashboard's [Q] key. Tears everything
+// down in reverse order on exit. Returns 0 on clean shutdown, 1 if the
+// database or listen socket could not be opened.
 int main(int /*argc*/, char** /*argv*/) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);

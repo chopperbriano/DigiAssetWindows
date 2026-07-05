@@ -1,6 +1,25 @@
 //
 // Created by mctrivia on 04/11/23.
 //
+//
+// mctrivia.h - the networked "MCTrivia's PSP" Permanent Storage Pool.
+//
+// Talks to a pool server over HTTP (base URL from config key `psp1server`,
+// defaulting to the DigiStamp pool). Two background threads do the real work:
+//   - keepAliveTask: periodically pings the server so this node stays visible
+//     on the public node map.
+//   - permanentFetcherTask: walks /permanent/<page>.json, pins every listed CID
+//     to the local IPFS node, and opportunistically probes /list/<floor>.json
+//     to report pool-registration/payout health to the dashboard.
+//
+// Historical note carried through this file: the original design assumed an
+// on-chain fee-matching payment protocol that was never deployed server-side.
+// The on-chain serializer path is therefore dead (serializeMetaProcessor always
+// returns ""), and the /list registration/payout endpoints have been returning
+// HTTP 500 since ~July 2024. The permanent-list pinning is the part that still
+// does useful work. Used by the node (DigiAssetWindows.exe); the pool side is
+// served by DigiAssetPoolServer.exe.
+//
 
 #ifndef DIGIASSET_CORE_MCTRIVIA_H
 #define DIGIASSET_CORE_MCTRIVIA_H
@@ -15,6 +34,13 @@
 #include <thread>
 
 
+/**
+ * Networked PSP implementation. Overrides the PSP interface to recognise/enable
+ * pool membership and forward bad-content reports over HTTP, while two owned
+ * threads keep the node registered and pin the pool's permanent CID list.
+ * Health/payout state observed from server probes is guarded by _healthMutex
+ * and exposed through the get*Health()/getPayouts* accessors for the dashboard.
+ */
 class mctrivia : public PermanentStoragePool {
 public:
     // Reflects what we actually know about mctrivia's server today. The

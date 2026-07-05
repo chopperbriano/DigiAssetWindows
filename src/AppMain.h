@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 25/01/24.
 //
+// AppMain - process-wide service locator for the node exe
+// (DigiAssetWindows.exe). A single instance holds pointers to the app's
+// long-lived subsystems (Database, IPFS, DigiByteCore, the permanent-storage
+// pool list, ChainAnalyzer, and the RPC cache/server + web server) so any
+// code can reach them without threading them through call chains. It only
+// stores/returns these pointers; it does not own or construct the objects
+// (main() creates them and calls the setters, then reset() on shutdown).
+//
 
 #ifndef DIGIASSET_CORE_APPMAIN_H
 #define DIGIASSET_CORE_APPMAIN_H
@@ -14,6 +22,13 @@
 #include "RPC/Server.h"
 #include "WebServer.h"
 #include <mutex>
+/**
+ * Thread-safe singleton service locator (see file header). Copy/assignment
+ * are deleted; obtain the sole instance via GetInstance(). The set*() methods
+ * register each subsystem pointer; the plain get*() methods log CRITICAL and
+ * throw runtime_error if the subsystem was never set, while the get*IfSet()
+ * variants return nullptr instead of throwing.
+ */
 class AppMain {
     /**
  * Singleton Start

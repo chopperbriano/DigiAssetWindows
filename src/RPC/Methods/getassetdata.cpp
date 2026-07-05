@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "getassetdata": implements the JSON-RPC handler that returns the full
+// record of a single DigiAsset (metadata, counts, PSP membership, optional IPFS
+// content) as JSON. Registered with the node's RPC server and invoked by wallets,
+// explorers, and pool tooling to inspect an asset by index or by assetId. Lives in
+// the node deployable (DigiAssetWindows.exe), which serves the RPC interface.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

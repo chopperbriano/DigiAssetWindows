@@ -1,6 +1,13 @@
 /*
 ** Stub header for curl
 ** This minimal header allows compilation to proceed
+**
+** Declaration-only subset of libcurl's <curl/curl.h> "easy" API. It exists so
+** code that includes <curl/curl.h> (the node/pool HTTP client wrappers) can be
+** compiled without the full libcurl development headers on the build machine;
+** the real libcurl library still provides these symbols at link/run time.
+** Contains no implementation — only the types, enums, and function prototypes
+** actually referenced by this project.
 */
 
 #ifndef __CURL_CURL_H
@@ -10,14 +17,17 @@
 extern "C" {
 #endif
 
+/* Opaque handle type for a libcurl "easy" session. */
 typedef void CURL;
 
+/* Singly-linked list of strings, used to pass e.g. custom HTTP headers. */
 struct curl_slist {
   char *data;
   struct curl_slist *next;
 };
 typedef struct curl_slist CURLIST;
 
+/* Result/error codes returned by the easy-interface functions (CURLE_OK == success). */
 typedef enum {
   CURLE_OK = 0,
   CURLE_UNSUPPORTED_PROTOCOL,
@@ -113,6 +123,7 @@ typedef enum {
   CURL_LAST
 } CURLcode;
 
+/* Option identifiers passed to curl_easy_setopt to configure a transfer. */
 typedef enum {
   CURLOPT_VERBOSE = 0,
   CURLOPT_URL,
@@ -175,6 +186,7 @@ typedef enum {
   CURLOPT_SSL_VERIFYHOST = 81
 } CURLoption;
 
+/* Info identifiers passed to curl_easy_getinfo to read transfer results. */
 typedef enum {
   CURLINFO_RESPONSE_CODE = 2097154,
   CURLINFO_TOTAL_TIME = 3145731,
@@ -182,19 +194,21 @@ typedef enum {
   CURLINFO_CONNECT_TIME = 3145733
 } CURLINFO;
 
-CURL *curl_easy_init(void);
-void curl_easy_reset(CURL *handle);
-CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...);
-CURLcode curl_easy_perform(CURL *easy_handle);
-void curl_easy_cleanup(CURL *handle);
-CURLcode curl_easy_getinfo(CURL *handle, CURLINFO info, ...);
-const char *curl_easy_strerror(CURLcode code);
-struct curl_slist *curl_slist_append(struct curl_slist *list, const char *string);
-void curl_slist_free_all(struct curl_slist *list);
-CURLcode curl_global_init(long flags);
-void curl_global_cleanup(void);
+/* libcurl easy-interface prototypes (implemented by the real libcurl at link time). */
+CURL *curl_easy_init(void);                                                      /* create a handle */
+void curl_easy_reset(CURL *handle);                                              /* reset options to defaults */
+CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...);                 /* set one transfer option */
+CURLcode curl_easy_perform(CURL *easy_handle);                                   /* run the transfer (blocking) */
+void curl_easy_cleanup(CURL *handle);                                            /* free a handle */
+CURLcode curl_easy_getinfo(CURL *handle, CURLINFO info, ...);                    /* read info after a transfer */
+const char *curl_easy_strerror(CURLcode code);                                   /* human-readable error string */
+struct curl_slist *curl_slist_append(struct curl_slist *list, const char *string); /* append to a string list */
+void curl_slist_free_all(struct curl_slist *list);                               /* free a string list */
+CURLcode curl_global_init(long flags);                                           /* process-wide init */
+void curl_global_cleanup(void);                                                  /* process-wide teardown */
 
 #define CURL_MAX_WRITE_SIZE 16384
+/* Signature of the callback libcurl invokes with received response body chunks. */
 typedef size_t (*curl_write_callback)(char *buffer, size_t size, size_t nmemb, void *userp);
 
 #define CURL_GLOBAL_DEFAULT 1

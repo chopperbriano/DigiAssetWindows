@@ -21,6 +21,13 @@
 * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 * SOFTWARE.
  */
+//
+// Self-contained SHA-256 hash implementation (third-party, MIT). Provides the
+// SHA-256 primitive used across the node and pool for content addressing and
+// integrity checks (e.g. hashing IPFS content and verifying downloads). No
+// external crypto library dependency.
+//
+
 #ifndef SHA256_H
 #define SHA256_H
 
@@ -28,14 +35,21 @@
 #include <array>
 #include <cstdint>
 
+// Incremental SHA-256 hasher: construct, feed data via update() one or more
+// times, then call digest() once to finalise and read the 32-byte hash.
+// A single instance is not reusable after digest() (padding mutates state).
 class SHA256 {
 
 public:
     SHA256();
+    // Feed a raw byte buffer into the running hash.
     void update(const uint8_t * data, size_t length);
+    // Feed a string's bytes into the running hash.
     void update(const std::string &data);
+    // Finalise: apply padding, then return the 32-byte digest.
     std::array<uint8_t, 32> digest();
 
+    // Format a digest as a 64-character lowercase hex string.
     static std::string toString(const std::array<uint8_t, 32> & digest);
 
 private:
@@ -63,13 +77,17 @@ private:
             0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
     };
 
-    static uint32_t rotr(uint32_t x, uint32_t n);
-    static uint32_t choose(uint32_t e, uint32_t f, uint32_t g);
-    static uint32_t majority(uint32_t a, uint32_t b, uint32_t c);
-    static uint32_t sig0(uint32_t x);
-    static uint32_t sig1(uint32_t x);
+    // SHA-256 round primitives (as defined by the FIPS 180-4 spec):
+    static uint32_t rotr(uint32_t x, uint32_t n);              // rotate right
+    static uint32_t choose(uint32_t e, uint32_t f, uint32_t g);   // Ch function
+    static uint32_t majority(uint32_t a, uint32_t b, uint32_t c); // Maj function
+    static uint32_t sig0(uint32_t x);                            // small sigma 0
+    static uint32_t sig1(uint32_t x);                            // small sigma 1
+    // Compress the current 64-byte block in m_data into m_state (the 64 rounds).
     void transform();
+    // Append the '1' bit, zero padding, and 64-bit length; run final transform(s).
     void pad();
+    // Serialise m_state into the 32-byte hash in big-endian byte order.
     void revert(std::array<uint8_t, 32> & hash);
 };
 

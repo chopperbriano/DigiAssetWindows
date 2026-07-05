@@ -16,6 +16,9 @@
 #include <mutex>
 #include <string>
 
+// Process-wide singleton cache of expensive-to-compute node stats (IPFS bitswap
+// activity and permanent-storage coverage). The dashboard writes via the setters
+// as its background probes complete; readers take a consistent copy via snapshot().
 class NodeStats {
     std::mutex _m;
     bool _bitswapProbed = false;
@@ -33,11 +36,16 @@ class NodeStats {
 public:
     NodeStats(const NodeStats&) = delete;
     NodeStats& operator=(const NodeStats&) = delete;
+    // Accessor for the single shared instance.
     static NodeStats& instance();
 
+    // Record latest IPFS bitswap probe results; marks bitswap as probed. When
+    // available is false the throughput counters are left unchanged.
     void setBitswap(bool available, uint64_t blocksSent, uint64_t dataSent, double blocksPerMin);
+    // Record how many tracked assets the node has content for; marks coverage as checked.
     void setCoverage(unsigned int tracked, unsigned int have);
 
+    // Plain-data copy of all cached fields, returned atomically by snapshot().
     struct Snapshot {
         bool bitswapProbed;
         bool bitswapAvailable;
@@ -48,6 +56,7 @@ public:
         unsigned int coverageTracked;
         unsigned int coverageHave;
     };
+    // Return a lock-guarded consistent copy of all current stats.
     Snapshot snapshot();
 };
 

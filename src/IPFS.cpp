@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 15/06/23.
 //
+// Implementation of the IPFS controller (see IPFS.h). Contains the background
+// worker loop that executes queued download/pin/unpin jobs against the local
+// Kubo node's HTTP API, the async/sync request entry points, the pure CID and
+// URL helpers, the hard-coded "known lost" CID skip list, and the peer-address
+// discovery logic used by getPeerId() to advertise this node to the pool.
+//
 
 #include "IPFS.h"
 #include "AppMain.h"
@@ -56,6 +62,11 @@ const std::vector<std::string> IPFS::_knownLostCID = {
 ╚██████╗╚██████╔╝██║ ╚████║███████║   ██║   ██║  ██║╚██████╔╝╚██████╗   ██║   ██║╚██████╔╝██║ ╚████║
  ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
 */
+/**
+ * Constructor. Reads IPFS settings (node URL prefix, pin/download/retry
+ * timeouts, parallel-job count) from configFile, applying defaults for anything
+ * absent, and starts the worker thread unless runStart is false.
+ */
 IPFS::IPFS(const string& configFile, bool runStart) {
     Config config(configFile);
     //todo check _nodePrefix works before setting
@@ -75,6 +86,16 @@ IPFS::IPFS(const string& configFile, bool runStart) {
    ██║   ██║  ██║██║  ██║███████╗██║  ██║██████╔╝
    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝
 */
+/**
+ * Worker-thread body, invoked repeatedly by the Threaded base class. Pulls the
+ * next queued IPFS job from the Database; if none, sleeps 100ms and returns.
+ * Skips (and removes) jobs for invalid or known-lost CIDs. Otherwise it either
+ * pins/unpins the CID (honoring the optional max-size limit in extra) or
+ * downloads it (cat) subject to the download timeout. On a non-final download
+ * timeout it re-queues the job for a later retry (leaving the callback
+ * unfired); otherwise it removes the job and invokes the job's callback with
+ * the content and a failed flag.
+ */
 void IPFS::mainFunction() {
     //get next job if there is one
     Database* db = AppMain::GetInstance()->getDatabase();
@@ -246,6 +267,18 @@ string IPFS::getIP() {
     throw exception();
 }
 
+/**
+ * From the node's advertised multiaddrs, pick the single best one a remote peer
+ * can use to reach this node, given our detected WAN ip. Tries, in order:
+ *   Priority 1 - a direct TCP address that already contains our WAN IP
+ *                (lowest port if several).
+ *   Priority 2 - a routable p2p-circuit relay address, preferring plain-TCP
+ *                IPv4, then plain-TCP IPv6, then DNS, then anything else;
+ *                loopback/link-local/RFC1918 relays are skipped.
+ *   Priority 3 - last resort: substitute our WAN IP into a local ip4/ip6 TCP
+ *                address (only works if the port is actually forwarded).
+ * Returns the chosen multiaddr, or "" if nothing qualifies.
+ */
 string IPFS::findPublicAddress(const vector<string>& addresses, const string& ip) {
     // Priority 1: a real TCP address that already contains our WAN IP.
     // This is the happy path: the node is directly reachable at ip:port.
@@ -363,6 +396,11 @@ string IPFS::findPublicAddress(const vector<string>& addresses, const string& ip
     return peerId;
 }
 
+/**
+ * Parses the JSON body of an /id response and returns its list of multiaddrs
+ * from the "Addresses" field (accepting lowercase "addresses" as a fallback).
+ * Returns an empty vector if the JSON is malformed or the field is absent.
+ */
 vector<string> IPFS::extractAddresses(const string& idString) {
     Json::Value root;
     Json::Reader reader;
@@ -378,6 +416,11 @@ vector<string> IPFS::extractAddresses(const string& idString) {
     return addresses;
 }
 
+/**
+ * Parses the /id response and returns the bare "ID" field (this node's own
+ * peerId, e.g. "12D3KooW..." or "Qm..."). Accepts lowercase "id" as a
+ * fallback. Returns "" if the field is missing or the JSON is malformed.
+ */
 string IPFS::extractIdField(const string& idString) {
     Json::Value root;
     Json::Reader reader;
@@ -584,6 +627,15 @@ bool IPFS::isIPFSurl(const string& url) {
     //check if remainder is a valid cid
     return isValidCID(url.substr(prefixLength));
 }
+/**
+ * Determines the multiaddr the pool server should use to reach this node.
+ * Detects our WAN IP (getIP), queries the local node's /id for its advertised
+ * addresses, and filters those to only ones ending in "/p2p/<ourId>" (direct or
+ * via a /p2p-circuit relay) so a bootstrap peer's address is never mistaken for
+ * ours. Runs the surviving addresses through findPublicAddress. Falls back to
+ * the bare peerId if nothing in /id clearly identifies us, or to the unfiltered
+ * findPublicAddress result if the local ID could not be parsed.
+ */
 string IPFS::getPeerId() const {
     //get this machines ip address
     std::string ip = getIP();

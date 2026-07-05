@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 17/06/23.
 //
+// Implementation of DigiByteTransaction (see DigiByteTransaction.h). Covers
+// loading and classifying a raw transaction in the constructor, the per-type
+// OP_RETURN decoders (exchange rate, KYC, encrypted key, DigiAsset, unknown),
+// the asset-transfer replay engine that routes input assets to outputs, and the
+// persistence (addToDatabase) and serialization (toJSON) paths used by the
+// node's chain analyzer and API.
+//
 
 #include "DigiByteTransaction.h"
 #include "AppMain.h"

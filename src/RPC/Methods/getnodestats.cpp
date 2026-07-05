@@ -42,6 +42,15 @@
 
 namespace RPC {
     namespace Methods {
+        /**
+        * Builds a JSON snapshot of this node's operational state (see file
+        * header for the full field list): build version, chain-analyzer sync
+        * height, local asset counts, and the bitswap / permanent-coverage
+        * figures cached in NodeStats by the dashboard's background pollers.
+        * Takes no params. Missing subsystems (analyzer/db not yet set, or
+        * NodeStats not yet polled) report zero/"not probed" rather than
+        * erroring. Response is marked non-cacheable so operators can poll it.
+        */
         extern const Response getnodestats(const Json::Value& /*params*/) {
             Json::Value result;
             result["buildVersion"] = getVersionString();

@@ -21,6 +21,12 @@
 * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 * SOFTWARE.
  */
+//
+// SHA-256 algorithm implementation (third-party, MIT). Implements the FIPS 180-4
+// message schedule, 64-round compression, padding, and finalisation behind the
+// SHA256 class. Used throughout the node/pool for content hashing and download
+// integrity verification.
+//
  #include "SHA256.h"
 #include <cstring>
 #include <sstream>
@@ -28,6 +34,8 @@
 
 constexpr std::array<uint32_t, 64> SHA256::K;
 
+// Initialise the eight working state words to the SHA-256 constants (fractional
+// parts of the square roots of the first eight primes) and reset the counters.
 SHA256::SHA256(): m_blocklen(0), m_bitlen(0) {
     m_state[0] = 0x6a09e667;
     m_state[1] = 0xbb67ae85;
@@ -39,6 +47,8 @@ SHA256::SHA256(): m_blocklen(0), m_bitlen(0) {
     m_state[7] = 0x5be0cd19;
 }
 
+// Buffer incoming bytes into the 64-byte block; each time the block fills, run
+// transform() and advance the total bit-length counter. May be called repeatedly.
 void SHA256::update(const uint8_t * data, size_t length) {
     for (size_t i = 0 ; i < length ; i++) {
         m_data[m_blocklen++] = data[i];
@@ -56,6 +66,8 @@ void SHA256::update(const std::string &data) {
     update(reinterpret_cast<const uint8_t*> (data.c_str()), data.size());
 }
 
+// Finalise the hash: apply SHA-256 padding then serialise the state to 32 bytes.
+// Call once after all update()s; the object should not be reused afterward.
 std::array<uint8_t,32> SHA256::digest() {
     std::array<uint8_t,32> hash;
 
@@ -85,6 +97,9 @@ uint32_t SHA256::sig1(uint32_t x) {
     return SHA256::rotr(x, 17) ^ SHA256::rotr(x, 19) ^ (x >> 10);
 }
 
+// Core compression: expand the current 64-byte block into the 64-word message
+// schedule, run the 64 SHA-256 rounds over a copy of the state, then fold the
+// result back into m_state. Operates on the block already buffered in m_data.
 void SHA256::transform() {
     uint32_t maj, xorA, ch, xorE, sum, newA, newE, m[64];
     uint32_t state[8];
@@ -128,6 +143,10 @@ void SHA256::transform() {
     }
 }
 
+// Apply SHA-256 padding to the final partial block: append the 0x80 marker byte,
+// zero-fill, and write the 64-bit total message length. If the length doesn't fit
+// in the current block a second transform() is run so the length lands in a fresh
+// block. Ends with a final transform() so m_state holds the complete digest.
 void SHA256::pad() {
 
     uint64_t i = m_blocklen;
@@ -156,6 +175,8 @@ void SHA256::pad() {
     transform();
 }
 
+// Write the eight 32-bit state words out to the 32-byte hash buffer in big-endian
+// order (SHA's canonical output byte ordering).
 void SHA256::revert(std::array<uint8_t, 32> & hash) {
     // SHA uses big endian byte ordering
     // Revert all bytes
@@ -166,6 +187,7 @@ void SHA256::revert(std::array<uint8_t, 32> & hash) {
     }
 }
 
+// Convert a 32-byte digest into a 64-character lowercase hexadecimal string.
 std::string SHA256::toString(const std::array<uint8_t, 32> & digest) {
     std::stringstream s;
     s << std::setfill('0') << std::hex;

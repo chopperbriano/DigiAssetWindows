@@ -17,6 +17,8 @@
 
 // ---- Helpers ----------------------------------------------------------------
 
+// Convert a UTF-8 std::string to a UTF-16 std::wstring for the wide WinHTTP API.
+// Trims the trailing NUL that MultiByteToWideChar appends for the -1 length.
 static std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
@@ -26,6 +28,8 @@ static std::wstring utf8ToWide(const std::string& s) {
     return result;
 }
 
+// Standard Base64 encode — used to build the "Authorization: Basic" header
+// value from the user:password embedded in the RPC URL.
 static std::string base64Encode(const std::string& in) {
     static const char* chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -44,6 +48,7 @@ static std::string base64Encode(const std::string& in) {
     return out;
 }
 
+// Decomposed request URL, filled by parseUrl and consumed by the WinHTTP calls.
 struct ParsedUrl {
     std::wstring host;
     int port = 80;
@@ -53,6 +58,9 @@ struct ParsedUrl {
     std::string password;
 };
 
+// Parse scheme://[user:pass@]host[:port][/path] into the ParsedUrl fields.
+// Defaults port to 443 for https and 80 for http, and path to "/".
+// Returns false if the URL has no "://" scheme separator.
 static bool parseUrl(const std::string& url, ParsedUrl& out) {
     // scheme://[user:pass@]host[:port][/path]
     size_t schemeEnd = url.find("://");
@@ -101,6 +109,9 @@ static bool parseUrl(const std::string& url, ParsedUrl& out) {
 
 // ---- Handle -----------------------------------------------------------------
 
+// Backing object for a CURL* easy handle. Holds the per-request options set via
+// curl_easy_setopt plus the persistent WinHTTP session/connection handles that
+// are kept alive across curl_easy_perform calls for keep-alive reuse.
 struct CurlHandle {
     std::string            url;
     std::string            postFields;
@@ -122,6 +133,8 @@ struct CurlHandle {
 
 // ---- Internal helpers -------------------------------------------------------
 
+// Close and clear the cached WinHTTP connection handle and its host/port/scheme
+// tracking, forcing the next request to reconnect. Leaves the session intact.
 static void closeConnectHandle(CurlHandle* h) {
     if (h->hConnect) {
         WinHttpCloseHandle(h->hConnect);
@@ -173,6 +186,7 @@ static CURLcode ensureConnect(CurlHandle* h, const ParsedUrl& parsed) {
 
 // ---- Public API -------------------------------------------------------------
 
+// Allocate a new easy handle; the CURL* is an opaque pointer to a CurlHandle.
 CURL* curl_easy_init(void) {
     return reinterpret_cast<CURL*>(new CurlHandle());
 }
@@ -192,6 +206,9 @@ void curl_easy_reset(CURL* handle) {
     // hSession, hConnect, connHost, connPort, connHttps are preserved
 }
 
+// Set one request option (URL, POST fields, headers, timeout, write callback,
+// etc.) via the variadic curl API. Unrecognized options are accepted and their
+// argument consumed as a no-op. Always returns CURLE_OK.
 CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
     if (!h) return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -235,6 +252,12 @@ CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
     return CURLE_OK;
 }
 
+// Execute the configured HTTP(S) request synchronously over WinHTTP.
+// Parses the URL, (re)opens the persistent session and connection, builds the
+// header block (extra headers, Basic auth, default Content-Type for POST),
+// sends the request with one automatic reconnect retry for stale keep-alive
+// connections, records the HTTP status code, and streams the response body to
+// the registered write callback. Returns a CURLcode mapping the WinHTTP result.
 CURLcode curl_easy_perform(CURL* easy_handle) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(easy_handle);
     if (!h || h->url.empty()) return CURLE_URL_MALFORMAT;
@@ -372,6 +395,7 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
     return CURLE_COULDNT_CONNECT;
 }
 
+// Close both WinHTTP handles and free the CurlHandle. Safe on a null handle.
 void curl_easy_cleanup(CURL* handle) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
     if (!h) return;
@@ -383,6 +407,8 @@ void curl_easy_cleanup(CURL* handle) {
     delete h;
 }
 
+// Retrieve post-request info; only CURLINFO_RESPONSE_CODE is supported and
+// writes the last HTTP status code into the caller's long*. Others are no-ops.
 CURLcode curl_easy_getinfo(CURL* handle, CURLINFO info, ...) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
     va_list args;
@@ -397,6 +423,7 @@ CURLcode curl_easy_getinfo(CURL* handle, CURLINFO info, ...) {
     return CURLE_OK;
 }
 
+// Map a CURLcode to a human-readable static string for logging.
 const char* curl_easy_strerror(CURLcode code) {
     switch (code) {
         case CURLE_OK:                  return "No error";
@@ -410,6 +437,8 @@ const char* curl_easy_strerror(CURLcode code) {
     }
 }
 
+// Append a copy of `string` as a new node to a curl header list (creating the
+// list if null) and return the list head, matching libcurl semantics.
 struct curl_slist* curl_slist_append(struct curl_slist* list, const char* string) {
     struct curl_slist* item = new curl_slist();
     item->data = _strdup(string);
@@ -421,6 +450,7 @@ struct curl_slist* curl_slist_append(struct curl_slist* list, const char* string
     return list;
 }
 
+// Free every node of a curl header list along with its duplicated strings.
 void curl_slist_free_all(struct curl_slist* list) {
     while (list) {
         curl_slist* next = list->next;

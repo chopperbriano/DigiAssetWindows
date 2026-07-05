@@ -1,6 +1,18 @@
 //
 // Created by mctrivia on 17/06/23.
 //
+// DigiByteTransaction: the node's decoded view of a single DigiByte
+// transaction. Constructed from a txid, it loads the raw transaction, resolves
+// each input UTXO's asset content from the Database, copies the outputs, and
+// classifies the transaction by inspecting its OP_RETURN: a plain/standard tx,
+// a DigiAsset issuance / transfer / burn, a KYC issuance / revoke, an exchange
+// rate publication, or an encrypted-key record. For asset transfers it replays
+// the on-chain transfer instructions to compute which assets land on which
+// outputs (including change and rule enforcement). addToDatabase() persists the
+// resulting state (UTXOs, KYC, exchange rates, votes, PSP pinning, domain
+// processing); toJSON() renders it for the node's API. This is the core unit
+// the chain analyzer processes block by block.
+//
 
 #ifndef DIGIASSET_CORE_DIGIBYTETRANSACTION_H
 #define DIGIASSET_CORE_DIGIBYTETRANSACTION_H
@@ -11,11 +23,19 @@
 #include "DigiAssetTypes.h"
 #include <jsonrpccpp/server.h>
 
+// Minimal reference to a transaction output (spent-input identifier).
 struct UTXO {
     std::string txid;
     unsigned int vout;
 };
 
+/**
+ * One decoded DigiByte transaction. Holds its inputs/outputs (with any assets),
+ * a type tag (_txType) selecting which of the type-specific members are
+ * populated, and the block context (height/hash/time). Instances built from an
+ * existing txid are read-only snapshots; the default constructor makes a new,
+ * writable transaction.
+ */
 class DigiByteTransaction {
     const static unsigned int STANDARD = 0;
     const static unsigned int DIGIASSET_ISSUANCE = 1;
@@ -52,31 +72,51 @@ class DigiByteTransaction {
 
 
     //tx process TestHelpers
+    // Each tries to interpret the tx (at the given OP_RETURN vout index) as its
+    // type, setting _txType and the relevant members and returning true on a
+    // match; false means "not this type, try the next".
     bool decodeAssetTX(const getrawtransaction_t& txData, int dataIndex);
     bool decodeExchangeRate(const getrawtransaction_t& txData, int dataIndex);
     bool decodeKYC(const getrawtransaction_t& txData, int dataIndex);
     bool decodeEncryptedKeyTx(const getrawtransaction_t& txData, int dataIndex);
+    // Fallback: records the raw OP_RETURN as an unknown/standard tx.
     void storeUnknown(const getrawtransaction_t& txData, int dataIndex); //todo need to store locally and then add to database when called
 
     //asset process TestHelpers
+    // Replays the encoded transfer instructions to distribute input assets onto
+    // outputs (type = issuance/transfer/burn); handles change and rule checks.
     void decodeAssetTransfer(BitIO& dataStream, const std::vector<AssetUTXO>& inputAssets, uint8_t type);
+    // Verifies every input asset's rules against this tx; throws on failure.
     void checkRulesPass() const;
+    // Places an asset on a given output, merging counts if aggregable.
     void addAssetToOutput(size_t output, const DigiAsset& asset);
 
 public:
+    // Creates a new, writable transaction stamped with the current time.
     explicit DigiByteTransaction();
+    // Loads and fully decodes an existing transaction by txid. height is
+    // optional (looked up if 0); dontBotherIfNotSpecial lets the chain analyzer
+    // skip full input/output processing for txs that clearly carry no assets.
     DigiByteTransaction(const std::string& txid, unsigned int height = 0, bool dontBotherIfNotSpecial = false);
 
+    // Persists this transaction's effects to the Database in one DB transaction.
     void addToDatabase();
+    // For an issuance, resolves and back-fills the asset's assetIndex from the DB.
     void lookupAssetIndexes();
 
     bool isStandardTransaction() const;
 
+    // True if this tx moved no assets and burned none unintentionally.
     bool isNonAssetTransaction() const;
     bool isIssuance() const;
+    // True for a transfer; optionally also counts an intentional burn.
     bool isTransfer(bool includeIntentionalBurn = false) const;
+    // True for an intentional burn; optionally also counts unintentional burns.
     bool isBurn(bool includeUnintentionalBurn = false) const;
+    // True if assets were destroyed as a side effect (e.g. sent to OP_RETURN or
+    // a failed transfer), rather than by an explicit burn.
     bool isUnintentionalBurn() const;
+    // Returns the asset created by an issuance tx; throws if not an issuance.
     DigiAsset getIssuedAsset() const;
 
     bool isKYCTransaction() const;
@@ -86,7 +126,10 @@ public:
 
     bool isExchangeTransaction() const;
     size_t getExchangeRateCount() const;
+    // Returns the i-th published exchange rate value; throws if out of range.
     double getExchangeRate(uint8_t i) const;
+    // Returns address/index/name metadata for the i-th exchange rate, resolving
+    // the human-readable name from the standard exchange-rate tables.
     ExchangeRate getExchangeRateName(uint8_t i) const;
 
 
@@ -96,9 +139,13 @@ public:
     unsigned int getOutputCount() const;
     unsigned int getHeight() const;
 
+    // Adds a plain DigiByte payment output to a new/writable tx. (Not yet implemented.)
     void addDigiByteOutput(const std::string& address, uint64_t amount);
+    // Adds an output carrying the given DigiAssets to a new/writable tx.
     void addDigiAssetOutput(const std::string& address, const std::vector<DigiAsset>& assets);
 
+    // Serializes the whole transaction to JSON for the API, optionally merging
+    // into an existing Json value (see the .cpp for the full field list).
     Value toJSON(const Value& original = Json::objectValue) const;
 
 
@@ -112,6 +159,7 @@ public:
     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
      */
 
+    // Base class for transaction errors; prefixes "DigiByte Transaction Exception: ".
     class exception : public std::exception {
     protected:
         std::string _lastErrorMessage;
@@ -126,6 +174,7 @@ public:
         }
     };
 
+    // Thrown when building a tx that spends more than the available inputs.
     class exceptionNotEnoughFunds : public exception {
     public:
         explicit exceptionNotEnoughFunds()

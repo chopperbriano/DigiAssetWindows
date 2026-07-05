@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method handler: "algostats". Registered in the node's JSON-RPC dispatch
+// table (RPC/MethodList) and served by the RPC server. Reads per-algorithm
+// mining difficulty statistics (min/max/avg difficulty and block counts) per
+// time frame from the chain-analyzer Database and reshapes the flat rows into
+// one JSON object per time frame with an "algo" array (null-padded for any
+// algorithm indexes with no data). Read-only; touches no wallet or IPFS state.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

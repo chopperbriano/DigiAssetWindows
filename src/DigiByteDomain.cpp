@@ -2,6 +2,14 @@
 // Created by mctrivia on 31/07/23.
 // Updated by RenzoDD on 04/10/23
 //
+// Implementation of the ".dgb" on-chain domain system (see DigiByteDomain.h).
+// On startup a static_block registers _callbackNewMetadata with the IPFS
+// controller. As the node's chain analyzer processes issuances,
+// processAssetIssuance detects issuances of the master domain asset and asks
+// the IPFS controller to fetch its metadata; when the download finishes
+// _callbackNewMetadata reconciles the node's local domain table. The remaining
+// functions are simple read-only lookups backed by the Database.
+//
 #include "DigiByteDomain.h"
 #include "AppMain.h"
 #include "IPFS.h"
@@ -12,7 +20,8 @@
 using namespace std;
 
 
-// Static block to register our callback function with IPFS Controller
+// Static block (runs at program init) to register our metadata-download
+// callback with the IPFS controller under DIGIBYTEDOMAIN_CALLBACK_NEWMETADATA_ID.
 static_block {
     IPFS::registerCallback(DIGIBYTEDOMAIN_CALLBACK_NEWMETADATA_ID, DigiByteDomain::_callbackNewMetadata);
 }
@@ -35,6 +44,23 @@ void DigiByteDomain::processAssetIssuance(const DigiAsset& asset) {
     ipfs->callOnDownload(asset.getCID(), "DIGIBYTEDOMAIN", "", DIGIBYTEDOMAIN_CALLBACK_NEWMETADATA_ID);
 }
 
+/**
+ * IPFS download callback fired once the master domain asset's metadata has been
+ * fetched. Parses the JSON metadata and reconciles it against the local domain
+ * table:
+ *   - domains present with an unchanged assetId are skipped
+ *   - domains with a cleared (empty) assetId are queued for revocation
+ *   - a changed (non-empty, different) assetId is treated as tampering: the
+ *     whole domain system is flagged compromised and processing aborts
+ *   - domains not previously known are queued as new additions
+ * Additions/revocations are only applied after the full integrity scan passes.
+ * If the metadata has a "next" field, it becomes the new master domain asset.
+ * @param cid - CID of the downloaded metadata (unused here)
+ * @param extra - passthrough value (unused here)
+ * @param content - raw JSON metadata document
+ * @param failed - always false (no maxSleep is ever set for this job)
+ * Side effects: mutates the domain table in the Database and writes log entries.
+ */
 void DigiByteDomain::_callbackNewMetadata(const std::string& cid, const std::string& extra, const std::string& content,
                                           bool failed) {
     ///failed will always be false since no maxSleep ever set

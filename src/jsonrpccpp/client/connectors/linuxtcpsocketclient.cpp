@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// ---------------------------------------------------------------------------
+// Role in DigiAsset for Windows:
+//   Implements LinuxTcpSocketClient, the POSIX TCP-socket transport for the
+//   bundled libjson-rpc-cpp JSON-RPC client. It resolves a host/IP, opens a
+//   TCP connection, writes a delimiter-framed JSON-RPC request and reads the
+//   framed response. Being built on the POSIX sockets API (<sys/socket.h>,
+//   <netdb.h>, unistd), it is a Linux/UNIX-only connector and is not part of
+//   the Windows node or pool-server build; it ships to keep the vendored
+//   library source complete.
+// ---------------------------------------------------------------------------
+
 #include "linuxtcpsocketclient.h"
 #include "../../common/sharedconstants.h"
 #include "../../common/streamreader.h"
@@ -30,6 +41,16 @@ LinuxTcpSocketClient::LinuxTcpSocketClient(const std::string &hostToConnect, con
 
 LinuxTcpSocketClient::~LinuxTcpSocketClient() {}
 
+/**
+ * @brief Sends a JSON-RPC request over a fresh TCP connection and returns the reply.
+ *
+ * Connects to the configured host/port, writes message terminated by
+ * DEFAULT_DELIMITER_CHAR, reads the response up to the same delimiter into
+ * result, then closes the socket.
+ * @param message The JSON-RPC request to send.
+ * @param result  Receives the raw JSON-RPC response read from the server.
+ * @throw JsonRpcException on connect, write or read failure.
+ */
 void LinuxTcpSocketClient::SendRPCMessage(const std::string &message, std::string &result) {
   int socket_fd = this->Connect();
 
@@ -46,6 +67,15 @@ void LinuxTcpSocketClient::SendRPCMessage(const std::string &message, std::strin
   close(socket_fd);
 }
 
+/**
+ * @brief Establishes a TCP connection to the host/port from the constructor.
+ *
+ * If hostToConnect is already a dotted-quad IPv4 address it connects directly.
+ * Otherwise it resolves the hostname via getaddrinfo() and tries each returned
+ * IPv4 address until one connects.
+ * @returns A file descriptor for the connected socket.
+ * @throw JsonRpcException if the hostname cannot be resolved or no address accepts the connection.
+ */
 int LinuxTcpSocketClient::Connect() {
   if (this->IsIpv4Address(this->hostToConnect)) {
     return this->Connect(this->hostToConnect, this->port);
@@ -87,6 +117,16 @@ int LinuxTcpSocketClient::Connect() {
   }
 }
 
+/**
+ * @brief Creates a socket and connects it to a specific IPv4 address and port.
+ *
+ * On socket() or connect() failure the errno is translated to a message via
+ * strerror() for known error codes and the socket (if opened) is closed.
+ * @param ip   Dotted-quad IPv4 address to connect to.
+ * @param port TCP port to connect to.
+ * @returns A file descriptor for the connected socket.
+ * @throw JsonRpcException if socket creation or connection fails.
+ */
 int LinuxTcpSocketClient::Connect(const string &ip, const int &port) {
   sockaddr_in address;
   int socket_fd;
@@ -141,6 +181,11 @@ int LinuxTcpSocketClient::Connect(const string &ip, const int &port) {
   return socket_fd;
 }
 
+/**
+ * @brief Tests whether a string is a valid dotted-quad IPv4 address.
+ * @param ip The string to test.
+ * @returns true if inet_aton() parses ip as an IPv4 address, false otherwise.
+ */
 bool LinuxTcpSocketClient::IsIpv4Address(const std::string &ip) {
   struct in_addr addr;
   return (inet_aton(ip.c_str(), &addr) != 0);

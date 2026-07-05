@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 08/03/24.
 //
+// UniqueTaskQueue.cpp - Implementation of the thread-safe de-duplicating task
+// queue declared in UniqueTaskQueue.h. Membership is tracked in _set so a task
+// already queued is ignored on enqueue; consumers block in dequeue() on the
+// condition variable until an item is available. See the header for the class
+// role in the node/pool.
 
 #include "UniqueTaskQueue.h"
 #include <queue>
@@ -11,7 +16,9 @@
 
 using namespace std;
 
-// Adds a task to the queue if it's not already present
+// Adds a task to the queue if it's not already present.
+// Returns true and wakes one waiting consumer if the task was newly added;
+// returns false (no change) if an identical task is already queued.
 bool UniqueTaskQueue::enqueue(const string& task) {
     unique_lock<mutex> lock(_mutex);
     if (_set.find(task) == _set.end()) {
@@ -24,8 +31,9 @@ bool UniqueTaskQueue::enqueue(const string& task) {
     return false; // Task was already in the set
 }
 
-// Retrieves and removes the next task from the queue
-// Blocks if the queue is empty until a new task is added
+// Retrieves and removes the next task from the queue (FIFO order).
+// Blocks if the queue is empty until a new task is added. Also removes the
+// task from the de-dup set so the same identifier may be enqueued again later.
 string UniqueTaskQueue::dequeue() {
     unique_lock<mutex> lock(_mutex);
     _cond.wait(lock, [this] { return !_queue.empty(); }); // Wait until the queue is not empty
@@ -42,6 +50,7 @@ bool UniqueTaskQueue::isEmpty() {
     return _queue.empty();
 }
 
+// Returns the current number of tasks waiting in the queue.
 unsigned int UniqueTaskQueue::length() {
     lock_guard<mutex> lock(_mutex);
     return _queue.size();

@@ -1,6 +1,13 @@
 //
 // Created by mctrivia on 05/09/23.
 //
+// Config — a tiny `key=value` config-file reader/writer used across both the
+// node and the pool server. Backs config.cfg, from which nearly every runtime
+// setting is read (RPC credentials, ports, IPFS path, prune options, PSP pool
+// URL and payout address, etc.). Typed accessors (getString/getInteger/getBool
+// and their *Map variants) parse values on demand; setters plus write() persist
+// changes while preserving the file's comments and original line ordering.
+//
 
 #ifndef DIGIASSET_CORE_CONFIG_H
 #define DIGIASSET_CORE_CONFIG_H
@@ -11,6 +18,12 @@
 
 using namespace std;
 
+/**
+ * In-memory view of a `key=value` config file. Construct with a filename to load
+ * immediately (throws exceptionConfigFileMissing if absent), query with the
+ * typed getters, mutate with the setters, and persist with write(). Missing or
+ * wrong-typed values throw the nested exception types unless a default is passed.
+ */
 class Config {
     map<string, string> _values;
     // _rawLines stores the file's contents in original order, INCLUDING comment
@@ -42,6 +55,9 @@ public:
     bool getBool(const string& key, bool defaultValue) const;
     bool isKey(const string& key, unsigned char type = UNKNOWN) const;
 
+    //*Map getters return every key that starts with keyPrefix, with the prefix
+    //stripped from the returned key. Values that don't parse to the requested
+    //type are silently skipped (integer/bool variants).
     map<string, string> getStringMap(const string& keyPrefix) const;
     map<string, int> getIntegerMap(const string& keyPrefix) const;
     map<string, bool> getBoolMap(const string& keyPrefix) const;
@@ -49,13 +65,14 @@ public:
     void setString(const string& key, const string& value);
     void setInteger(const string& key, int value);
     void setBool(const string& key, bool value);
+    //*Map setters write one `key+subkey=value` entry per map element.
     void setStringMap(const string& key, const map<string, string>& values);
     void setIntegerMap(const string& key, const map<string, int>& values);
     void setBoolMap(const string& key, const map<string, bool>& values);
 
-    void clear();
-    void refresh();
-    void write(string fileName = "") const;
+    void clear();                          //drop all loaded values and raw lines
+    void refresh();                        //reload from _fileName (throws if missing)
+    void write(string fileName = "") const;//persist to file, preserving comments/order
 
     /*
     ███████╗██████╗ ██████╗  ██████╗ ██████╗ ███████╗

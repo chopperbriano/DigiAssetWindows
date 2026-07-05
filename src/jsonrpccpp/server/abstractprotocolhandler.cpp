@@ -7,6 +7,13 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// Role in DigiAsset for Windows: shared base for the JSON-RPC protocol
+// handlers used by the node's/pool's RPC server. It owns the registry of
+// callable procedures and turns raw request text into parsed JSON, validated
+// dispatch, and serialized response text. Version-specific concerns (JSON-RPC
+// v1 vs v2 envelope shape, error/result wrapping) are left to derived classes
+// via the pure-virtual hooks declared in the header.
+
 #include "abstractprotocolhandler.h"
 #include <jsonrpccpp/common/errors.h>
 #include <sstream>
@@ -15,12 +22,20 @@
 using namespace jsonrpc;
 using namespace std;
 
+// Store the invocation handler that will actually run the bound C++ methods
+// (typically the AbstractServer subclass) once a request is dispatched.
 AbstractProtocolHandler::AbstractProtocolHandler(IProcedureInvokationHandler &handler) : handler(handler) {}
 
 AbstractProtocolHandler::~AbstractProtocolHandler() {}
 
+// Register a procedure (method or notification) under its name so it can be
+// looked up during validation and dispatch.
 void AbstractProtocolHandler::AddProcedure(const Procedure &procedure) { this->procedures[procedure.GetProcedureName()] = procedure; }
 
+// Entry point from the server connector: parse the raw request string as JSON,
+// dispatch it via HandleJsonRequest, and serialize the response back into
+// retValue. A JSON parse failure is turned into a JSON-RPC parse-error
+// response. A null response (e.g. a notification) leaves retValue untouched.
 void AbstractProtocolHandler::HandleRequest(const std::string &request, std::string &retValue) {
   Json::Value req;
   Json::Value resp;
@@ -38,6 +53,10 @@ void AbstractProtocolHandler::HandleRequest(const std::string &request, std::str
     retValue = Json::writeString(wbuilder, resp);
 }
 
+// Dispatch a single already-validated request to its bound handler. Methods
+// run via HandleMethodCall and have their return value wrapped into response;
+// notifications run via HandleNotificationCall and produce a null response
+// (no reply is sent for notifications).
 void AbstractProtocolHandler::ProcessRequest(const Json::Value &request, Json::Value &response) {
   Procedure &method = this->procedures[request[KEY_REQUEST_METHODNAME].asString()];
   Json::Value result;
@@ -51,6 +70,10 @@ void AbstractProtocolHandler::ProcessRequest(const Json::Value &request, Json::V
   }
 }
 
+// Check a parsed request before dispatch and return 0 if valid, otherwise a
+// JSON-RPC error code: invalid request shape, unknown method, a mismatch
+// between the request type and the registered procedure type (method called as
+// notification or vice versa), or parameters that fail the procedure's schema.
 int AbstractProtocolHandler::ValidateRequest(const Json::Value &request) {
   int error = 0;
   Procedure proc;

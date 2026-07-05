@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+// ---------------------------------------------------------------------------
+// Role in DigiAsset for Windows:
+//   Implements RedisClient, a Redis-backed transport for the bundled
+//   libjson-rpc-cpp JSON-RPC client. Instead of a direct socket, a request is
+//   pushed onto a shared Redis list (LPUSH) with a unique reply-queue name
+//   prepended, and the response is awaited by blocking-popping that reply
+//   queue (BRPOP). Requires hiredis and POSIX headers (<sys/time.h>), so it is
+//   a Linux/UNIX-only connector, not part of the Windows node or pool-server
+//   build; it ships to keep the vendored library source complete.
+// ---------------------------------------------------------------------------
+
 #include "redisclient.h"
 
 #include <iostream>
@@ -97,6 +108,17 @@ void jsonrpc::GetReturnQueue(redisContext *con, const std::string &prefix, std::
   freeReplyObject(reply);
 }
 
+/**
+ * @brief Constructs the client and opens a connection to the redis server.
+ *
+ * Sets the default response timeout to 10 seconds, connects via redisConnect(),
+ * and seeds the C rand() generator (used for reply-queue names) from the current
+ * time and microseconds.
+ * @param host  The redis server host/IP.
+ * @param port  The redis server port.
+ * @param queue The request queue name to push messages onto.
+ * @throw JsonRpcException if the connection cannot be created or reports an error.
+ */
 RedisClient::RedisClient(const std::string &host, int port, const std::string &queue) : queue(queue), con(NULL) {
   this->timeout = 10;
 
@@ -124,6 +146,16 @@ RedisClient::~RedisClient() {
   }
 }
 
+/**
+ * @brief Sends a JSON-RPC request through redis and waits for the response.
+ *
+ * Generates a unique reply queue, LPUSHes "<ret_queue>!<message>" onto the
+ * request queue, then BRPOPs the reply queue for up to `timeout` seconds and
+ * extracts the JSON payload from the popped element into result.
+ * @param message The JSON-RPC request to send.
+ * @param result  Receives the JSON-RPC response popped from the reply queue.
+ * @throw JsonRpcException on redis errors, a rejected LPUSH, or a BRPOP timeout.
+ */
 void RedisClient::SendRPCMessage(const std::string &message, std::string &result) {
   std::string ret_queue;
   GetReturnQueue(con, queue, ret_queue);

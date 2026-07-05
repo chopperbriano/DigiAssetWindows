@@ -1,6 +1,16 @@
 //
 // Created by mctrivia on 12/11/23.
 //
+//
+// local.h - the "Local Storage" Permanent Storage Pool implementation.
+//
+// This pool has no external server and no cost: it simply records, in a small
+// local SQLite database (local.db), which asset CIDs the node operator has
+// opted into pinning, plus a list of asset ids flagged as bad. Because there is
+// no remote pool, metadata is only preserved for as long as this node keeps
+// running - hence the strongly-discouraged warning in getDescription(). Used by
+// the node (DigiAssetWindows.exe) as one selectable PSP among several.
+//
 
 #ifndef DIGIASSET_CORE_LOCAL_H
 #define DIGIASSET_CORE_LOCAL_H
@@ -11,6 +21,14 @@
 #include "PermanentStoragePool/PermanentStoragePool.h"
 
 
+/**
+ * "Local Storage" pool. Overrides the PSP interface to store opt-in CIDs and
+ * bad-asset ids in a lazily-opened SQLite database (local.db) instead of
+ * talking to any pool server. All prepared statements and the db handle are
+ * created on first use via loadDB(). enable() adds a transaction's CID to the
+ * local pin table rather than modifying the on-chain transaction; getCost()
+ * is always 0.
+ */
 class local : public PermanentStoragePool {
 private:
     sqlite3* _db = nullptr;
@@ -20,10 +38,10 @@ private:
     sqlite3_stmt* _stmtMarkBad = nullptr;
     sqlite3_stmt* _stmtDiableFromPool = nullptr;
 
-    bool localExists() const;
-    void loadDB();
-    void buildTables();
-    void initializeDBValues();
+    bool localExists() const;   //true when local.db is absent (stat fails); used as the first-run flag
+    void loadDB();              //lazily opens/creates local.db and prepares statements; no-op if already loaded
+    void buildTables();         //creates the "pin" and "bad" tables on first run
+    void initializeDBValues();  //prepares the reusable SQL statements against the open db
 
 protected:
     void _reportAssetBad(const std::string& assetId) override;
@@ -49,6 +67,11 @@ public:
     std::string getURL() override;                            //gets the PSP's website
 };
 
+/**
+ * Metadata processor for the local pool. The serialized payload carries no real
+ * information (it is always "1"), so this processor unconditionally pins every
+ * file of an asset that was found in the local pin table.
+ */
 class localMetaProcessor : public PermanentStoragePoolMetaProcessor {
 public:
     localMetaProcessor(const std::string& serializedData, unsigned int poolIndex);

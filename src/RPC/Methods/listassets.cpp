@@ -1,6 +1,12 @@
 //
 // Created by RenzoDD on 21/03/24.
 //
+// RPC method "listassets" for the DigiAsset node's JSON-RPC server.
+// A node-specific (non-Core) method: lists DigiAssets issued on chain in ascending
+// issuance order, starting from a given asset index, with optional Permanent Storage
+// Pool (psp) filtering and a choice of basic summary output or full DigiAsset::toJSON.
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

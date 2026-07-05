@@ -1,6 +1,14 @@
 //
 // Created by mctrivia on 02/02/23.
 //
+// ChainAnalyzer implementation — the node's chain-indexing worker.
+//
+// Contains the sync loop (phaseSync), the fork-recovery logic (phaseRewind),
+// the pruning logic (phasePrune), per-transaction processing (processTX), and
+// the config load/save that persists prune/storage preferences to config.cfg.
+// Runs on the Threaded worker thread; on any thrown exception mainFunction()
+// is re-entered so a bad block is retried with backoff before giving up.
+//
 
 #include "ChainAnalyzer.h"
 #include "AppMain.h"
@@ -53,6 +61,11 @@ ChainAnalyzer::~ChainAnalyzer() {
  ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚═╝ ╚═════╝
  */
 
+/**
+ * Stops the worker (if running) and restores every state and config variable to
+ * its built-in default. Called by the constructor and whenever the config file
+ * changes. Note the meta-data pin settings are static and not reset here.
+ */
 void ChainAnalyzer::resetConfig() {
     stop();
 
@@ -89,6 +102,12 @@ void ChainAnalyzer::setFileName(const std::string& fileName) {
     }
 }
 
+/**
+ * Reads the config file named by _configFileName and applies every persisted
+ * chain-data setting (prune ages/flags, storage flags, verify/verbose flags)
+ * into this object via the setters. Throws Config::exceptionConfigFileMissing
+ * if the file does not exist (caught by setFileName).
+ */
 void ChainAnalyzer::loadConfig() {
     Config config = Config(_configFileName);
 
@@ -112,6 +131,11 @@ void ChainAnalyzer::loadFake(unsigned int databaseHeight, int syncLevel) {
     _state = syncLevel;
 }
 
+/**
+ * Writes the current prune/storage settings plus the static extra-pin MIME-type
+ * map back to the config file, preserving any comments/ordering already present
+ * (see Config::write). Overwrites _configFileName in place.
+ */
 void ChainAnalyzer::saveConfig() {
     Config config = Config(_configFileName);
     config.setInteger("pruneage", _pruneAge);
@@ -128,6 +152,11 @@ bool ChainAnalyzer::shouldPruneExchangeHistory() const {
     return _pruneExchangeHistory;
 }
 
+/**
+ * Enables/disables pruning of exchange-rate history. Refuses (throws
+ * exceptionAlreadyPruned) to turn pruning OFF if the DB has already pruned this
+ * data, because the removed history cannot be recovered without a full resync.
+ */
 void ChainAnalyzer::setPruneExchangeHistory(bool shouldPrune) {
     Database* db = AppMain::GetInstance()->getDatabase();
     if (!shouldPrune && (db->getBeenPrunedExchangeHistory() >= 0)) throw exceptionAlreadyPruned();
@@ -138,6 +167,10 @@ bool ChainAnalyzer::shouldPruneUTXOHistory() const {
     return _pruneUTXOHistory;
 }
 
+/**
+ * Enables/disables pruning of spent-UTXO history. Throws exceptionAlreadyPruned
+ * if asked to disable pruning after the DB has already pruned this data.
+ */
 void ChainAnalyzer::setPruneUTXOHistory(bool shouldPrune) {
     Database* db = AppMain::GetInstance()->getDatabase();
     if (!shouldPrune && (db->getBeenPrunedUTXOHistory() >= 0)) throw exceptionAlreadyPruned();
@@ -148,6 +181,10 @@ bool ChainAnalyzer::shouldPruneVoteHistory() const {
     return _pruneVoteHistory;
 }
 
+/**
+ * Enables/disables pruning of vote history. Throws exceptionAlreadyPruned if
+ * asked to disable pruning after the DB has already pruned this data.
+ */
 void ChainAnalyzer::setPruneVoteHistory(bool shouldPrune) {
     Database* db = AppMain::GetInstance()->getDatabase();
     if (!shouldPrune && (db->getBeenPrunedVoteHistory() >= 0)) throw exceptionAlreadyPruned();
@@ -158,6 +195,11 @@ bool ChainAnalyzer::shouldStoreNonAssetUTXO() const {
     return _storeNonAssetUTXOs;
 }
 
+/**
+ * Sets whether UTXOs that carry no DigiAsset data should still be stored. Throws
+ * exceptionAlreadyPruned if asked to START storing them after the DB has already
+ * been told to discard them (they'd be missing for past blocks).
+ */
 void ChainAnalyzer::setStoreNonAssetUTXO(bool shouldStore) {
     Database* db = AppMain::GetInstance()->getDatabase();
     if (shouldStore && (db->getBeenPrunedNonAssetUTXOHistory())) throw exceptionAlreadyPruned();
@@ -177,6 +219,11 @@ unsigned int ChainAnalyzer::pruneMax(unsigned int height) {
     return height - _pruneAge;
 }
 
+/**
+ * Sets how many recent blocks of history to retain (-1 disables pruning) and
+ * recomputes _pruneInterval — how often pruning runs — as a multiple of 100
+ * blocks derived from the age and PRUNE_INTERVAL_DIVISOR.
+ */
 void ChainAnalyzer::setPruneAge(int age) {
     _pruneAge = age;
     _pruneInterval = (int) ceil(1.0 * _pruneAge / PRUNE_INTERVAL_DIVISOR / 100) *
@@ -193,6 +240,12 @@ void ChainAnalyzer::setPruneAge(int age) {
 ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝
  */
 
+/**
+ * Threaded startup hook, run once when the worker thread launches. Marks state
+ * INITIALIZING, reads the last stored block height from the DB, clears any
+ * partially-processed block above it (crash recovery), and records whether
+ * non-asset UTXOs are being stored so the DB behaves consistently.
+ */
 void ChainAnalyzer::startupFunction() {
     Log* log = Log::GetInstance();
 
@@ -221,6 +274,15 @@ void ChainAnalyzer::startupFunction() {
     }
 }
 
+/**
+ * Threaded main hook — the body of the sync loop. On the first call it runs
+ * straight through; on any later call (meaning a previous run threw) it first
+ * re-reads height from the DB, rolls back the failed block, and applies an
+ * error-count backoff: sleep after 3 consecutive failures, and after 10 give up
+ * (set STOPPED and idle until stop is requested). On success it runs phaseRewind
+ * then phaseSync and resets the error count; on exception it logs and re-throws
+ * so the Threaded framework re-enters this function to retry.
+ */
 void ChainAnalyzer::mainFunction() {
     Log* log = Log::GetInstance();
 
@@ -278,6 +340,14 @@ void ChainAnalyzer::shutdownFunction() {
 ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝
  */
 
+/**
+ * Fork/reorg recovery. Compares the DigiByte Core block hash at the current
+ * height against the hash we expect (_nextHash). If they differ the local chain
+ * reorganized, so it walks backwards one block at a time until the stored and
+ * live hashes agree, then deletes all DB data at and above that point. If the
+ * rewind reaches a height that was already pruned, it calls restart() to resync
+ * from block 1. No-op when no fork is detected.
+ */
 void ChainAnalyzer::phaseRewind() {
     Log* log = Log::GetInstance();
 
@@ -313,6 +383,18 @@ void ChainAnalyzer::phaseRewind() {
     }
 }
 
+/**
+ * The main indexing loop. Starting at the current height it fetches each block
+ * from DigiByte Core (using verbose/verbosity-2 RPC to pull a block plus all its
+ * transactions in one call during bulk catch-up), updates the sync state to the
+ * number of blocks behind, and — for blocks at/after the DigiAssets activation
+ * height (or when storing non-asset UTXOs) — processes every transaction inside
+ * a DB transaction. It logs per-block or per-100-block timing/ETA, invalidates
+ * the RPC cache on new tip blocks, prunes when due, and once caught up polls
+ * every 500ms for the next block. Batches header inserts for pre-asset blocks.
+ * Returns when the chain tip changes under it (to re-enter rewind) or when stop
+ * is requested.
+ */
 void ChainAnalyzer::phaseSync() {
     Log* log = Log::GetInstance();
 
@@ -453,6 +535,13 @@ void ChainAnalyzer::phaseSync() {
     if (insertBatch > 0) db->endTransaction();
 }
 
+/**
+ * Prunes historical data when the current height is a pruning boundary. Asks
+ * pruneMax() for the height to prune up to (0 = not now / disabled) and, based
+ * on the enabled prune flags, tells the DB to drop exchange, UTXO, and vote
+ * history below that height. Exchange pruning keeps an extra leniency window so
+ * recent exchange-rate lookups still work.
+ */
 void ChainAnalyzer::phasePrune() {
 
     //check if time to prune
@@ -466,6 +555,10 @@ void ChainAnalyzer::phasePrune() {
     if (shouldPruneVoteHistory()) db->pruneVote(pruneHeight);
 }
 
+/**
+ * Wipes the entire database and resets the analyzer to block 1 so syncing starts
+ * over from genesis. Used when a rewind lands past the prune point.
+ */
 void ChainAnalyzer::restart() {
     Database* db = AppMain::GetInstance()->getDatabase();
     db->reset();
@@ -482,6 +575,13 @@ void ChainAnalyzer::restart() {
 ╚═╝     ╚═╝  ╚═╝ ╚═════╝  ╚═════╝╚══════╝╚══════╝╚══════╝
  */
 
+/**
+ * Processes a single transaction by id at the given height: parses it (as a
+ * DigiByteTransaction, which decodes any DigiAsset payload and, when configured,
+ * drops non-asset UTXOs), writes it to the database, and — outside of bulk sync
+ * — invalidates the RPC cache for every input/output address it touched. Also
+ * accumulates the profiling timers for parse, save, and cache-clear.
+ */
 void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
     //get raw transaction
     std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();

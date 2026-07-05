@@ -7,6 +7,17 @@
  * @license See attached LICENSE.txt
  ************************************************************************/
 
+/*
+ * ROLE IN DIGIASSET FOR WINDOWS:
+ * Part of the vendored libjson-rpc-cpp library. This header declares a
+ * JSON-RPC server connector whose transport is a Redis queue rather than a
+ * socket: instead of accepting network connections, it blocks on a Redis list
+ * (BRPOP), treats each popped message as a JSON-RPC request, and pushes the
+ * response onto a per-request reply queue (LPUSH). It depends on hiredis and
+ * pthreads and is a Linux-oriented connector, not part of the Windows node or
+ * pool server build; retained for upstream parity.
+ */
+
 #ifndef JSONRPC_CPP_REDISSERVERCONNECTOR_H_
 #define JSONRPC_CPP_REDISSERVERCONNECTOR_H_
 

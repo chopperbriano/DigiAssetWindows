@@ -2,6 +2,17 @@
 // Created by mctrivia on 30/01/23.
 //
 
+// Database.cpp
+// Implementation of the Database class (see Database.h). Opens/creates the
+// SQLite file, migrates its schema up to the current version (buildTables),
+// pre-compiles every query into a reusable Statement (initializeClassValues),
+// and implements all the per-table read/write operations the node's chain
+// analyzer and RPC/web layer rely on, plus the periodic algo/address stats
+// generation and the Permanent Storage Pool bookkeeping. Sections are separated
+// by large ASCII-art banners (Build Tables, Initialize, Constructor,
+// Performance, Reset, Asset/Flag/Block/UTXO/Exchange/KYC/Vote/IPFS/Domain/
+// Permanent/Stats tables, Helpers). Errors are surfaced as Database::exception
+// subclasses; handleSpecialErrors() logs the underlying sqlite message.
 
 #include "Database.h"
 #include "AppMain.h"
@@ -928,6 +939,18 @@ DigiAsset Database::getAsset(uint64_t assetIndex, uint64_t amount) {
     return {assetIndex, assetId, cid, issuer, rules, heightCreated, heightUpdated, amount};
 }
 
+/**
+ * Resolves an assetId to its unique assetIndex.
+ * Most assets have exactly one index and only assetId is needed. For assets
+ * that have been reissued under multiple indexes, txid/vout must be supplied so
+ * the specific variant living on that UTXO can be disambiguated.
+ * @param assetId
+ * @param txid - required only when the assetId maps to more than one index
+ * @param vout
+ * @return the matching assetIndex
+ * Possible Errors:
+ *  exceptionFailedSelect (unknown asset, or ambiguous with no/no-matching UTXO)
+ */
 uint64_t Database::getAssetIndex(const string& assetId, const string& txid, unsigned int vout) {
     //see if the asset exists and if only 1 index
     uint64_t assetIndex;
@@ -967,6 +990,12 @@ uint64_t Database::getAssetIndex(const string& assetId, const string& txid, unsi
     throw exceptionFailedSelect();
 }
 
+/**
+ * Returns every assetIndex sharing the given assetId (more than one only for
+ * reissued assets), in ascending order. Empty if the asset is unknown.
+ * @param assetId
+ * @return
+ */
 vector<uint64_t> Database::getAssetIndexes(const std::string& assetId) {
     vector<uint64_t> assetIndexes;
 
@@ -1371,6 +1400,17 @@ pair<unsigned int, unsigned int> Database::getUTXOHeight(const std::string& txid
             getHeight.getColumnInt(0), getHeight.getColumnInt(1)};
 }
 
+/**
+ * Returns the address that owns (and would spend) the given txid:vout output.
+ * If the UTXO is not in the database and non-asset UTXO history has been pruned,
+ * falls back to the DigiByte Core wallet via getRawTransaction (only when a
+ * single address is on the output).
+ * @param txid
+ * @param vout
+ * @return
+ * Possible Errors:
+ *  exceptionFailedSelect (not found and no wallet fallback available)
+ */
 std::string Database::getSendingAddress(const string& txid, unsigned int vout) {
     LockedStatement getSpendingAddress{_stmtGetSpendingAddress};
     Blob blobTXID = Blob(txid);
@@ -1895,6 +1935,13 @@ std::vector<AssetCount> Database::getAddressHoldings(const string& address) {
 ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝     ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝
  */
 
+/**
+ * Returns true if the address is on the exchange-rate watch list. Uses the
+ * in-RAM buffer of watch addresses when it is populated; if the list grew too
+ * large to buffer it falls back to querying the exchangeWatch table.
+ * @param address
+ * @return
+ */
 bool Database::isWatchAddress(const string& address) {
     //if to many watch addresses to buffer effectively use database
     if (_exchangeWatchAddresses.empty()) {
@@ -1911,6 +1958,14 @@ bool Database::isWatchAddress(const string& address) {
     return false;
 }
 
+/**
+ * Adds an address to the exchange-rate watch list (no-op if already present).
+ * Keeps the RAM buffer in sync; if the buffer reaches the max watch size it is
+ * cleared and subsequent lookups fall back to the database.
+ * @param address
+ * Possible Errors:
+ *  exceptionFailedInsert
+ */
 void Database::addWatchAddress(const string& address) {
     //make sure not already on watch list
     if (isWatchAddress(address)) return;
@@ -2054,6 +2109,14 @@ double Database::getAcceptedExchangeRate(const ExchangeRate& rate, unsigned int 
     return min;
 }
 
+/**
+ * Returns the most recent exchange rate value published by the given
+ * rate source (address + index), regardless of height.
+ * @param rate
+ * @return
+ * Possible Errors:
+ *  std::out_of_range if no rate has ever been recorded for this source
+ */
 double Database::getCurrentExchangeRate(const ExchangeRate& rate) {
     LockedStatement getCurrentExchangeRate{_stmtGetCurrentExchangeRate};
     getCurrentExchangeRate.bindText(1, rate.address);
@@ -2071,6 +2134,12 @@ double Database::getCurrentExchangeRate(const ExchangeRate& rate) {
 ╚═╝  ╚═╝   ╚═╝    ╚═════╝
  */
 
+/**
+ * Records a KYC association for an address (country, name, verifying hash, and
+ * the height it was created). Ignored if a record for the address already exists.
+ * Possible Errors:
+ *  exceptionFailedUpdate
+ */
 void Database::addKYC(const string& address, const string& country, const string& name, const string& hash,
                       unsigned int height) {
     LockedStatement addKYC{_stmtAddKYC};
@@ -2087,6 +2156,11 @@ void Database::addKYC(const string& address, const string& country, const string
     }
 }
 
+/**
+ * Marks an address's KYC record as revoked at the given height.
+ * Possible Errors:
+ *  exceptionFailedUpdate
+ */
 void Database::revokeKYC(const string& address, unsigned int height) {
     LockedStatement revokeKYC{_stmtRevokeKYC};
     revokeKYC.bindInt(1, height);
@@ -2098,6 +2172,12 @@ void Database::revokeKYC(const string& address, unsigned int height) {
     }
 }
 
+/**
+ * Returns the KYC record for an address. If no record exists, returns a KYC
+ * object holding only the address (i.e. an un-verified/empty record).
+ * @param address
+ * @return
+ */
 KYC Database::getAddressKYC(const string& address) {
     LockedStatement getKYC{_stmtGetKYC};
     getKYC.bindText(1, address);
@@ -2230,6 +2310,14 @@ std::vector<VoteCount> Database::getVoteCounts(unsigned int assetIndex) {
  */
 
 
+/**
+ * Registers a named callback that IPFS jobs can reference by symbol so the
+ * callback survives being stored in the database. The symbol must be non-empty
+ * and must not begin with '_' (that prefix is reserved for internal/promise
+ * callbacks that are cleared on restart).
+ * Possible Errors:
+ *  std::out_of_range for an invalid symbol
+ */
 void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCallbackFunction& callback) {
     //make sure valid name
     if ((callbackSymbol.empty()) || (callbackSymbol[0] == '_')) {
@@ -2241,6 +2329,13 @@ void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCall
 }
 
 
+/**
+ * Looks up a previously registered IPFS callback by its symbol.
+ * @param callbackSymbol
+ * @return reference to the stored callback
+ * Possible Errors:
+ *  std::out_of_range if no callback is registered under that symbol
+ */
 IPFSCallbackFunction& Database::getIPFSCallback(const string& callbackSymbol) {
     auto it = _ipfsCallbacks.find(callbackSymbol);
     if (it == _ipfsCallbacks.end()) throw std::out_of_range("Non existent callback");
@@ -2362,6 +2457,14 @@ void Database::getNextIPFSJob(unsigned int& jobIndex, string& cid, string& sync,
     if (rc != SQLITE_DONE) throw exceptionFailedUpdate();
 }
 
+/**
+ * Temporarily pauses IPFS job processing until now + pauseLengthInMilliSeconds.
+ * For unordered jobs ("pin"/"unpin"/"_"/"") only the given jobIndex is paused;
+ * for ordered sync groups the whole sync value is paused (and mirrored into the
+ * RAM paused list). Also unlocks the affected job(s).
+ * Possible Errors:
+ *  exceptionFailedDelete
+ */
 void Database::pauseIPFSSync(unsigned int jobIndex, const string& sync, unsigned int pauseLengthInMilliSeconds) {
     //get current time
     uint64_t currentTime = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2484,6 +2587,15 @@ using IPFSCallbackFunction = std::function<void(const std::string&, const std::s
                                                 bool failed)>;
 vector<tuple<string, string, IPFSCallbackFunction>> toDoLater;
 
+/**
+ * Adds an IPFS job and returns a promise that is fulfilled with the fetched
+ * content when the job completes, or set with an IPFS::exceptionTimeout if it
+ * fails. Registers a temporary "_"-prefixed callback keyed to the new jobIndex.
+ * @param cid
+ * @param sync
+ * @param maxTime - max ms to wait (0 = forever)
+ * @return
+ */
 promise<string> Database::addIPFSJobPromise(const string& cid, const string& sync, unsigned int maxTime) {
     promise<string> result;
 
@@ -2512,6 +2624,11 @@ promise<string> Database::addIPFSJobPromise(const string& cid, const string& syn
 ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝
  */
 
+/**
+ * Marks a DigiByte-Domain as revoked. Should only be called by DigiByteDomain.
+ * Possible Errors:
+ *  exceptionFailedUpdate
+ */
 void Database::revokeDomain(const string& domain) {
     LockedStatement revokeDomain{_stmtRevokeDomain};
     revokeDomain.bindText(1, domain);
@@ -2522,6 +2639,12 @@ void Database::revokeDomain(const string& domain) {
     }
 }
 
+/**
+ * Maps a DigiByte-Domain name to the assetId that controls it (ignored if the
+ * domain already exists). Should only be called by DigiByteDomain.
+ * Possible Errors:
+ *  exceptionFailedUpdate
+ */
 void Database::addDomain(const string& domain, const string& assetId) {
     LockedStatement addDomain{_stmtAddDomain};
     addDomain.bindText(1, domain);
@@ -2533,6 +2656,14 @@ void Database::addDomain(const string& domain, const string& assetId) {
     }
 }
 
+/**
+ * Returns the assetId controlling a DigiByte-Domain.
+ * @param domain
+ * @param returnErrorIfRevoked - if true (default) throw when the domain is revoked
+ * @return
+ * Possible Errors:
+ *  DigiByteDomain::exceptionUnknownDomain, DigiByteDomain::exceptionRevokedDomain
+ */
 string Database::getDomainAssetId(const std::string& domain, bool returnErrorIfRevoked) {
     LockedStatement getDomainAssetId{_stmtGetDomainAssetId};
     getDomainAssetId.bindText(1, domain);
@@ -2545,6 +2676,10 @@ string Database::getDomainAssetId(const std::string& domain, bool returnErrorIfR
     return getDomainAssetId.getColumnText(0);
 }
 
+/**
+ * Returns true if assetId is any of the domain-master assets (current or any
+ * historical one), which are the assets authorized to publish domain mappings.
+ */
 bool Database::isMasterDomainAssetId(const std::string& assetId) const {
     for (const string& id: _masterDomainAssetId) {
         if (id == assetId) return true;
@@ -2552,10 +2687,21 @@ bool Database::isMasterDomainAssetId(const std::string& assetId) const {
     return false;
 }
 
+/**
+ * Returns true only if assetId is the currently active domain-master asset
+ * (the most recent one in the master list).
+ */
 bool Database::isActiveMasterDomainAssetId(const std::string& assetId) const {
     return (_masterDomainAssetId.back() == assetId);
 }
 
+/**
+ * Rotates the active domain-master asset to assetId: deactivates the previously
+ * active master in the domainsMasters table, inserts/activates the new one, and
+ * appends it to the RAM master list (making it the active one).
+ * Possible Errors:
+ *  exceptionFailedUpdate, exceptionFailedInsert
+ */
 void Database::setMasterDomainAssetId(const string& assetId) {
     {
         LockedStatement setDomainMasterAssetId{_stmtSetDomainMasterAssetId_a};
@@ -2586,6 +2732,15 @@ bool Database::isDomainCompromised() const {
     return (_masterDomainAssetId.back().empty());
 }
 
+/**
+ * Resolves a DigiByte-Domain to the address that currently holds its
+ * controlling asset (the first/only holder).
+ * @param domain
+ * @return
+ * Possible Errors:
+ *  DigiByteDomain::exceptionBurnedDomain if the controlling asset has no holders
+ *  (plus errors from getDomainAssetId/getAssetIndex)
+ */
 std::string Database::getDomainAddress(const string& domain) {
     string assetId = getDomainAssetId(domain);
     uint64_t assetIndex = getAssetIndex(assetId);
@@ -2602,6 +2757,10 @@ std::string Database::getDomainAddress(const string& domain) {
 ██║  ██║███████╗███████╗██║     ███████╗██║  ██║███████║
 ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝
 */
+/**
+ * Default sqlite3_exec row callback: prints each "column = value" pair to
+ * stdout. Used for one-off exec statements where output is not consumed.
+ */
 int Database::defaultCallback(void* NotUsed, int argc, char** argv, char** azColName) {
     {
         int i;
@@ -2691,6 +2850,13 @@ void Database::addToPermanent(unsigned int poolIndex, const string& cid) {
     }
 }
 
+/**
+ * Removes a cid from a pool's permanent (pspFiles) list. If unpin is true and
+ * the cid is no longer referenced by any pool, queues an "unpin" IPFS job.
+ * @param poolIndex
+ * @param cid
+ * @param unpin
+ */
 void Database::removeFromPermanent(unsigned int poolIndex, const std::string& cid, bool unpin) {
     //remove from database
     {
@@ -2712,6 +2878,12 @@ void Database::removeFromPermanent(unsigned int poolIndex, const std::string& ci
     addIPFSJob(cid, "unpin");
 }
 
+/**
+ * Records that an asset (by assetIndex) belongs to a Permanent Storage Pool.
+ * Ignored if the membership already exists.
+ * Possible Errors:
+ *  exceptionFailedInsert
+ */
 void Database::addAssetToPool(unsigned int poolIndex, unsigned int assetIndex) {
     LockedStatement addAssetToPool{_stmtAddAssetToPool};
     addAssetToPool.bindInt(1, assetIndex);
@@ -2722,6 +2894,14 @@ void Database::addAssetToPool(unsigned int poolIndex, unsigned int assetIndex) {
     }
 }
 
+/**
+ * Removes every assetIndex matching assetId from the given pool (pspAssets). If
+ * unpin is true, any of those assets no longer belonging to any pool have their
+ * cid queued for an "unpin" IPFS job.
+ * @param poolIndex
+ * @param assetId
+ * @param unpin
+ */
 void Database::removeAssetFromPool(unsigned int poolIndex, const std::string& assetId, bool unpin) {
     //make list of assetIndex we will remove and there cid
     vector<pair<unsigned int, string>> toDelete;
@@ -2758,6 +2938,9 @@ void Database::removeAssetFromPool(unsigned int poolIndex, const std::string& as
     }
 }
 
+/**
+ * Returns true if the asset is a member of the specified pool.
+ */
 bool Database::isAssetInPool(unsigned int poolIndex, unsigned int assetIndex) {
     LockedStatement isAssetInPool{_stmtIsAssetInPool};
     isAssetInPool.bindInt(1, assetIndex);
@@ -2765,12 +2948,18 @@ bool Database::isAssetInPool(unsigned int poolIndex, unsigned int assetIndex) {
 
     return (isAssetInPool.executeStep() == SQLITE_ROW);
 }
+/**
+ * Returns true if the asset is a member of any pool.
+ */
 bool Database::isAssetInPool(unsigned int assetIndex) {
     LockedStatement isAssetInPool{_stmtIsAssetInAPool};
     isAssetInPool.bindInt(1, assetIndex);
 
     return (isAssetInPool.executeStep() == SQLITE_ROW);
 }
+/**
+ * Returns the poolIndex of every pool the asset belongs to.
+ */
 std::vector<int> Database::listPoolsAssetIsIn(unsigned int assetIndex) {
     vector<int> pools;
     LockedStatement isAssetInPool{_stmtIsAssetInAPool};
@@ -2781,6 +2970,9 @@ std::vector<int> Database::listPoolsAssetIsIn(unsigned int assetIndex) {
     }
     return pools;
 }
+/**
+ * Returns the distinct list of cids that make up a pool's permanent file set.
+ */
 std::vector<std::string> Database::getPSPFileList(unsigned int poolIndex) {
     LockedStatement fileLister{_stmtPSPFileList};
     fileLister.bindInt(1, poolIndex);
@@ -2799,6 +2991,10 @@ std::vector<std::string> Database::getPSPFileList(unsigned int poolIndex) {
 ███████║   ██║   ██║  ██║   ██║   ███████║
 ╚══════╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   ╚══════╝
 */
+/**
+ * Returns true if algo stats can be produced - i.e. block history has not been
+ * pruned (probed by trying to read block 1's hash).
+ */
 bool Database::canGetAlgoStats() {
     try {
         getBlockHash(1);
@@ -2807,6 +3003,11 @@ bool Database::canGetAlgoStats() {
         return false;
     }
 }
+/**
+ * Returns true if address stats can be produced - requires algo stats to be
+ * possible AND that neither UTXO history nor non-asset UTXO history was pruned
+ * (both are needed to reconstruct per-address balances).
+ */
 bool Database::canGetAddressStats() {
     if (!canGetAlgoStats()) return false;
     return !(
@@ -2998,6 +3199,18 @@ void Database::updateAlgoStats(unsigned int timeFrame, unsigned int endTime, uns
     // clang-format on
 }
 
+/**
+ * Computes and stores one time window of address statistics. Maintains a
+ * running per-address balance table (StatsAddressSum_<timeFrame>) by folding in
+ * the DigiByte/asset deltas that occurred in [startHeight,endHeight], then
+ * derives and inserts a summary row (totals, funded-address buckets, addresses
+ * created/used, with-assets, and quantum-unsafe counts) into
+ * StatsAddress_<timeFrame>. Both tables are created on the first window.
+ * @param timeFrame
+ * @param endTime
+ * @param startHeight
+ * @param endHeight
+ */
 void Database::updateAddressStats(unsigned int timeFrame, unsigned int endTime, unsigned int startHeight, unsigned int endHeight) {
     struct Change {
         string address;
@@ -3217,6 +3430,16 @@ void Database::updateAddressStats(unsigned int timeFrame, unsigned int endTime, 
             exceptionFailedInsert());
 }
 
+/**
+ * Returns per-algo block statistics for windows whose end_time falls in
+ * [start,end]. Brings stats up to date first (updateStats).
+ * @param start
+ * @param end
+ * @param timeFrame - stat window size; selects the StatsAlgo_<timeFrame> table
+ * @return
+ * Possible Errors:
+ *  exceptionDataPruned if algo stats are not available
+ */
 std::vector<AlgoStats> Database::getAlgoStats(unsigned int start, unsigned int end, unsigned int timeFrame) {
     //make sure stats are upto date
     if (!canGetAlgoStats()) throw exceptionDataPruned();
@@ -3249,6 +3472,16 @@ std::vector<AlgoStats> Database::getAlgoStats(unsigned int start, unsigned int e
     return algoStatsList;
 }
 
+/**
+ * Returns per-window address statistics for windows whose end_time falls in
+ * [start,end]. Brings stats up to date first (updateStats).
+ * @param start
+ * @param end
+ * @param timeFrame - stat window size; selects the StatsAddress_<timeFrame> table
+ * @return
+ * Possible Errors:
+ *  exceptionDataPruned if address stats are not available
+ */
 std::vector<AddressStats> Database::getAddressStats(unsigned int start, unsigned int end, unsigned int timeFrame) {
     //make sure stats are upto date
     if (!canGetAddressStats()) throw exceptionDataPruned();
@@ -3379,6 +3612,13 @@ int Database::executeSqliteStepWithRetry(sqlite3_stmt* stmt, int maxRetries, int
     return rc; // Return the last error code if maxRetries reached
 }
 
+/**
+ * Prepares, steps (with busy-retry), and finalizes a one-off SQL statement that
+ * returns no rows. Throws exceptionCreatingStatement if preparation fails, or a
+ * copy of errorToThrowOnFail if the step does not return SQLITE_DONE.
+ * @param query
+ * @param errorToThrowOnFail - exception thrown when the statement fails to run
+ */
 void Database::executeSQLStatement(const string& query, const std::exception& errorToThrowOnFail) {
     int rc;
     sqlite3_stmt* stmt;
@@ -3440,6 +3680,14 @@ bool Database::indexExists(const string& indexName) {
     sqlite3_finalize(stmt);
     return exists;
 }
+/**
+ * Creates one queued performance index (from addPerformanceIndex). Pops indexes
+ * off the pending list, skipping any that already exist, and creates the next
+ * real one, setting state to ChainAnalyzer::BUSY while doing so. If creation
+ * fails the index is pushed back to be retried later. Call repeatedly to drain
+ * the queue.
+ * @param state - chain-analyzer state flag set to BUSY during index creation
+ */
 void Database::executePerformanceIndex(int& state) {
     //find an index that needs adding or exit if none to add
     PerformanceIndex index;

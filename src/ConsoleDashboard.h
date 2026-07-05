@@ -1,6 +1,17 @@
 //
 // Console Dashboard - in-place TUI for DigiAsset Core
 //
+// ConsoleDashboard is the live full-screen terminal UI the DigiAssetWindows node
+// draws in its console. A background thread repaints (via VT100 escape codes) a
+// fixed layout showing service health (DigiByte Core / DB / IPFS / RPC / Web),
+// sync progress and ETA, asset counts and PSP permanent-list coverage, IPFS
+// bitswap "serving" stats, pool registration/payment status, and a scrolling
+// log pane. It also handles single-key commands (quit, port check, IPFS
+// announce fix, verify, list pool nodes, help). Most network/DB probes run on
+// detached threads and publish results into mutex-guarded fields that render()
+// snapshots. This is node-side diagnostics only; it does not run in the pool
+// server.
+//
 
 #ifndef DIGIASSET_CORE_CONSOLEDASHBOARD_H
 #define DIGIASSET_CORE_CONSOLEDASHBOARD_H
@@ -15,6 +26,13 @@
 #include <thread>
 #include <chrono>
 
+/**
+ * Live console dashboard. Call enableVT100() once at program start, then start()
+ * to spawn the refresh thread; stop() joins it and restores the cursor. Log
+ * routes messages here via addMessage(). Thread-safety: fields written by the
+ * detached probe threads are each guarded by a dedicated mutex named in the
+ * member comments below.
+ */
 class ConsoleDashboard {
 public:
     ConsoleDashboard();

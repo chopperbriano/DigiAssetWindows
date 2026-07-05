@@ -1,6 +1,11 @@
 //
 // Created by mctrivia on 17/03/24.
 //
+// RPC method "getassetholders": implements the JSON-RPC handler that lists every
+// address currently holding a given DigiAsset together with the quantity each holds.
+// Registered with the node's RPC server and used by explorers/wallets to enumerate
+// an asset's holder distribution. Part of the node deployable (DigiAssetWindows.exe).
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

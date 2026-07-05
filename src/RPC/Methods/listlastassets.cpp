@@ -1,6 +1,14 @@
 //
 // Created by RenzoDD on 21/03/24.
 //
+// RPC method "listlastassets" for the DigiAsset node's JSON-RPC server.
+// A node-specific (non-Core) method: lists the most recently issued DigiAssets in
+// descending issuance order (newest first), starting from a given asset index, with
+// optional Permanent Storage Pool (psp) filtering and a choice of basic summary
+// output or full DigiAsset::toJSON. When a filter is active it over-fetches (limit*4)
+// so that up to numberOfRecords results survive filtering.
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"

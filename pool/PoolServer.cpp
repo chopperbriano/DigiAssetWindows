@@ -1,3 +1,21 @@
+//
+// PoolServer.cpp - the pool server's embedded HTTP server (Boost.Asio).
+//
+// Listens on the configured port with a small accept-thread + worker-pool
+// model, parses raw HTTP by hand (no framework), and serves the DigiAsset
+// Permanent Storage Pool protocol endpoints:
+//   GET  /permanent/<page>.json  - the canonical asset->CID work list
+//   POST /keepalive              - node liveness + payout-address registration
+//   POST /list/<floor>.json      - mctrivia-protocol registration/list call
+//   GET  /nodes.json, /map.json, /bad.json - node discovery + world map data
+//   GET  /pool/stats.json        - public treasury/donation/ledger stats
+// Node registrations are persisted via PoolDatabase; the registering node's
+// real IP is resolved (X-Forwarded-For behind the reverse proxy) so it can be
+// geolocated for the map. The anonymous namespace holds the HTTP/JSON/IP
+// parsing helpers and the read-only DigiByte Core + explorer lookups used to
+// build the stats response.
+//
+
 #include "PoolServer.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
@@ -323,6 +341,8 @@ namespace {
     }
 
     // --- HTTP response builder ---------------------------------------------
+    // Assemble a complete HTTP/1.1 response (status line, content-type/length,
+    // permissive CORS, Connection: close) with the given body.
     std::string buildResponse(int status,
                               const std::string& contentType,
                               const std::string& body) {
@@ -347,6 +367,10 @@ namespace {
     }
 }
 
+// Open, bind, and listen on the given TCP port immediately (so a bind failure
+// surfaces at construction), but don't accept connections until start(). The
+// io_context work guard is held as a member so the worker pool doesn't drain
+// as soon as the constructor returns.
 PoolServer::PoolServer(PoolDatabase& db, unsigned int port)
     : _db(db),
       _port(port),
@@ -367,6 +391,8 @@ PoolServer::~PoolServer() {
     stop();
 }
 
+// Spin up the worker thread pool (running the io_context) and the dedicated
+// accept thread. Idempotent — a second call while running is a no-op.
 void PoolServer::start() {
     if (_running.exchange(true)) return;
 
@@ -383,6 +409,8 @@ void PoolServer::start() {
     _acceptThread = std::thread([this]() { this->acceptLoop(); });
 }
 
+// Stop accepting, release the work guard, stop the io_context, and join the
+// accept thread and every worker. Idempotent; also called from the destructor.
 void PoolServer::stop() {
     if (!_running.exchange(false)) return;
 
@@ -401,6 +429,9 @@ void PoolServer::stop() {
     _threadPool.clear();
 }
 
+// Accept-thread body: block on accept(), bump the request counter, and post
+// each accepted socket to the io_context worker pool for handling. Exits when
+// stop() closes the acceptor.
 void PoolServer::acceptLoop() {
     while (_running.load()) {
         boost::system::error_code ec;
@@ -418,6 +449,11 @@ void PoolServer::acceptLoop() {
     }
 }
 
+// Worker-thread body for one connection: read the HTTP headers (up to a 16 KB
+// cap) then the Content-Length body, parse the request line into method/path,
+// resolve the client's real IP for geolocation, dispatch through
+// handleRequest, and write the response. Best-effort — any error just drops
+// the connection. Always shuts down and closes the socket at the end.
 void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t /*id*/) {
     try {
         // Read request headers. HTTP headers are terminated by \r\n\r\n.
@@ -513,6 +549,10 @@ void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t 
     socket.close(ignored);
 }
 
+// Route a parsed request (method + path) to the matching endpoint handler,
+// writing the status, content-type, and body into the out-params. Unmatched
+// requests get a 404 JSON error. clientIp is threaded through to the handlers
+// that register nodes.
 void PoolServer::handleRequest(const std::string& method,
                                const std::string& path,
                                const std::string& body,
@@ -571,6 +611,9 @@ void PoolServer::handleRequest(const std::string& method,
     outBody = "{\"error\":\"not found\"}";
 }
 
+// Store the wallet/treasury config used to build /pool/stats.json (donation
+// address, local Core RPC creds, explorer tx-link prefix and address API
+// prefix) and invalidate the stats cache so the next request refreshes.
 void PoolServer::setWalletInfo(const std::string& donationAddress,
                                const std::string& rpcUser,
                                const std::string& rpcPass,
@@ -587,6 +630,12 @@ void PoolServer::setWalletInfo(const std::string& donationAddress,
     _statsCacheTime = 0; // force a refresh on next stats request
 }
 
+// Build the public /pool/stats.json body: pool wallet balance, treasury
+// received/balance (via explorer), amount paid to hosts, verified/total node
+// counts, the geolocated node array for the world map, and the recent-payouts
+// ledger. The external lookups (Core RPC, explorer, ip-api geolocation) are
+// cached and refreshed at most once every 30s so this endpoint can't be used
+// to hammer those services.
 void PoolServer::handleStats(std::string& outBody) {
     // Snapshot the wallet config + refresh the cached balances if stale. The
     // RPC calls are rate-limited to once per 30s so this public endpoint can't
@@ -689,6 +738,9 @@ void PoolServer::handleStats(std::string& outBody) {
     outBody = js.str();
 }
 
+// Parse the page number out of /permanent/<page>.json and serve that page's
+// asset->CID work list from the db. Returns 400 on a malformed path or an
+// unparseable page number.
 void PoolServer::handlePermanent(const std::string& path, int& outStatus, std::string& outBody) {
     // /permanent/<page>.json
     const std::string prefix = "/permanent/";
@@ -710,6 +762,10 @@ void PoolServer::handlePermanent(const std::string& path, int& outStatus, std::s
     outBody = _db.buildPermanentPageJson(page);
 }
 
+// Handle a node keepalive: parse the form-encoded body, and if it carries both
+// a payout address and peerId, upsert the node (recording clientIp for the
+// map). Always replies with mctrivia's exact expected sentinel string, which
+// existing clients treat as success.
 void PoolServer::handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody) {
     // The C++ client posts form-encoded: address=...&peerId=...&visible=v&secret=...
     auto form = parseFormBody(body);
@@ -726,6 +782,10 @@ void PoolServer::handleKeepalive(const std::string& body, const std::string& cli
     outBody = "{\"error\":\"unsubscribe failed will time out anyways\"}";
 }
 
+// Handle the mctrivia-protocol /list registration call: pull peerId + payout
+// from the JSON body and upsert the node (with clientIp). Replies with an
+// empty changes block plus payoutsEnabled/phase flags so new-format clients
+// can show the pool's payout status while legacy clients still see a 200 OK.
 void PoolServer::handleList(const std::string& path, const std::string& body, const std::string& clientIp, int& outStatus, std::string& outBody) {
     // Body is JSON: {"height":N,"version":V,"show":bool,"peerId":"...","payout":"..."}
     std::string peerId = jsonField(body, "peerId");

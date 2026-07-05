@@ -1,6 +1,12 @@
 //
 // Created by mctrivia on 16/03/24.
 //
+// RPC method "getrawtransaction" for the DigiAsset node's JSON-RPC server.
+// This overrides DigiByte Core's getrawtransaction: it forwards the request to
+// the local DigiByte Core wallet and, when verbose is requested, decorates the
+// result with DigiAsset-layer data (asset inputs/outputs) via DigiByteTransaction::toJSON.
+// Registered in RPC/Server and dispatched by the RPC handler.
+//
 
 #include "AppMain.h"
 #include "RPC/Response.h"
