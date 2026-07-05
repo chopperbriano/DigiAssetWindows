@@ -29,7 +29,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.1.0'
+$ScriptVersion = '2.2.0'
 $Repo     = 'chopperbriano/DigiAssetWindows'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RepoRoot 'build'
@@ -131,7 +131,8 @@ foreach ($it in $items) {
 if ($updated -eq 0) { Write-Host "`nNothing updated." -ForegroundColor Yellow; return }
 
 foreach ($exe in $restartList) {
-    Start-Process -FilePath $exe -WorkingDirectory $DigiAssetDir
+    # -WindowStyle Normal so the node/pool dashboards come back VISIBLE.
+    Start-Process -FilePath $exe -WorkingDirectory $DigiAssetDir -WindowStyle Normal
     Write-Host "  restarted $(Split-Path -Leaf $exe)" -ForegroundColor Green
 }
 
