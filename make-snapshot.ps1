@@ -27,7 +27,7 @@
 param(
     [ValidateSet('both','digibyte','chaindb','manifest')][string]$Component = 'both',
     [string]$DigiByteDir  = 'C:\DigiByte',
-    [string]$DigiAssetDir = 'C:\DigiAsset',
+    [string]$DigiAssetDir = 'C:\DigiAssetWindows',
     # The actual DigiByte data directory (the folder containing blocks\ and
     # chainstate\). Leave blank to auto-detect C:\DigiByte\data or %APPDATA%\DigiByte.
     [string]$DataDir      = '',
@@ -39,7 +39,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.1.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'

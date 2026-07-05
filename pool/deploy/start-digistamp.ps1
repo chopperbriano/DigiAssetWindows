@@ -14,17 +14,17 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
-    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -Root C:\DigiAsset
+    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -Root C:\DigiAssetWindows
 #>
 [CmdletBinding()]
 param(
-    # Prefer the current layout (C:\DigiAsset); fall back to the old folder if
+    # Prefer the current layout (C:\DigiAssetWindows); fall back to the old folder if
     # that is where this box's data actually lives, so an existing pool keeps working.
-    [string]$Root = $(if (Test-Path 'C:\DigiAsset\config.cfg') { 'C:\DigiAsset' } elseif (Test-Path 'C:\DigiAssetWindows\config.cfg') { 'C:\DigiAssetWindows' } else { 'C:\DigiAsset' }),
+    [string]$Root = $(if (Test-Path 'C:\DigiAssetWindows\config.cfg') { 'C:\DigiAssetWindows' } elseif (Test-Path 'C:\DigiAsset\config.cfg') { 'C:\DigiAsset' } else { 'C:\DigiAssetWindows' }),
     [int]   $WaitForCoreSeconds = 300
 )
 $ErrorActionPreference = "Stop"
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}

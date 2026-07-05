@@ -19,13 +19,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$DigiAssetDir = "C:\DigiAsset",
+    [string]$DigiAssetDir = "C:\DigiAssetWindows",
     [string]$DigiByteDir  = "C:\DigiByte",
     [switch]$DisableAutostart,
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Continue"
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 
 # Elevation (needed to stop SYSTEM tasks / remove firewall rules).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

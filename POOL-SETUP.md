@@ -51,12 +51,12 @@ finish syncing before you enable payouts.
 
 Download `DigiAssetPoolServer.exe` from the
 [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page and
-put it in `C:\DigiAsset` (next to the node), **or** build it from source
+put it in `C:\DigiAssetWindows` (next to the node), **or** build it from source
 (`cmake --build build --config Release --target DigiAssetPoolServer`).
 
 ## 3. Write `pool.cfg`
 
-Create `C:\DigiAsset\pool.cfg`. Reuse the **same** `rpcuser`/`rpcpassword` that
+Create `C:\DigiAssetWindows\pool.cfg`. Reuse the **same** `rpcuser`/`rpcpassword` that
 the installer put in `C:\DigiByte\data\digibyte.conf` so the pool can reach
 DigiByte Core. Minimal starting config:
 
@@ -136,7 +136,7 @@ A node is eligible only if it was verified (reachable) in the last 24 h, has
 
 ## 7. Keep it running
 
-- **Auto-updates** — because `DigiAssetPoolServer.exe` lives in `C:\DigiAsset`, the
+- **Auto-updates** — because `DigiAssetPoolServer.exe` lives in `C:\DigiAssetWindows`, the
   node's maintenance task keeps it **in sync with the node**: when a new release
   ships, it stops the pool, swaps the exe, and restarts it (the pool + node are
   released together). You can also update on demand with

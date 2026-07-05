@@ -9,7 +9,7 @@
     default. The node's built-in maintenance task already auto-updates on a schedule;
     this is for updating on demand (and for the pool exe, which isn't auto-updated).
 
-.PARAMETER DigiAssetDir  Where the exes live (default C:\DigiAsset).
+.PARAMETER DigiAssetDir  Where the exes live (default C:\DigiAssetWindows).
 .PARAMETER IncludePool   Also update DigiAssetPoolServer.exe (auto-on if it's already there).
 .PARAMETER FromBuild     Use locally-built exes in .\build instead of GitHub.
 .PARAMETER Build         With -FromBuild, run the cmake Release build first.
@@ -21,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$DigiAssetDir = 'C:\DigiAsset',
+    [string]$DigiAssetDir = 'C:\DigiAssetWindows',
     [switch]$IncludePool,
     [switch]$FromBuild,
     [switch]$Build,
@@ -29,13 +29,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.1.0'
 $Repo     = 'chopperbriano/DigiAssetWindows'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RepoRoot 'build'
 $Tmp      = Join-Path $env:TEMP 'digiasset-update'
 
-# Elevate: writing into C:\DigiAsset and stopping processes may need admin.
+# Elevate: writing into C:\DigiAssetWindows and stopping processes may need admin.
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
     if ($PSCommandPath) {

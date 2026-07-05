@@ -5,8 +5,8 @@
 
     Stack it sets up (all automatic, all start on boot):
       * DigiByte Core wallet (digibyted)  -> C:\DigiByte   (blockchain + RPC)
-      * IPFS / kubo daemon                -> C:\DigiAsset  (file storage)
-      * DigiAsset for Windows node        -> C:\DigiAsset  (the node + dashboard)
+      * IPFS / kubo daemon                -> C:\DigiAssetWindows  (file storage)
+      * DigiAsset for Windows node        -> C:\DigiAssetWindows  (the node + dashboard)
 
 .DESCRIPTION
     TWO MODES in one file:
@@ -24,7 +24,7 @@
         then health-checks the whole stack and AGGRESSIVELY self-heals
         (restart tasks, re-download corrupt files, re-open firewall). Only
         pops a Windows alert if healing fails. Everything is logged to
-        C:\DigiAsset\logs.
+        C:\DigiAssetWindows\logs.
 
 .USAGE
     Right-click > Run with PowerShell (it will ask for Administrator), or:
@@ -42,7 +42,7 @@ param(
     [ValidateSet('Install','Service','LaunchNode')]
     [string]$Mode           = 'Install',
     [string]$DigiByteDir    = 'C:\DigiByte',
-    [string]$DigiAssetDir   = 'C:\DigiAsset',
+    [string]$DigiAssetDir   = 'C:\DigiAssetWindows',
     [string]$PayoutAddress  = '',
     [string]$PoolServer     = 'https://pool.digistamp.co',
     # Pinned baseline versions used for a FIRST install. Service mode then
@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.11.1'
+$SCRIPT_VERSION = '2.12.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to

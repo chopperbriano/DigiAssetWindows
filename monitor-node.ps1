@@ -7,16 +7,16 @@
 .USAGE
     powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1
     powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Watch          # refresh every 15s
-    powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Root C:\DigiAsset
+    powershell -ExecutionPolicy Bypass -File .\monitor-node.ps1 -Root C:\DigiAssetWindows
 #>
 [CmdletBinding()]
 param(
-    [string]$Root = "C:\DigiAsset",
+    [string]$Root = "C:\DigiAssetWindows",
     [switch]$Watch,
     [int]$Every = 15
 )
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}

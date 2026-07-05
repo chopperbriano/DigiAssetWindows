@@ -13,21 +13,21 @@
 .PARAMETER SnapshotUrl  URL of snapshot.json. Defaults to the official R2 feed, so
                         normally you pass nothing.
 .PARAMETER DataDir      DigiByte data directory to seed.
-                        Default: %APPDATA%\DigiByte (DigiByte Core's own default).
-                        Use C:\DigiByte\data for the DigiAsset layout.
+                        Default: C:\DigiByte\data (the DigiAsset for Windows layout).
+                        For a stock DigiByte Core install, pass %APPDATA%\DigiByte.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1
-    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -DataDir C:\DigiByte\data
+    powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -DataDir "$env:APPDATA\DigiByte"
 #>
 [CmdletBinding()]
 param(
     [string]$SnapshotUrl = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json',
-    [string]$DataDir = (Join-Path $env:APPDATA 'DigiByte')
+    [string]$DataDir = 'C:\DigiByte\data'
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.3.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 
 # Resumable BITS download with live %/speed/ETA; falls back to a plain download.

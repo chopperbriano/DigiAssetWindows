@@ -45,13 +45,13 @@ paid) — then does everything else automatically:
 
 - installs the **DigiByte Core GUI wallet** into `C:\DigiByte` and writes its config,
 - installs **IPFS Desktop** (the tray app) for your user,
-- downloads the latest **DigiAsset for Windows** node into `C:\DigiAsset` and writes its config,
+- downloads the latest **DigiAsset for Windows** node into `C:\DigiAssetWindows` and writes its config,
 - installs the **Visual C++ runtime** the node needs, if it's missing,
 - **opens your local firewall** and pre-approves the apps (so you don't get scary popups),
 - sets **all three to open when you log in**,
 - **tests** whether you're reachable from the internet and tells you what to forward,
 - installs a background **maintenance task** that, on every boot and every 6 hours,
-  **auto-updates the components** and re-checks health — logging to `C:\DigiAsset\logs`
+  **auto-updates the components** and re-checks health — logging to `C:\DigiAssetWindows\logs`
   and alerting you only if something needs your attention.
 
 You do **not** edit any files by hand. The only manual step is one router port
@@ -107,11 +107,11 @@ The easiest way to see everything at a glance is the **monitor script**. From an
 Administrator PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\DigiAsset\monitor-node.ps1          # one-time status
-powershell -ExecutionPolicy Bypass -File C:\DigiAsset\monitor-node.ps1 -Watch   # live, refreshes every 15s
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1          # one-time status
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1 -Watch   # live, refreshes every 15s
 ```
 
-(The installer drops `monitor-node.ps1` into `C:\DigiAsset` for you.)
+(The installer drops `monitor-node.ps1` into `C:\DigiAssetWindows` for you.)
 
 It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset for
 Windows**, your **local firewall** + **hosting ports** (4001 and 12024), and
@@ -136,16 +136,16 @@ That's it — leave it running and you'll be paid from the pool for the content 
 
 ## Stopping or removing it
 
-From an Administrator PowerShell (the installer put `stop-node.ps1` in `C:\DigiAsset`):
+From an Administrator PowerShell (the installer put `stop-node.ps1` in `C:\DigiAssetWindows`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1                    # stop now (restarts on next boot)
-powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -DisableAutostart  # stop + don't restart on boot
-powershell -ExecutionPolicy Bypass -File C:\DigiAsset\stop-node.ps1 -Uninstall         # stop + remove boot tasks/firewall + delete C:\DigiAsset
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\stop-node.ps1                    # stop now (restarts on next boot)
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\stop-node.ps1 -DisableAutostart  # stop + don't restart on boot
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\stop-node.ps1 -Uninstall         # stop + remove boot tasks/firewall + delete C:\DigiAssetWindows
 ```
 
 It shuts the wallet, IPFS Desktop, and the node down cleanly (not a hard kill).
-`-Uninstall` deletes `C:\DigiAsset` but leaves the DigiByte wallet (`C:\DigiByte` +
+`-Uninstall` deletes `C:\DigiAssetWindows` but leaves the DigiByte wallet (`C:\DigiByte` +
 its blockchain) and IPFS Desktop installed — remove those from **Settings > Apps**
 if you want them gone too.
 
