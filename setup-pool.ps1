@@ -33,7 +33,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.1.0'
+$SCRIPT_VERSION = '1.2.0'
 $Repo = 'https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master'
 $Rel  = 'https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download'
 
@@ -45,6 +45,18 @@ function Read-Conf($path){
         if($t -eq '' -or $t.StartsWith('#')){continue}; $i=$t.IndexOf('=')
         if($i -gt 0){ $h[$t.Substring(0,$i).Trim()]=$t.Substring($i+1).Trim() } } }
     return $h
+}
+# Best-effort DigiByte RPC call using the pool box's own digibyte.conf creds.
+# Returns the parsed .result, or $null if RPC/wallet isn't ready.
+function Invoke-DgbRpc($method, $params='[]'){
+    try {
+        $c = Read-Conf (Join-Path $DigiByteDir 'digibyte.conf')
+        if (-not $c['rpcuser']) { return $null }
+        $port = if ($c['rpcport']) { $c['rpcport'] } else { '14022' }
+        $b64  = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($c['rpcuser']):$($c['rpcpassword'])"))
+        $body = '{"jsonrpc":"1.0","id":"pool","method":"'+$method+'","params":'+$params+'}'
+        return (Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 15 -Body $body).result
+    } catch { return $null }
 }
 
 # --- Elevate (all steps need admin) ---------------------------------------
@@ -100,9 +112,19 @@ if (Test-Path $poolCfg) {
     $rport = if ($c['rpcport']) { $c['rpcport'] } else { '14022' }
     if (-not $ru -or -not $rp) { Say '  WARNING: could not read RPC creds from digibyte.conf - edit rpcuser/rpcpassword in pool.cfg by hand.' 'Yellow' }
     if (-not $TreasuryAddress) {
-        Say '  The treasury (donation) address is shown on your pool page; its balance is read' 'Gray'
-        Say '  from a public explorer, so it can live in ANY wallet.' 'Gray'
-        $TreasuryAddress = Read-Host '  Treasury (donation) DGB address'
+        # The donation address should be OWNED BY the pool wallet so donations land
+        # directly in the wallet payouts spend from (one pot, no manual sweeping) and
+        # the website + pool exe show the same balance. Generate it from the wallet.
+        $TreasuryAddress = Invoke-DgbRpc 'getnewaddress' '["treasury"]'
+        if ($TreasuryAddress) {
+            Say "  generated a pool-wallet donation address: $TreasuryAddress" 'Green'
+        } else {
+            Say '  DigiByte RPC/wallet not ready to generate one yet. Set it AFTER DigiByte is up:' 'Yellow'
+            Say '    1) & C:\DigiByte\daemon\digibyte-cli.exe -datadir=C:\DigiByte -conf=C:\DigiByte\digibyte.conf getnewaddress "treasury"' 'Gray'
+            Say '    2) put that address in pooldonationaddress= in pool.cfg and restart the pool.' 'Gray'
+            $TreasuryAddress = Read-Host '  Or paste a donation address now (blank = set it later)'
+            if (-not $TreasuryAddress) { $TreasuryAddress = 'SET_ME_FROM_getnewaddress' }
+        }
     }
     $lines = @(
         '# DigiAssetPoolServer config (written by setup-pool.ps1)',
@@ -115,6 +137,8 @@ if (Test-Path $poolCfg) {
         "rpcpassword=$rp",
         "rpcport=$rport",
         '',
+        '# Donation address - OWNED BY the pool wallet (getnewaddress), so donations',
+        '# fund payouts directly and the site + pool exe show the same balance.',
         "pooldonationaddress=$TreasuryAddress",
         'pooladdrapiprefix=https://digiexplorer.info/api/address/',
         'poolexplorertxprefix=https://digiexplorer.info/tx/',

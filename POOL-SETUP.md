@@ -71,9 +71,11 @@ rpcuser=digiasset
 rpcpassword=PASTE_THE_SAME_PASSWORD_HERE
 rpcport=14022
 
-# Public treasury (donation) address shown on your pool page. Can live in ANY
-# wallet - its balance is read from a public explorer, not your pool wallet.
-pooldonationaddress=YOUR_DGB_TREASURY_ADDRESS
+# Public donation address shown on your pool page. GENERATE IT FROM THE POOL
+# WALLET so donations land in the same wallet payouts spend from (one pot):
+#   digibyte-cli -datadir=C:\DigiByte -conf=C:\DigiByte\digibyte.conf getnewaddress "treasury"
+# (setup-pool.ps1 does this for you.) Its balance is read from a public explorer.
+pooldonationaddress=A_GETNEWADDRESS_FROM_YOUR_POOL_WALLET
 pooladdrapiprefix=https://digiexplorer.info/api/address/
 poolexplorertxprefix=https://digiexplorer.info/tx/
 
@@ -117,17 +119,23 @@ it 10-30 s on first run for the certificate. Details:
 
 ## 6. Fund it and turn on payouts
 
-There are **two separate pots** — this trips up everyone, so read it once:
+The key thing to understand: **`[E]` spends from the pool box's DigiByte Core
+wallet** (via `getbalance`), and the budget is `poolpayoutpercent`% of *that
+wallet's* balance. It does **not** spend from the `pooldonationaddress` label.
 
-- **Treasury** = your `pooldonationaddress` (any wallet, even cold). Donations
-  and product fees land here; its balance shows on the pool page.
-- **Pool wallet** = the DigiByte Core wallet on this server that `[E]` actually
-  spends from.
+**Recommended (one pot):** because `pooldonationaddress` was generated *by the
+pool wallet* (step 3 / `getnewaddress`), donations land straight in the wallet
+`[E]` spends — nothing to sweep. Fund it by pointing donors at that address.
 
-They are different wallets, so you must **periodically sweep DGB from the
-treasury into the pool wallet** to fund payouts. Then:
+> **Advanced (two pots, cold treasury):** if you'd rather keep donations in a
+> separate cold wallet, set `pooldonationaddress` to that cold address instead —
+> but then it's a *display-only* label and you must **manually sweep DGB from the
+> cold treasury into the pool box's wallet** to fund payouts. Only do this if you
+> understand the trade-off; the one-pot default is simpler and can't be mixed up.
 
-1. Fund the pool wallet and make sure DigiByte Core is **synced + unlocked**.
+Then:
+
+1. Make sure the pool wallet has DGB and DigiByte Core is **synced + unlocked**.
 2. Set `poolpayouts=1` in `pool.cfg` and restart the pool exe.
 3. Press `[P]` to **preview** (read-only): eligible nodes, budget, per-node amount.
 4. Press `[E]` to **execute** — it re-validates and asks Y/N before sending.
