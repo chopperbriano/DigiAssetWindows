@@ -125,6 +125,12 @@ void PoolDatabase::buildSchema() {
     // win.43 records the node's public IP (seen at registration) so the pool
     // web page can plot a world map of nodes.
     tryAddColumn("ALTER TABLE nodes ADD COLUMN lastAddr TEXT;");
+    // win.76 fairness: per-node EMA scores. coverageScore = how much of the
+    // permanent CID list the node provably provides (sampled each verify round);
+    // reliabilityScore = how consistently it passes verification. Payouts are
+    // split proportional to coverageScore * reliabilityScore.
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN coverageScore    REAL NOT NULL DEFAULT 0;");
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN reliabilityScore REAL NOT NULL DEFAULT 0;");
 
     // permanent_assets rows are imported from the first-run snapshot of
     // mctrivia's /permanent/<page>.json or added later by the operator.
@@ -237,6 +243,30 @@ void PoolDatabase::recordVerifyFailure(const std::string& peerId) {
     sqlite3_finalize(stmt);
 }
 
+void PoolDatabase::updateNodeScores(const std::string& peerId, double coverageObs,
+                                    bool hasCoverageSample, bool verifyOk) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const double A = 0.1;   // EMA smoothing (tunable): recent rounds weigh more
+    // Coverage only moves when we had live samples this round; reliability always.
+    const char* sql =
+        "UPDATE nodes SET "
+        " coverageScore    = CASE WHEN ? THEN ? * ? + (1.0 - ?) * coverageScore ELSE coverageScore END, "
+        " reliabilityScore = ? * ? + (1.0 - ?) * reliabilityScore "
+        "WHERE peerId = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_int   (stmt, 1, hasCoverageSample ? 1 : 0);
+    sqlite3_bind_double(stmt, 2, A);
+    sqlite3_bind_double(stmt, 3, coverageObs);
+    sqlite3_bind_double(stmt, 4, A);
+    sqlite3_bind_double(stmt, 5, A);
+    sqlite3_bind_double(stmt, 6, verifyOk ? 1.0 : 0.0);
+    sqlite3_bind_double(stmt, 7, A);
+    sqlite3_bind_text  (stmt, 8, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 std::vector<std::string> PoolDatabase::getPeerIdsForVerification(unsigned int limit) {
     std::lock_guard<std::mutex> lk(_mutex);
     // Least-recently-verified first. Also favors nodes we've never verified
@@ -292,9 +322,13 @@ std::vector<PoolDatabase::PayoutTarget> PoolDatabase::getVerifiedPayoutTargets()
     int64_t verifyCutoff = now - 24 * 60 * 60;       // verified in last 24h
 
     std::vector<PayoutTarget> out;
+    // Eligible AND provably hosting: seen in 7d, verified in 24h, not failed-out,
+    // AND coverageScore > 0 (has demonstrably provided sampled content). The
+    // payout weight is coverage * reliability, so a partial/flaky host earns less.
     const char* sql =
-        "SELECT peerId, payoutAddress FROM nodes "
+        "SELECT peerId, payoutAddress, coverageScore, reliabilityScore FROM nodes "
         "WHERE lastSeen >= ? AND lastVerifyOk >= ? AND verifyFails < 3 "
+        "AND coverageScore > 0 "
         "ORDER BY peerId;";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -306,7 +340,10 @@ std::vector<PoolDatabase::PayoutTarget> PoolDatabase::getVerifiedPayoutTargets()
             const unsigned char* a = sqlite3_column_text(stmt, 1);
             if (p) t.peerId = (const char*) p;
             if (a) t.payoutAddress = (const char*) a;
-            if (!t.payoutAddress.empty()) out.push_back(t);
+            t.coverage = sqlite3_column_double(stmt, 2);
+            t.reliability = sqlite3_column_double(stmt, 3);
+            t.weight = t.coverage * t.reliability;
+            if (!t.payoutAddress.empty() && t.weight > 0.0) out.push_back(t);
         }
         sqlite3_finalize(stmt);
     }

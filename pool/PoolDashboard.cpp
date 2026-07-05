@@ -288,30 +288,30 @@ void PoolDashboard::processInput() {
                 int rpcPort = 14022;
                 try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
 
-                auto targets = _db.getVerifiedPayoutTargets();
-                // Use the per-node amount computed and shown at [E] time so the
-                // send matches exactly what the operator confirmed.
-                double perNode = _pendingPerNode;
-                int64_t perNodeSat = (int64_t)(perNode * 100000000.0);
-
+                // Execute the exact per-node plan (weighted by coverage x
+                // reliability) computed and shown at [E] time.
                 int success = 0;
                 int failed = 0;
-                for (const auto& t: targets) {
-                    std::string result = sendToAddress(rpcUser, rpcPass, rpcPort,
-                                                       t.payoutAddress, perNode);
+                for (const auto& pay: _pendingPayouts) {
+                    const std::string& addr = pay.first;
+                    double amt = pay.second;
+                    int64_t amtSat = (int64_t)(amt * 100000000.0);
+                    std::string result = sendToAddress(rpcUser, rpcPass, rpcPort, addr, amt);
                     if (result.substr(0, 5) == "ERROR") {
-                        addLog("  FAIL " + t.payoutAddress + ": " + result);
+                        addLog("  FAIL " + addr + ": " + result);
                         failed++;
                     } else {
-                        addLog("  SENT " + t.payoutAddress + " " +
-                               std::to_string(perNode) + " DGB txid=" + result.substr(0, 16) + "...");
-                        _db.recordPayout(t.payoutAddress, perNodeSat, result);
+                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amt);
+                        addLog("  SENT " + addr + " " + std::string(ab) + " DGB txid=" + result.substr(0, 16) + "...");
+                        _db.recordPayout(addr, amtSat, result);
                         success++;
                     }
                 }
+                _pendingPayouts.clear();
                 addLog("Payout complete: " + std::to_string(success) + " sent, " +
                         std::to_string(failed) + " failed");
             } else {
+                _pendingPayouts.clear();
                 addLog("Payout cancelled.");
             }
         } else if (ch == 'p' || ch == 'P') {
@@ -323,20 +323,23 @@ void PoolDashboard::processInput() {
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
 
-            addLog("--- Payout Preview ---");
-            addLog("Verified nodes: " + std::to_string(targets.size()));
+            double totalWeight = 0.0; for (const auto& t: targets) totalWeight += t.weight;
+            addLog("--- Payout Preview (weighted by coverage x reliability) ---");
+            addLog("Eligible hosting nodes: " + std::to_string(targets.size()));
             char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend < 0 ? 0.0 : spend);
             addLog("Budget: " + std::string(buf) + " DGB (" + budgetMode + ")");
             if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
-            if (targets.empty()) addLog("No eligible nodes. Nodes must be verified within 24h.");
+            if (targets.empty()) addLog("No eligible nodes: must be verified within 24h AND provably hosting (coverage > 0).");
             else if (spend < 0) addLog("Could not read wallet balance (check rpcuser/rpcpassword/rpcport).");
             else if (spend == 0) addLog("No budget (" + budgetMode + "). If the pool wallet is empty, fund it (sweep DGB from the treasury); otherwise set poolpayoutpercent/poolspendperperiod.");
+            else if (totalWeight <= 0.0) addLog("No node has a payout weight yet (coverage/reliability still building - give the verifier time).");
             else {
-                double perNode = spend / (double) targets.size();
-                char perBuf[64]; snprintf(perBuf, sizeof(perBuf), "%.8f", perNode);
-                addLog("Each node receives: " + std::string(perBuf) + " DGB");
                 for (const auto& t: targets) {
-                    addLog("  -> " + t.payoutAddress);
+                    double amt = spend * t.weight / totalWeight;
+                    char line[176];
+                    snprintf(line, sizeof(line), "  %s  cover %.0f%%  uptime %.0f%%  -> %.8f DGB",
+                             t.payoutAddress.c_str(), t.coverage * 100.0, t.reliability * 100.0, amt);
+                    addLog(std::string(line));
                 }
             }
             double paid = _db.getPaidTotalDgb();
@@ -384,17 +387,30 @@ void PoolDashboard::processInput() {
                 } else if (spend == 0) {
                     addLog("Cannot execute: budget is 0 (" + budgetMode + "). Fund the pool wallet (sweep DGB from the treasury), or set poolpayoutpercent/poolspendperperiod.");
                 } else {
-                    double perNode = spend / (double) targets.size();
-                    _pendingPerNode = perNode;
-                    char buf[64]; snprintf(buf, sizeof(buf), "%.8f", perNode);
-                    addLog("--- CONFIRM PAYOUT ---");
-                    addLog("Budget: " + budgetMode);
-                    addLog("Sending " + std::string(buf) + " DGB to each of " +
-                            std::to_string(targets.size()) + " verified node(s)");
-                    char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.8f", spend);
-                    addLog("Total: " + std::string(totalBuf) + " DGB from your wallet");
-                    addLog("Press Y to confirm, any other key to cancel");
-                    _awaitingPayoutConfirm.store(true);
+                    double totalWeight = 0.0; for (const auto& t: targets) totalWeight += t.weight;
+                    if (totalWeight <= 0.0) {
+                        addLog("Cannot execute: no node has a payout weight yet (coverage x reliability still building).");
+                    } else {
+                        _pendingPayouts.clear();
+                        for (const auto& t: targets) {
+                            double amt = spend * t.weight / totalWeight;
+                            if (amt > 0.0) _pendingPayouts.push_back(std::make_pair(t.payoutAddress, amt));
+                        }
+                        addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
+                        addLog("Budget: " + budgetMode);
+                        char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
+                        addLog("Total " + std::string(totalBuf) + " DGB across " +
+                                std::to_string(_pendingPayouts.size()) + " node(s):");
+                        for (const auto& t: targets) {
+                            double amt = spend * t.weight / totalWeight;
+                            char line[176];
+                            snprintf(line, sizeof(line), "   %s  (cover %.0f%% x uptime %.0f%%)  %.8f DGB",
+                                     t.payoutAddress.c_str(), t.coverage * 100.0, t.reliability * 100.0, amt);
+                            addLog(std::string(line));
+                        }
+                        addLog("Press Y to confirm, any other key to cancel");
+                        _awaitingPayoutConfirm.store(true);
+                    }
                 }
             }
         } else if (ch == 'n' || ch == 'N') {
@@ -408,6 +424,8 @@ void PoolDashboard::processInput() {
             addLog("P = Preview payouts (read-only)   E = Execute payout (asks Y/N to confirm)");
             addLog("Verified row: nodes that passed the dial-back swarm/connect probe.");
             addLog("Failed out: nodes with 3+ consecutive probe failures (excluded from /nodes.json).");
+            addLog("Payouts are WEIGHTED: each node's share = coverage (share of the pool's");
+            addLog("  content it provably hosts) x reliability (how consistently it verifies).");
             addLog("Payouts: 'disabled' until poolpayouts=1 is set in pool.cfg.");
         }
     }

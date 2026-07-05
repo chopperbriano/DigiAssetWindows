@@ -102,8 +102,17 @@ public:
     struct PayoutTarget {
         std::string peerId;
         std::string payoutAddress;
+        double coverage    = 0.0;   // 0..1 EMA: share of sampled CIDs this node provides
+        double reliability = 0.0;   // 0..1 EMA: share of verify rounds it passed
+        double weight      = 0.0;   // coverage * reliability - the payout weight
     };
     std::vector<PayoutTarget> getVerifiedPayoutTargets();
+
+    // Fairness scoring: fold one verify round's observation into a node's
+    // coverage + reliability EMAs. coverageObs is that round's hit-rate (0..1),
+    // applied only if hasCoverageSample (skip on a measurement gap so it doesn't
+    // penalize the node); verifyOk is whether it passed reachability this round.
+    void updateNodeScores(const std::string& peerId, double coverageObs, bool hasCoverageSample, bool verifyOk);
 
     // Record a completed payout in the ledger.
     void recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,

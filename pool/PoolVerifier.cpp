@@ -103,17 +103,24 @@ void PoolVerifier::loop() {
         // we leave `providers` empty so the fallback is disabled and we rely on
         // direct dial only — this stops stale provider records from passing a
         // node when the content (or our own IPFS node) is effectively dead.
+        // Also keep the PER-CID provider sets (not just the union) so we can
+        // score each node's COVERAGE: of the sampled CIDs, how many does it
+        // actually provide? Sample a few more (6) than the old fallback needed
+        // so coverage is less noisy; the EMA in updateNodeScores smooths it.
+        std::vector<std::set<std::string>> sampleProviderSets;
         std::set<std::string> providers;
         bool contentLive = false;
         try {
-            for (const auto& cid: _db.getSampleCids(3)) {
+            for (const auto& cid: _db.getSampleCids(6)) {
                 if (!_running.load()) break;
                 if (!contentLive && fetchable(cid)) contentLive = true;
                 auto provs = findProviders(cid);
+                sampleProviderSets.push_back(provs);
                 providers.insert(provs.begin(), provs.end());
             }
         } catch (...) {}
-        if (!contentLive) providers.clear();
+        if (!contentLive) { providers.clear(); sampleProviderSets.clear(); }
+        size_t sampleN = sampleProviderSets.size();
 
         for (const auto& peer: peers) {
             if (!_running.load()) break;
@@ -133,6 +140,22 @@ void PoolVerifier::loop() {
             } else {
                 _db.recordVerifyFailure(peer);
             }
+
+            // Coverage this round = fraction of sampled CIDs whose provider set
+            // includes this peer. Same-machine node serves everything (1.0).
+            double coverage = 0.0;
+            if (isSelf) {
+                coverage = 1.0;
+            } else if (sampleN > 0) {
+                size_t hits = 0;
+                for (const auto& provs: sampleProviderSets) {
+                    for (const auto& id: provs) {
+                        if (peer.find(id) != std::string::npos || id.find(peer) != std::string::npos) { hits++; break; }
+                    }
+                }
+                coverage = (double) hits / (double) sampleN;
+            }
+            _db.updateNodeScores(peer, coverage, (isSelf || sampleN > 0), ok);
         }
 
         // Sleep ~60s between iterations, checking the stop flag every second
