@@ -126,10 +126,15 @@
   </p>
   <ol>
     <li>Install and sync DigiAsset for Windows (see the repo).</li>
-    <li>Point it at this pool &mdash; add to your <code>config.cfg</code>:
-      <pre>psp1server=https://pool.digistamp.co
+    <li>Point it at this pool &mdash; add to your <code>config.cfg</code>
+      (the installer sets all of this for you; this is for manual setups):
+      <pre>psp0subscribe=1
+psp0payout=YOUR_DGB_ADDRESS
+psp1server=https://pool.digistamp.co
 psp1subscribe=1
 psp1payout=YOUR_DGB_ADDRESS</pre>
+      <small>Pool 0 is your local pool (no server); pool 1 is this pool. Both need a
+      payout address or the node errors with &ldquo;Could not generate new PSP payout address&rdquo;.</small>
     </li>
     <li>For reliable verification, forward IPFS port <code>4001</code> on your router
       (nodes behind NAT can still qualify via a fallback check, but forwarding is faster and more reliable).</li>

@@ -266,10 +266,16 @@ operators.
 2. In `config.cfg`, subscribe to a pool and set your payout address (the `#` is
    the pool number; see `example.cfg` for all keys):
    ```
+   psp0subscribe=1
+   psp0payout=<your DGB address>          # pool 0 = local pool (no server); needs a payout too
+   psp1server=https://pool.digistamp.co   # pool 1 = the pool server you're joining
    psp1subscribe=1
-   psp1payout=<your DGB address>          # or an _label to auto-generate one
-   psp1server=http://<pool-host>:14028    # the pool server you're joining
+   psp1payout=<your DGB address>
    ```
+   Both pools need a payout address or the node errors with "Could not generate
+   new PSP payout address". A `_label` value auto-creates an address, but only if
+   a DigiByte wallet is loaded — use a real address to be safe. The installer sets
+   all of this for you.
 3. **Strongly recommended: forward IPFS port 4001** (or set `Addresses.Announce`
    in kubo). The pool verifies you're actually hosting before it pays you.
    Forwarded nodes verify instantly and reliably. Nodes behind NAT can still

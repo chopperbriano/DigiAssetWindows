@@ -169,13 +169,20 @@ the last 7 days.
    the fallback but less reliably.
 3. Point the node at the pool by adding to `config.cfg`:
    ```
+   psp0subscribe=1
+   psp0payout=YOUR_DGB_ADDRESS       # pool 0 = local pool (no server); needs a payout
    psp1server=https://pool.digistamp.co
+   psp1subscribe=1
+   psp1payout=YOUR_DGB_ADDRESS       # pool 1 = this pool
    ```
-   (New installs are prompted for this in the first-run wizard and default to the
-   DigiStamp pool, so most users don't need to edit anything by hand.)
-4. The node auto-generates a payout address and registers it with the pool via
-   `/list`. Watch the DigiAssetWindows dashboard's Payment row: `registered (no
-   payouts yet)` means the pool hasn't enabled payouts; `active` means it has.
+   (New installs are prompted for the address in the first-run wizard and default
+   to the DigiStamp pool, so most users don't need to edit anything by hand.)
+4. Set a **real** payout address for BOTH pools. If `psp0payout`/`psp1payout` are
+   left as the `_psppayout` label, the node tries to mint an address from a loaded
+   DigiByte wallet and errors with `Could not generate new PSP payout address`
+   when none is loaded. Watch the DigiAssetWindows dashboard's Payment row:
+   `registered (no payouts yet)` means the pool hasn't enabled payouts; `active`
+   means it has.
 
 ## Advertising your pool ("Join my pool" snippet)
 
