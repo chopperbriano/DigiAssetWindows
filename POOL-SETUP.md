@@ -4,9 +4,10 @@ This is the **pool operator** guide: how to stand up and run a Permanent Storage
 Pool that other people point their nodes at, and (optionally) pays them DGB for
 hosting DigiAsset content.
 
-> Just want to **host a node and earn** on someone else's pool? You're in the
-> wrong doc — see **[NODE-SETUP.md](NODE-SETUP.md)** instead. This doc is only
-> for people running the pool *server*.
+> **You almost certainly don't need this.** The **DigiStamp pool**
+> (`pool.digistamp.co`) is already run for you — just install a node with
+> **[NODE-SETUP.md](NODE-SETUP.md)** and it joins automatically. This doc is only
+> for the (rare) case of running your *own* separate pool server.
 
 A pool is one extra program — `DigiAssetPoolServer.exe` — that runs alongside a
 normal node stack. It keeps the canonical asset list, accepts node

@@ -24,22 +24,18 @@ always-on box). It asks only for your DGB payout address. Full walkthrough:
 > Building from source is **only for developers** — see [Build on Windows](#build-on-windows)
 > below. If you just want to run a node and earn DGB, use the one line above.
 
-**Two ways to take part:**
-- 🖥️ **Host a node and earn DGB** — the one-liner above. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
-- 🏦 **Run your own pool** (accept nodes, verify them, pay hosts) — one command deploys the whole pool (node stack + `DigiAssetPoolServer.exe` + HTTPS website + auto-start). In an **Administrator PowerShell**:
-  ```powershell
-  iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-pool.ps1 -OutFile "$env:TEMP\setup-pool.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-pool.ps1"
-  ```
-  Full guide: **[POOL-SETUP.md](POOL-SETUP.md)**.
+**Host a node and earn DGB.** That's the whole thing — run the one-liner above.
+Your node hosts DigiAsset content and automatically joins the **DigiStamp pool**
+(`pool.digistamp.co`), which verifies it and pays it DGB for hosting. You don't
+run or manage a pool — it's already run for you. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
 
 ## Repository layout
 | Path | What |
 |---|---|
-| `setup-digiasset.ps1` | **Node** installer (the one-liner). |
-| `setup-pool.ps1` | **Pool** installer (the one-liner). |
+| `setup-digiasset.ps1` | **Node installer — the one-liner. This is what you run.** |
 | `node/` | Node operator helpers: `monitor-node.ps1`, `stop-node.ps1`, `update-binaries.ps1`. |
 | `snapshots/` | Fast-sync tooling: `make-snapshot.ps1` (create), `seed-digibyte.ps1` (consume). |
-| `pool/` | Pool server C++ (`pool/*.cpp`) + `pool/deploy/` website/ops scripts (Caddy, start/backup). |
+| `pool/`, `setup-pool.ps1` | Pool-server code + installer. **Operator-only — you don't need these**; the DigiStamp pool is already run for you. |
 | `src/`, `cli/` | The node/analyzer C++ and command-line client. See **[ARCHITECTURE.md](ARCHITECTURE.md)**. |
 | `example.cfg` | Fully-commented `config.cfg` reference. |
 
