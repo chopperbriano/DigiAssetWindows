@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.12.0'
+$SCRIPT_VERSION = '2.13.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -386,6 +386,31 @@ function Get-DigiByteProgress {
                 -Body '{"jsonrpc":"1.0","id":"m","method":"getblockchaininfo","params":[]}'
         return [double]$r.result.verificationprogress
     } catch { return $null }
+}
+# Generic DigiByte RPC call - returns the parsed .result (throws on failure).
+function Invoke-DgbRpc([string]$method, [string]$paramsJson = '[]') {
+    $cfg = Read-Conf $DgbConf
+    $port = $RpcPort; if ($cfg['rpcport']) { try { $port = [int]$cfg['rpcport'] } catch {} }
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($cfg['rpcuser']):$($cfg['rpcpassword'])"))
+    $body = '{"jsonrpc":"1.0","id":"setup","method":"' + $method + '","params":' + $paramsJson + '}'
+    $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' `
+            -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 20 -Body $body
+    return $r.result
+}
+
+# Ensure a DigiByte wallet exists + is loaded. Modern DigiByte Core (Bitcoin Core
+# base) does NOT auto-create one, so a fresh node has no wallet - the node can't
+# get a payout address and the user has nothing to receive into. Idempotent: if a
+# wallet is already loaded it returns; otherwise it loads the default 'digiasset'
+# wallet if present, else creates it. Needs DigiByte RPC to be responding.
+function Ensure-DigiByteWallet {
+    try { $loaded = @(Invoke-DgbRpc 'listwallets'); if ($loaded.Count -gt 0) { return } }
+    catch { return }   # RPC not ready yet - a later cycle will handle it
+    try { Invoke-DgbRpc 'loadwallet' '["digiasset"]' | Out-Null; Log '  loaded DigiByte wallet "digiasset".' 'OK'; return } catch {}
+    try {
+        Invoke-DgbRpc 'createwallet' '["digiasset"]' | Out-Null
+        Log '  created a DigiByte wallet ("digiasset"). ENCRYPT it + back up wallet.dat (see the notes at the end).' 'OK'
+    } catch { Log "  could not create a DigiByte wallet yet (will retry): $($_.Exception.Message)" 'WARN' }
 }
 function Test-IpfsUp {
     $api = 'http://127.0.0.1:5001/api/v0/'
@@ -1227,6 +1252,7 @@ function Invoke-LaunchNode {
             if (-not (Wait-ForIpfs 600)) { Log 'launch-node: IPFS API not up after 10 min; starting node anyway (it retries internally).' 'WARN' }
             Log 'launch-node: waiting for DigiByte RPC (a seeded wallet may still be verifying the chain - this can take a while)...'
             if (-not (Wait-ForDigiByteRpc 1800)) { Log 'launch-node: DigiByte RPC not up after 30 min; starting node anyway.' 'WARN' }
+            Ensure-DigiByteWallet   # create/load a wallet so the node has a payout address
             $firstTime = $false
         }
 
@@ -1315,7 +1341,7 @@ function Invoke-Service {
     #        them "not running", which is normal; Autologon makes boot -> login
     #        automatic. Real problems (missing binaries / failed updates) alert. -
     $prog = Get-DigiByteProgress
-    if ($null -ne $prog) { Log ('DigiByte wallet: running, sync {0:P1}' -f $prog) 'OK' }
+    if ($null -ne $prog) { Log ('DigiByte wallet: running, sync {0:P1}' -f $prog) 'OK'; Ensure-DigiByteWallet }
     elseif (Test-ProcRunning 'digibyte-qt') { Log 'DigiByte wallet running (RPC not up yet - still starting/syncing).' 'WARN' }
     else { Log 'DigiByte wallet not running - starts when you log in (see Autologon).' 'WARN' }
 
