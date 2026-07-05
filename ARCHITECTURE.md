@@ -183,7 +183,7 @@ own server returns 500s on payout endpoints). Only pool operators run it.
   imports mctrivia's current `/permanent/0..N.json` so existing clients work
   immediately, then starts the HTTP server + verifier + dashboard.
 - **`pool/PoolServer.*`** — minimal boost::asio HTTP server. Routes the pool
-  wire protocol: `GET /permanent/<page>.json`, `GET/POST /list/<floor>.json`
+  wire protocol: `GET /permanent/<page>.json`, `POST /list/<floor>.json`
   (register payout address; reports honest payout-enabled state),
   `POST /keepalive`, `GET /nodes.json`, `GET /map.json`, `GET /bad.json`,
   `GET /pool/stats.json` (donation/treasury balances + geolocated node points).

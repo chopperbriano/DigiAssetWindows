@@ -131,7 +131,7 @@ void WebServer::serverLoop() {
     while (!_stopRequested) {
         try {
             net::io_context ioc{1};
-            tcp::acceptor acceptor{ioc, {net::ip::make_address("0.0.0.0"), _port}};
+            tcp::acceptor acceptor{ioc, {net::ip::make_address("127.0.0.1"), _port}}; //loopback only - local docs UI; was 0.0.0.0 (audit low)
 
             log->addMessage("Web Server listening on port " + std::to_string(_port));
 

@@ -3110,6 +3110,7 @@ unsigned int Database::getStatsEndTime(unsigned int timeFrame, unsigned int begi
     unsigned int startTime = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
 
+    if (timeFrame == 0) return 0;   //guard integer division-by-zero (audit low)
     return ((startTime / timeFrame) + 1) * timeFrame;
 }
 

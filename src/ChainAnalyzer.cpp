@@ -215,8 +215,8 @@ void ChainAnalyzer::setStoreNonAssetUTXO(bool shouldStore) {
 unsigned int ChainAnalyzer::pruneMax(unsigned int height) {
     if (_pruneAge < 0) return 0;                //no pruning
     if (height % _pruneInterval != 0) return 0; //not time to prune
-    if (height - _pruneAge < 0) return 0;
-    return height - _pruneAge;
+    if (height <= (unsigned) _pruneAge) return 0; //below the prune window - unsigned, so the old (height-_pruneAge<0) was dead code (audit low)
+    return height - (unsigned) _pruneAge;
 }
 
 /**
