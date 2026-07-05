@@ -380,7 +380,11 @@ PoolServer::PoolServer(PoolDatabase& db, unsigned int port)
     // _workGuard as a MEMBER, not a local — same fix as RPC::Server in
     // the main exe. Without this the thread pool exits right after the
     // ctor returns.
-    boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), (unsigned short) _port);
+    // Bind LOOPBACK only. All legitimate traffic arrives via localhost - the
+    // Caddy reverse proxy (public HTTPS) and any co-located node both connect to
+    // 127.0.0.1:<port>. Binding 0.0.0.0 needlessly exposed the pool directly to
+    // the internet. (audit MUST-FIX #6/#7)
+    boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::make_address("127.0.0.1"), (unsigned short) _port);
     _acceptor.open(endpoint.protocol());
     _acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
     _acceptor.bind(endpoint);
@@ -456,6 +460,14 @@ void PoolServer::acceptLoop() {
 // the connection. Always shuts down and closes the socket at the end.
 void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t /*id*/) {
     try {
+        // Hard read/write deadline so a slow client (slowloris / RUDY) can't park
+        // a worker thread forever - without this, 8 trickle connections take the
+        // whole pool offline. (audit MUST-FIX #6)
+        {
+            int timeoutMs = 10000;   // 10s; Windows SO_RCVTIMEO optval is ms
+            setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, (const char*) &timeoutMs, sizeof(timeoutMs));
+            setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, (const char*) &timeoutMs, sizeof(timeoutMs));
+        }
         // Read request headers. HTTP headers are terminated by \r\n\r\n.
         // We read in chunks until we see the terminator or exceed a sanity
         // cap. For the pool server's tiny requests, 16 KB is plenty.
@@ -511,6 +523,17 @@ void PoolServer::handleConnection(boost::asio::ip::tcp::socket socket, uint64_t 
                     } catch (...) {}
                 }
             }
+        }
+
+        // Cap the body size up front: the pool's requests are tiny, so refuse an
+        // oversized Content-Length - an unauthenticated multi-GB body would drive
+        // the worker pool to OOM. (audit MUST-FIX #5)
+        const size_t MAX_BODY = 64 * 1024;
+        if (contentLength > MAX_BODY) {
+            boost::system::error_code wec;
+            std::string tooBig = "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            boost::asio::write(socket, boost::asio::buffer(tooBig), wec);
+            return;
         }
 
         // Read the body (part already in buf + any remainder from the socket).

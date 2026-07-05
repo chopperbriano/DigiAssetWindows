@@ -101,12 +101,29 @@ namespace {
         return out;
     }
 
+    // A DGB address is only base58 or bech32 chars - never quotes/commas/spaces -
+    // so validating it also closes the JSON-injection vector when it is
+    // interpolated into the sendtoaddress params below. (audit MUST-FIX #8)
+    bool isValidDgbAddress(const std::string& a) {
+        if (a.size() < 26 || a.size() > 90) return false;
+        if (a.rfind("dgb1", 0) == 0) {
+            for (char c: a) if (!(std::islower((unsigned char) c) || std::isdigit((unsigned char) c))) return false;
+            return true;
+        }
+        if (a[0] != 'D' && a[0] != 'S') return false;
+        static const std::string b58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        for (char c: a) if (b58.find(c) == std::string::npos) return false;
+        return true;
+    }
+
     // Send amountDgb to a single address via DigiByte Core's sendtoaddress RPC.
     // On success returns the txid; on any failure returns a string starting
     // "ERROR: " (HTTP error, RPC error envelope, or a non-string result). The
     // caller relies on that prefix to avoid recording a failed send as paid.
     std::string sendToAddress(const std::string& rpcUser, const std::string& rpcPass,
                               int rpcPort, const std::string& address, double amountDgb) {
+        // Never send to an unvalidated address (rejects garbage + JSON injection). (audit MUST-FIX #8)
+        if (!isValidDgbAddress(address)) return "ERROR: invalid payout address rejected before send";
         // Build the JSON-RPC request for sendtoaddress.
         char amountBuf[64];
         snprintf(amountBuf, sizeof(amountBuf), "%.8f", amountDgb);

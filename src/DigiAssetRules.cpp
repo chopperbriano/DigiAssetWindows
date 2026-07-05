@@ -123,7 +123,9 @@ void DigiAssetRules::decodeApproval(const getrawtransaction_t& txData, BitIO& da
                     -1); //move back 1 bit since this 0 is part of output number
             unsigned int start = dataStream.getFixedPrecision();
             unsigned int length = dataStream.getFixedPrecision();
+            if ((uint64_t) start + length > txData.vout.size()) throw out_of_range("approval range out of bounds"); //audit MUST-FIX #2
             for (unsigned int outputNum = start; outputNum < start + length; outputNum++) {
+                if (txData.vout[outputNum].scriptPubKey.addresses.empty()) throw out_of_range("approval output has no address");
                 Signer s;
                 s.address = txData.vout[outputNum].scriptPubKey.addresses[0];
                 s.weight = txData.vout[outputNum].valueS - 600;
@@ -143,6 +145,7 @@ void DigiAssetRules::decodeApproval(const getrawtransaction_t& txData, BitIO& da
                 notDone = false;
             } else {
                 unsigned int outputNum = temp - 1;
+                if (outputNum >= txData.vout.size() || txData.vout[outputNum].scriptPubKey.addresses.empty()) throw out_of_range("approval output out of bounds"); //audit MUST-FIX #2
                 Signer s;
                 s.address = txData.vout[outputNum].scriptPubKey.addresses[0];
                 s.weight = dataStream.getFixedPrecision();
@@ -167,13 +170,16 @@ void DigiAssetRules::decodeRoyaltyUnits(const getrawtransaction_t& txData, BitIO
     if (dataStream.getBits(1) == 1) {
 
         //standard currency
-        _exchangeRate = DigiAsset::standardExchangeRates[dataStream.getBits(7)];
+        unsigned int erIndex = dataStream.getBits(7); //0..127 but only 20 standard rates exist
+        if (erIndex >= DigiAsset::standardExchangeRatesCount) throw out_of_range("standard exchange rate index out of bounds"); //audit MUST-FIX #4
+        _exchangeRate = DigiAsset::standardExchangeRates[erIndex];
 
     } else {
 
         //non standard
         dataStream.movePositionBy(-1);
         unsigned int output = dataStream.getFixedPrecision();
+        if (output >= txData.vout.size() || txData.vout[output].scriptPubKey.addresses.empty()) throw out_of_range("royalty units output out of bounds"); //audit MUST-FIX #4
         string address = txData.vout[output].scriptPubKey.addresses[0];
         _exchangeRate.address = address;
         _exchangeRate.index = static_cast<unsigned char>(txData.vout[output].valueS - 600);
@@ -256,6 +262,7 @@ void DigiAssetRules::decodeVoteAndExpiry(const getrawtransaction_t& txData, BitI
     //get address list
     if (voteStart == -1) {
         //default list(recommended as counts are tracked and garbage auto collected)
+        if (voteLength > DigiAsset::standardVoteCount) throw out_of_range("vote length exceeds standard address list"); //audit MUST-FIX #3
         for (unsigned char i = 0; i < voteLength; i++) {
             VoteOption opt;
             opt.address = DigiAsset::standardVoteAddresses[i];
@@ -265,7 +272,9 @@ void DigiAssetRules::decodeVoteAndExpiry(const getrawtransaction_t& txData, BitI
 
     } else {
         //from outputs
+        if (voteStart < 0 || (uint64_t)(unsigned) voteStart + voteLength > txData.vout.size()) throw out_of_range("vote outputs out of bounds"); //audit MUST-FIX #3
         for (unsigned int outputNum = voteStart; outputNum < (unsigned) voteStart + voteLength; outputNum++) {
+            if (txData.vout[outputNum].scriptPubKey.addresses.empty()) throw out_of_range("vote output has no address");
             VoteOption opt;
             opt.address = txData.vout[outputNum].scriptPubKey.addresses[0];
             opt.label = "";

@@ -358,14 +358,25 @@ void PoolDatabase::recordPayout(const std::string& payoutAddress, int64_t amount
         "INSERT INTO payouts_ledger (payoutAddress, amountDgbSat, owedAt, paidTxid, paidAt) "
         "VALUES (?, ?, ?, ?, ?);";
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
-    sqlite3_bind_text(stmt, 1, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 2, amountDgbSat);
-    sqlite3_bind_int64(stmt, 3, now);
-    sqlite3_bind_text(stmt, 4, txid.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 5, now);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    bool ok = false;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, payoutAddress.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, amountDgbSat);
+        sqlite3_bind_int64(stmt, 3, now);
+        sqlite3_bind_text(stmt, 4, txid.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 5, now);
+        ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+    }
+    if (!ok) {
+        // CRITICAL: recordPayout is only called on a REAL txid, so the DGB already
+        // left the wallet - but the ledger row failed to write. Without it, the
+        // once-per-period guard (getLastPayoutAt) stays stale and could allow a
+        // re-pay. Scream so the operator reconciles by hand. (audit M6)
+        fprintf(stderr, "[POOL][CRITICAL] payout SENT but LEDGER WRITE FAILED - reconcile manually: addr=%s sat=%lld txid=%s\n",
+                payoutAddress.c_str(), (long long) amountDgbSat, txid.c_str());
+        fflush(stderr);
+    }
 }
 
 double PoolDatabase::getPaidTotalDgb() {

@@ -158,7 +158,15 @@ namespace RPC {
                 _thread_pool.emplace_back([this] { run_thread(); });
             }
 
-            tcp::endpoint endpoint(tcp::v4(), _port);
+            // Bind LOOPBACK by default (the documented localhost-only design).
+            // This RPC forwards wallet money-movement calls to Core, so it must
+            // not be LAN/internet-reachable. rpcbind can override; a bad value
+            // falls back to 127.0.0.1. (audit MUST-FIX #7)
+            std::string bindAddr = config.getString("rpcbind", "127.0.0.1");
+            boost::system::error_code bindEc;
+            boost::asio::ip::address bindIp = boost::asio::ip::make_address(bindAddr, bindEc);
+            if (bindEc) bindIp = boost::asio::ip::make_address("127.0.0.1");
+            tcp::endpoint endpoint(bindIp, _port);
             log->addMessage("RPC::Server ctor: opening acceptor on port " + std::to_string(_port), Log::INFO);
             _acceptor.open(endpoint.protocol());
             log->addMessage("RPC::Server ctor: open() returned", Log::INFO);

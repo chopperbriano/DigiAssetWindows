@@ -100,8 +100,8 @@ from the working directory. Keys:
 | `pooldbpath` | `pool.db` | sqlite file for pool state |
 | `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
-| `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split equally across verified nodes. Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
-| `poolspendperperiod` | *(unset)* | Fixed DGB budget per period, split equally across verified nodes. Used only when `poolpayoutpercent` is unset. |
+| `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
+| `poolspendperperiod` | *(unset)* | Fixed DGB budget per period, split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Used only when `poolpayoutpercent` is unset. |
 | `poolpayoutperiodhours` | `24` | Minimum hours between payouts. `[E]` refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
 | `rpcuser` | *(unset)* | DigiByte Core RPC username — required for wallet `sendtoaddress`, `getbalance`, and the stats page. Copy from your DigiByte Core config. |
 | `rpcpassword` | *(unset)* | DigiByte Core RPC password. |
@@ -156,8 +156,9 @@ own local balance. The page shows the whole funnel: `Donated in` → `In treasur
 → (you sweep) → `Paid to hosts`.
 
 A node is **eligible for payout** only if it was verified (reachable) within the
-last 24h, has fewer than 3 consecutive verification failures, and was seen in
-the last 7 days.
+last 24h, has fewer than 3 consecutive verification failures, was seen in the
+last 7 days, AND is provably hosting (`coverageScore > 0`). Each eligible node's
+share is then **weighted by its coverage x reliability** — see **[FAIRNESS.md](FAIRNESS.md)**.
 
 ---
 
@@ -213,6 +214,8 @@ in front of the exe with one script.
   fallback proves the node *announced* and the content is *retrievable*, not
   that this specific node served the bytes; a determined actor could game it, so
   it's a reasonable v1 for an operator-approved pool but not Sybil-proof.
-- **Reward is a flat split** of `poolspendperperiod` across verified nodes — no
-  weighting by bytes served or uptime yet.
+- **Reward is weighted** by each node's `coverage x reliability` (coverage =
+  fraction of sampled permanent CIDs it provably provides; reliability = verify
+  pass-rate over recent rounds). A partial or flaky host earns proportionally
+  less; a reachable-but-not-hosting node earns nothing. See **[FAIRNESS.md](FAIRNESS.md)**.
 - The pool exe is **Windows-only** for now (`if(WIN32 AND MSVC)` in CMake).

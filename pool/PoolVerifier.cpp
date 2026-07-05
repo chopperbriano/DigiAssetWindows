@@ -34,6 +34,18 @@ namespace {
         }
         return out.str();
     }
+
+    // Extract the bare libp2p peerId from a bare id or a /p2p/<id>[/...] multiaddr,
+    // so provider records match a registered peer by EXACT identity. A substring
+    // match let an attacker register a peerId embedding a real provider's id and
+    // pass verification/coverage without hosting anything. (audit M2)
+    std::string extractPeerId(const std::string& s) {
+        size_t p = s.rfind("/p2p/");
+        std::string id = (p == std::string::npos) ? s : s.substr(p + 5);
+        size_t slash = id.find('/');
+        if (slash != std::string::npos) id = id.substr(0, slash);
+        return id;
+    }
 }
 
 // Hold a reference to the shared pool database and remember the base URL of
@@ -148,9 +160,10 @@ void PoolVerifier::loop() {
                 coverage = 1.0;
             } else if (sampleN > 0) {
                 size_t hits = 0;
+                std::string myId = extractPeerId(peer);
                 for (const auto& provs: sampleProviderSets) {
                     for (const auto& id: provs) {
-                        if (peer.find(id) != std::string::npos || id.find(peer) != std::string::npos) { hits++; break; }
+                        if (!myId.empty() && extractPeerId(id) == myId) { hits++; break; }
                     }
                 }
                 coverage = (double) hits / (double) sampleN;
@@ -181,10 +194,10 @@ bool PoolVerifier::verifyPeer(const std::string& peerIdOrMultiaddr,
     //    content being fetchable, so an empty set means "don't trust the DHT
     //    this round" and we fail closed. Match by substring so a bare peerId
     //    and a /p2p/<id> multiaddr form both resolve.
+    std::string myId = extractPeerId(peerIdOrMultiaddr);
+    if (myId.empty()) return false;
     for (const auto& prov: providers) {
-        if (!prov.empty() && peerIdOrMultiaddr.find(prov) != std::string::npos) {
-            return true;
-        }
+        if (!prov.empty() && extractPeerId(prov) == myId) return true;
     }
     return false;
 }

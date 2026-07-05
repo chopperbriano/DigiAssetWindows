@@ -324,10 +324,14 @@ void DigiByteTransaction::decodeAssetTransfer(BitIO& dataStream, const vector<As
         bool range = dataStream.getBits(1);
         bool percent = dataStream.getBits(1);
         uint16_t output = range ? dataStream.getBits(13) : dataStream.getBits(5);
-        uint64_t amount = percent ?
-                                  inputs[index][0].getCount() * (dataStream.getBits(8)+1) / 256 : //if a percentage mode amount is 1 byte value.  0xff=100%, 0x00=0.39%
-                                  dataStream.getFixedPrecision();
-        uint64_t totalAmount = range ? (output + 1) * amount : amount;
+        // Read the amount bits now (to keep the bitstream aligned) but DEFER the
+        // percent-mode inputs[index][0] dereference until after the index bounds
+        // check inside the try below - a bare operator[] OOB is UB and is NOT
+        // caught by the catch at the bottom of this loop. (audit MUST-FIX #1)
+        uint32_t percentByte = percent ? (dataStream.getBits(8) + 1) : 0; //0xff=100%, 0x00=0.39%
+        uint64_t fixedAmount = percent ? 0 : dataStream.getFixedPrecision();
+        uint64_t amount = 0;
+        uint64_t totalAmount = 0;
 
         //there was an error in legacy code that a 0 amount causes the input to get wasted and go to change
         if ((_assetTransactionVersion < 3) && (type != DIGIASSET_ISSUANCE) && (_inputs[0].assets.empty())) {
@@ -341,6 +345,11 @@ void DigiByteTransaction::decodeAssetTransfer(BitIO& dataStream, const vector<As
             if ((index >= inputs.size()) || (inputs[index].empty())) {
                 throw DigiAsset::exceptionInvalidTransfer();
             } //Request from input with no assets
+
+            //now that index is bounds-checked, it's safe to compute the amount
+            //(percent mode reads inputs[index][0]).
+            amount = percent ? (inputs[index][0].getCount() * percentByte / 256) : fixedAmount;
+            totalAmount = range ? (uint64_t)(output + 1) * amount : amount;
 
             //get
             uint64_t leftToRemoveFromInputs = totalAmount;
