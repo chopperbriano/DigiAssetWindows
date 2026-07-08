@@ -26,6 +26,9 @@
 
 #include "DigiByteCore_Exception.h"
 #include "DigiByteCore_Types.h"
+#include <condition_variable>
+#include <deque>
+#include <exception>
 #include <iomanip>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
@@ -67,6 +70,19 @@ namespace jsonrpc {
  * throw exceptionDigiByteCoreNotConnected otherwise.
  */
 class DigiByteCore {
+public:
+    // A fully self-contained pre-fetched block: the header/tx-id list PLUS this
+    // block's own transaction data (never the shared _txCache). Consumed by the
+    // ChainAnalyzer sync loop. `error` carries any fetch failure to the consumer
+    // (re-thrown there); `endOfChain` marks that the producer reached the tip.
+    struct PrefetchedBlock {
+        blockinfo_t info;
+        std::map<std::string, getrawtransaction_t> txData;
+        std::exception_ptr error = nullptr;
+        bool endOfChain = false;
+    };
+
+private:
     std::unique_ptr<jsonrpc::HttpClient> httpClient = nullptr;
     std::unique_ptr<jsonrpc::Client> client = nullptr;
     uint64_t _dgbToSat(std::string value);
@@ -87,6 +103,22 @@ class DigiByteCore {
     // TX cache for prefetched data (loaded before processing a block)
     std::mutex _txCacheMutex;
     std::map<std::string, getrawtransaction_t> _txCache;
+
+    // --- Block prefetch pipeline (opt-in; used only during deep bulk sync) ---
+    // A single producer thread walks the chain from a start hash, fetching each
+    // block (verbosity 2) into a SELF-CONTAINED PrefetchedBlock - its own txData
+    // map, NOT the shared _txCache - so an in-flight prefetch can never clobber
+    // the block the consumer is still draining (the original crash). A bounded
+    // queue caps memory + read-ahead. Errors are captured into the block and
+    // re-thrown by the consumer, so an RPC failure surfaces instead of hanging.
+    std::thread _pfThread;
+    std::mutex _pfMutex;
+    std::condition_variable _pfSpaceCv; // producer waits when queue full
+    std::condition_variable _pfDataCv;  // consumer waits when queue empty
+    std::deque<PrefetchedBlock> _pfQueue;
+    bool _pfStop = false;
+    static const size_t _pfMaxDepth = 4; // bounded read-ahead
+    void prefetchLoop(std::string hash);
 
 
 public:
@@ -135,6 +167,18 @@ public:
     blockinfo_t getBlock(const std::string& hash);
     getrawtransaction_t getRawTransaction(const std::string& txid);
     blockinfo_t getBlockVerbose(const std::string& hash); // getblock with verbosity 2 — loads TX cache
+
+    // --- Block prefetch pipeline (opt-in via config pipelinesync) ---
+    // startPrefetch: launch the producer thread walking the chain from startHash.
+    // getNextPrefetchedBlock: pop the next block in order (blocks until one is
+    //   ready or the producer stops); returns false only if stopped with nothing.
+    // loadPrefetchedTxCache: install a consumed block's txData as the current
+    //   _txCache so getRawTransaction() serves this block's TXs.
+    // stopPrefetch: signal + join the producer and clear the queue (idempotent).
+    void startPrefetch(const std::string& startHash);
+    bool getNextPrefetchedBlock(PrefetchedBlock& out);
+    void loadPrefetchedTxCache(std::map<std::string, getrawtransaction_t>&& txData);
+    void stopPrefetch();
     std::vector<unspenttxout_t> listUnspent(int minconf = 1, int maxconf = 99999999, const std::vector<std::string>& addresses = {});
     getaddressinfo_t getAddressInfo(const std::string& address);
 

@@ -119,6 +119,10 @@ void ChainAnalyzer::loadConfig() {
     setStoreNonAssetUTXO(config.getBool("storenonassetutxo", false));
     _verifyDatabaseWrite = config.getBool("verifydatabasewrite", true);
     _showAllBlockSyncTime = config.getBool("showallblocksynctimes", false);
+    // Opt-in: overlap block fetch (RPC) with block processing (DB) during deep
+    // bulk sync via a background prefetch thread. Default off (serial) - flip to
+    // benchmark. Only engages when >110 blocks behind, in the asset era.
+    _pipelineSync = config.getBool("pipelinesync", false);
 }
 
 /**
@@ -416,6 +420,7 @@ void ChainAnalyzer::phaseSync() {
     chrono::steady_clock::time_point beginTotalTime;
     long totalProcessed = 0;
     int insertBatch = 0;
+    bool pipelineActive = false; // whether the background prefetch producer is running
     stringstream ss;
 
     bool needsAssetInit = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
@@ -515,7 +520,11 @@ void ChainAnalyzer::phaseSync() {
             chrono::milliseconds dura(500);
             this_thread::sleep_for(dura);
             string currentHash = dgb->getBlockHash(_height);
-            if (hash != currentHash) { _state = REWINDING; return; }
+            if (hash != currentHash) {
+                if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
+                _state = REWINDING;
+                return;
+            }
             blockData = dgb->getBlock(hash);
         }
 
@@ -523,16 +532,68 @@ void ChainAnalyzer::phaseSync() {
         _nextHash = blockData.nextblockhash;
         _height++;
 
-        //get next block — use verbosity 2 during bulk sync to get all TX data in one call
-        if (bulkSync && (_height % 100 != 0)) {
-            hash = _nextHash;
+        // Get the next block. When pipelining is enabled and we're deep in
+        // asset-era bulk sync, pull the block a background thread already
+        // fetched while we were committing this one (overlapping RPC with DB
+        // work). Only engages >110 behind, where a reorg can't reach the sync
+        // frontier; near the tip we run fully serial (with the per-100 fork
+        // check) exactly as before.
+        bool wantPipeline = _pipelineSync && needsAssetProcessing && bulkSync && !_nextHash.empty();
+        if (wantPipeline) {
+            if (!pipelineActive) {
+                dgb->startPrefetch(_nextHash); // producer walks forward from here
+                pipelineActive = true;
+                log->addMessage("Pipeline sync ENABLED (background block prefetch)", Log::INFO);
+            }
+            DigiByteCore::PrefetchedBlock pb;
+            if (!dgb->getNextPrefetchedBlock(pb)) {
+                dgb->stopPrefetch();
+                pipelineActive = false;
+                return; // producer stopped with nothing (shutdown)
+            }
+            if (pb.error) {
+                dgb->stopPrefetch();
+                pipelineActive = false;
+                std::rethrow_exception(pb.error); // surface the RPC failure - no silent hang
+            }
+            if (pb.endOfChain) {
+                // Producer reached the tip; fall back to a serial fetch.
+                dgb->stopPrefetch();
+                pipelineActive = false;
+                hash = _nextHash;
+                blockData = dgb->getBlockVerbose(hash);
+            } else {
+                dgb->loadPrefetchedTxCache(std::move(pb.txData));
+                blockData = pb.info;
+                hash = blockData.hash;
+                // Safety net: the producer walks the same chain we advance, so
+                // heights must stay in lockstep. If they ever diverge, bail to
+                // serial rather than process a mismatched block.
+                if ((unsigned int) blockData.height != _height) {
+                    dgb->stopPrefetch();
+                    pipelineActive = false;
+                    log->addMessage("Pipeline height desync — reverting to serial fetch", Log::WARNING);
+                    hash = dgb->getBlockHash(_height);
+                    blockData = dgb->getBlockVerbose(hash);
+                }
+            }
         } else {
-            hash = dgb->getBlockHash(_height);
-        }
-        if (needsAssetProcessing && bulkSync) {
-            blockData = dgb->getBlockVerbose(hash); // 1 RPC call = block + all TXs
-        } else {
-            blockData = dgb->getBlock(hash);
+            if (pipelineActive) {
+                dgb->stopPrefetch(); // leaving bulk region / nearing tip
+                pipelineActive = false;
+                log->addMessage("Pipeline sync disabled (serial mode)", Log::INFO);
+            }
+            //use verbosity 2 during bulk sync to get all TX data in one call
+            if (bulkSync && (_height % 100 != 0)) {
+                hash = _nextHash;
+            } else {
+                hash = dgb->getBlockHash(_height);
+            }
+            if (needsAssetProcessing && bulkSync) {
+                blockData = dgb->getBlockVerbose(hash); // 1 RPC call = block + all TXs
+            } else {
+                blockData = dgb->getBlock(hash);
+            }
         }
 
         //save block header to database (batched for pre-asset blocks)
@@ -550,6 +611,7 @@ void ChainAnalyzer::phaseSync() {
     }
 
     //cleanup
+    if (pipelineActive) dgb->stopPrefetch(); // stop-requested / loop exit — join the producer
     if (insertBatch > 0) db->endTransaction();
 }
 
