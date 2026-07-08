@@ -52,9 +52,21 @@ function Get-AssetCount {
 
 Write-Host "=== bench-sync: pipelinesync=$Pipeline, window $StartHeight..$endHeight ($Blocks blocks) ===" -ForegroundColor Cyan
 
-# 1. Stop node + wipe chain.db for a true from-scratch sync.
+# 0. Disable the auto-restart supervisors, or they relaunch the node mid-bench
+#    and TWO instances collide on the exclusive-locked chain.db -> the sync
+#    stalls at a low height. Re-enabled in the finally block below.
+$supervisors = @('DigiStampNode','DigiStampMaintenance')
+foreach ($tn in $supervisors) {
+  try { Disable-ScheduledTask -TaskName $tn -ErrorAction Stop | Out-Null; Write-Host "  disabled supervisor task: $tn" } catch {}
+}
+try {
+
+# 1. Stop ALL node instances + wipe chain.db for a true from-scratch sync.
 Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
+if ((Get-Process DigiAssetWindows -ErrorAction SilentlyContinue)) {
+  throw "a DigiAssetWindows.exe is still running after stop - kill it before benchmarking (check for a supervisor relaunch)"
+}
 if (Test-Path $db) { Remove-Item $db -Force }
 Write-Host "  chain.db wiped (fresh sync)"
 
@@ -99,3 +111,12 @@ while ($true) {
 # 5. Stop the node.
 Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Write-Host "  node stopped. Done."
+
+}
+finally {
+  # Re-enable the supervisors so the node auto-starts again after benchmarking.
+  foreach ($tn in $supervisors) {
+    try { Enable-ScheduledTask -TaskName $tn -ErrorAction Stop | Out-Null; Write-Host "  re-enabled supervisor task: $tn" } catch {}
+  }
+  Write-Host "  (supervisors restored; the node will auto-start normally again)"
+}
