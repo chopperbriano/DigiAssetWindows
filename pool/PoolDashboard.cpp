@@ -557,8 +557,33 @@ void PoolDashboard::updateConsoleSize() {
 // probe/permanent counters, payout status and ledger totals, time and uptime),
 // then the scrolling log padded so the key-hint row stays pinned at the bottom.
 // All figures are pulled fresh from the db/server/verifier on each call.
+// Refresh the cached DB counters at most every 5s. Called from render() (single
+// render thread), so _counts needs no lock. The time-windowed counts use the
+// current time at refresh; 5s of staleness on a dashboard is imperceptible. (perf)
+void PoolDashboard::refreshCountsIfStale() {
+    auto nowSteady = std::chrono::steady_clock::now();
+    if (_countsInit &&
+        std::chrono::duration<double>(nowSteady - _lastCountsRefresh).count() < 5.0) {
+        return;
+    }
+    int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t hourAgo = nowSec - 3600;
+    _counts.totalNodes     = _db.countTotalNodes();
+    _counts.activeNodes    = _db.countNodesSeenSince(hourAgo);
+    _counts.permAssets     = _db.countPermanentAssets();
+    _counts.permPages      = _db.countPermanentPages();
+    _counts.verifiedRecent = _db.countVerifiedSince(hourAgo);
+    _counts.failedOut      = _db.countFailedOut();
+    _counts.paidTotal      = _db.getPaidTotalDgb();
+    _counts.paidCount      = _db.getPaidCount();
+    _lastCountsRefresh = nowSteady;
+    _countsInit = true;
+}
+
 void PoolDashboard::render() {
     updateConsoleSize();
+    refreshCountsIfStale();
 
     std::ostringstream out;
     out << HIDE_CURSOR << CURSOR_HOME;
@@ -576,13 +601,11 @@ void PoolDashboard::render() {
     // Status rows
     auto now = std::chrono::system_clock::now();
     int64_t uptime = std::chrono::duration_cast<std::chrono::seconds>(now - _startTime).count();
-    int64_t oneHourAgo = std::chrono::duration_cast<std::chrono::seconds>(
-                                 now.time_since_epoch()).count() - 3600;
 
-    unsigned int totalNodes = _db.countTotalNodes();
-    unsigned int activeNodes = _db.countNodesSeenSince(oneHourAgo);
-    unsigned int permAssets = _db.countPermanentAssets();
-    unsigned int permPages = _db.countPermanentPages();
+    unsigned int totalNodes = _counts.totalNodes;   // cached (refreshCountsIfStale)
+    unsigned int activeNodes = _counts.activeNodes;
+    unsigned int permAssets = _counts.permAssets;
+    unsigned int permPages = _counts.permPages;
     uint64_t requests = _server.getRequestCount();
 
     // ---- Aligned two-column header (same cell() pattern as DigiAssetWindows) ----
@@ -605,11 +628,9 @@ void PoolDashboard::render() {
         return result;
     };
 
-    // Dial-back verification counters.
-    int64_t verifyCutoff = std::chrono::duration_cast<std::chrono::seconds>(
-                                   now.time_since_epoch()).count() - 3600;
-    unsigned int verifiedRecent = _db.countVerifiedSince(verifyCutoff);
-    unsigned int failedOut = _db.countFailedOut();
+    // Dial-back verification counters (cached counts; live probe tallies).
+    unsigned int verifiedRecent = _counts.verifiedRecent;
+    unsigned int failedOut = _counts.failedOut;
     uint64_t probesAttempted = _verifier.getProbesAttempted();
     uint64_t probesSucceeded = _verifier.getProbesSucceeded();
 
@@ -673,8 +694,8 @@ void PoolDashboard::render() {
     // Row: Payout status + real ledger totals.
     {
         bool payoutsEnabled = _server.getPayoutsEnabled();
-        double paidTotal = _db.getPaidTotalDgb();
-        unsigned int paidCount = _db.getPaidCount();
+        double paidTotal = _counts.paidTotal;   // cached (refreshCountsIfStale)
+        unsigned int paidCount = _counts.paidCount;
 
         std::string payVal = payoutsEnabled ? "ENABLED" : "disabled";
         char paidBuf[64];

@@ -81,6 +81,26 @@ private:
     int _height = 40;
     void updateConsoleSize();
 
+    // Cached DB counters for render(). The refresh loop calls render() every
+    // 500ms; without this it would run ~8 DB queries - including a
+    // COUNT(DISTINCT assetId) full scan - twice a second, contending the DB
+    // mutex with /permanent. Refreshed at most every 5s. Touched only by the
+    // single render thread, so no extra lock is needed. (perf)
+    struct CachedCounts {
+        unsigned int totalNodes = 0;
+        unsigned int activeNodes = 0;   // seen in last 1h
+        unsigned int permAssets = 0;
+        unsigned int permPages = 0;
+        unsigned int verifiedRecent = 0;
+        unsigned int failedOut = 0;
+        double       paidTotal = 0.0;
+        unsigned int paidCount = 0;
+    };
+    CachedCounts _counts;
+    std::chrono::steady_clock::time_point _lastCountsRefresh;
+    bool _countsInit = false;
+    void refreshCountsIfStale();
+
     void refreshLoop();
     void render();
     void processInput();

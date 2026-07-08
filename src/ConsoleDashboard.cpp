@@ -461,13 +461,19 @@ void ConsoleDashboard::render() {
 
     DigiByteCore* dgb = app->getDigiByteCoreIfSet();
 
+    // Chain tip via getBlockCount is a synchronous RPC; refresh it at most every
+    // 3s rather than on every 500ms render. The tip moves ~once/15s anyway. (perf)
     if (dgb) {
-        try {
-            chainTip = dgb->getBlockCount();
-        } catch (...) {
-            chainTip = syncHeight; // fallback
+        auto sinceTip = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - _lastChainTipTime).count();
+        if (_cachedChainTip == 0 || sinceTip >= 3.0) {
+            try {
+                _cachedChainTip = dgb->getBlockCount();
+                _lastChainTipTime = std::chrono::steady_clock::now();
+            } catch (...) {}
         }
     }
+    chainTip = (_cachedChainTip > 0) ? _cachedChainTip : syncHeight; // fallback while unset
 
     // Determine sync status text
     if (syncState == ChainAnalyzer::SYNCED) {

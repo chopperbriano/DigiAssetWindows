@@ -132,6 +132,12 @@ private:
     uint64_t _assetCount = 0;
     std::chrono::steady_clock::time_point _lastAssetCountTime;
 
+    // Cached chain tip (getBlockCount RPC), refreshed every few seconds instead
+    // of on every 500ms render so the render thread doesn't do a synchronous RPC
+    // twice a second. (perf)
+    unsigned int _cachedChainTip = 0;
+    std::chrono::steady_clock::time_point _lastChainTipTime;
+
     // Application start time (system_clock for displaying actual time)
     std::chrono::system_clock::time_point _startTime;
 
