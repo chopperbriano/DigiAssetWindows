@@ -47,6 +47,7 @@ namespace RPC {
         //function to detect if there was no response
         bool empty() const;                            //true if nothing was ever stored in this Response
         size_t size() const;                           //estimated memory footprint in bytes
+        bool isCacheable() const;                      //false if blocksGoodFor<0 (never cache - e.g. live status)
 
         //functions to check if the cache should get deleted
         size_t addressChanged(const std::string& address) const;    //returns size if should delete, 0 if shouldn't

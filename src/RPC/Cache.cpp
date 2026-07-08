@@ -44,6 +44,11 @@ namespace RPC {
     // the running total; then removeOldestEntries() enforces the size cap.
     // Note: overwriting an existing entry does not adjust the size total.
     void Cache::addResponse(const std::string& method, const Json::Value& params, const Response& response) {
+        // Never store a "never cache" response (blocksGoodFor<0). Eviction relies
+        // on newBlockAdded(), which is skipped during bulk sync, so caching a live
+        // response here would freeze it stale for the whole initial sync (e.g.
+        // getnodestats reporting the same syncHeight forever).
+        if (!response.isCacheable()) return;
         std::array<uint8_t, 32> key = generateKey(method, params);
         std::lock_guard<std::mutex> lock(_cacheMutex);
 

@@ -47,6 +47,13 @@ namespace RPC {
     bool Response::empty() const {
         return (_size == sizeof(Response));
     }
+    //A response marked blocksGoodFor<0 must NEVER be cached. Eviction otherwise
+    //relies on newBlockAdded(), which the analyzer skips during bulk sync - so a
+    //"never cache" (or blocksGoodFor==0) live response would be served stale for
+    //the whole initial sync. The cache consults this before storing.
+    bool Response::isCacheable() const {
+        return _blocksGoodFor >= 0;
+    }
     //Cache-eviction predicate: if the given address is in this response's
     //watch list, return the response's size (signal to delete); otherwise 0.
     size_t Response::addressChanged(const std::string& address) const {

@@ -91,8 +91,11 @@ namespace RPC {
 
             Response response;
             response.setResult(result);
-            // Don't cache - operators may be polling this to watch rates.
-            response.setBlocksGoodFor(0);
+            // Never cache - operators poll this to watch live sync progress. Must
+            // be <0 (not 0): a 0 response is still cached and only evicted by
+            // newBlockAdded(), which is skipped during bulk sync, so it would
+            // report the same syncHeight for the whole initial sync.
+            response.setBlocksGoodFor(-1);
             return response;
         }
     }
