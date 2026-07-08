@@ -33,7 +33,8 @@ param(
   [int]$StartHeight = 8432316,   # DigiAsset activation - where asset processing begins
   [int]$Blocks = 25000,          # size of the measured window
   [int]$PollSeconds = 10,
-  [string]$BackupPath = ''
+  [string]$BackupPath = '',
+  [int]$AssetPort = 0             # DigiAsset node RPC port the CLI talks to (0 = auto: rpcassetport or 14024)
 )
 $ErrorActionPreference = 'Stop'
 if (-not $BackupPath) { $BackupPath = Join-Path $Dir 'chain_bench_backup.db' }
@@ -45,6 +46,16 @@ $endHeight = $StartHeight + $Blocks
 $supervisors = @('DigiStampNode','DigiStampMaintenance')
 
 foreach ($p in @($cfg,$exe,$cli)) { if (-not (Test-Path $p)) { throw "missing: $p" } }
+
+# Resolve the DigiAsset RPC port the CLI connects to (rpcassetport, default 14024).
+# The CLI reads its height from whatever OWNS this port - so the benchmark must
+# make sure that owner is the node WE started, not a stray old-named instance.
+if ($AssetPort -le 0) {
+  $AssetPort = 14024
+  $pm = [regex]::Match(((Get-Content $cfg) -join "`n"), '(?m)^\s*rpcassetport\s*=\s*(\d+)')
+  if ($pm.Success) { $AssetPort = [int]$pm.Groups[1].Value }
+}
+Write-Host "  (DigiAsset RPC port = $AssetPort)"
 
 # Must be admin - otherwise Stop-Process can't kill a SYSTEM-owned node instance,
 # and the benchmark ends up reading a zombie node stuck at a low height.
@@ -66,11 +77,34 @@ function Get-Stat($name) {
 function Get-NodeProcs {
   Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*DigiAsset*' -and $_.Name -notlike '*cli*' }
 }
+# PID(s) currently LISTENING on the DigiAsset RPC port. This is what the CLI (and
+# therefore the height reading) actually talks to - by port, not by process name,
+# so it catches a stray of ANY name.
+function Get-PortOwnerPids {
+  @(Get-NetTCPConnection -LocalPort $AssetPort -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+}
+function Describe-Pid($procId) {
+  $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+  if ($p) { return ("pid $procId ($($p.Name)) $($p.Path)") } else { return "pid $procId (gone)" }
+}
 function Stop-AllNodes {
+  # Kill node-named processes AND whatever holds the RPC port (any name).
   Get-NodeProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+  foreach ($op in Get-PortOwnerPids) { Stop-Process -Id $op -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Seconds 3
-  $left = Get-NodeProcs
-  if ($left) { throw ("could not stop all node instances (ids: " + ($left.Id -join ',') + "). Are you elevated?") }
+  $left = @(Get-NodeProcs) + @(Get-PortOwnerPids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+  $left = $left | Where-Object { $_ } | Select-Object -Unique
+  if ($left) { throw ("could not stop all node/RPC-port instances: " + (($left | ForEach-Object { Describe-Pid $_.Id }) -join '; ') + ". Are you elevated?") }
+}
+# Verify the node WE started is the one the CLI reads. If a different PID owns the
+# RPC port, name it loudly (this is the stray that was faking the stuck height).
+function Assert-OwnsPort($ourPid) {
+  $owners = Get-PortOwnerPids
+  if (-not $owners) { return }  # RPC not up yet
+  if ($owners -notcontains $ourPid) {
+    throw ("RPC port $AssetPort is owned by " + (($owners | ForEach-Object { Describe-Pid $_ }) -join '; ') +
+           " - NOT the node we started (pid $ourPid). That stray is what the CLI/bench was reading. Kill it and re-run.")
+  }
 }
 function Set-Flag($v) {
   $lines = Get-Content $cfg
@@ -106,9 +140,11 @@ try {
     while ($true) {
       Start-Sleep -Seconds $PollSeconds
       Assert-Single $ourPid
+      Assert-OwnsPort $ourPid
       $h = Get-Stat 'syncHeight'
-      if ($h -lt 0) { Write-Host "  (waiting for RPC...)"; continue }
-      Write-Host "  height $h"
+      $owner = (Get-PortOwnerPids) -join ','
+      if ($h -lt 0) { Write-Host "  (waiting for RPC... rpc-port owner=[$owner])"; continue }
+      Write-Host "  height $h   [rpc-port $AssetPort owner=$owner, ours=$ourPid]"
       if ($h -ge $StartHeight) { break }
     }
     Stop-AllNodes
@@ -138,14 +174,16 @@ try {
   while ($true) {
     Start-Sleep -Seconds $PollSeconds
     Assert-Single $ourPid
+    Assert-OwnsPort $ourPid
     $h = Get-Stat 'syncHeight'
-    if ($h -lt 0) { Write-Host "  (waiting for RPC...)"; continue }
+    $owner = (Get-PortOwnerPids) -join ','
+    if ($h -lt 0) { Write-Host "  (waiting for RPC... rpc-port owner=[$owner])"; continue }
     if (-not $t0) {
       if ($h -ge $StartHeight) { $t0 = Get-Date; Write-Host "  >> window START at height $h ($(Get-Date $t0 -Format HH:mm:ss))" -ForegroundColor Green }
-      else { Write-Host "  sync... height $h" }
+      else { Write-Host "  sync... height $h   [rpc-port $AssetPort owner=$owner, ours=$ourPid]" }
     } else {
       $rate = [math]::Round(($h - $StartHeight) / ((Get-Date) - $t0).TotalSeconds, 1)
-      Write-Host "  height $h  (~$rate blk/s so far)"
+      Write-Host "  height $h  (~$rate blk/s so far)   [owner=$owner]"
       if ($h -ge $endHeight) {
         $secs = ((Get-Date) - $t0).TotalSeconds
         $bps  = [math]::Round($Blocks / $secs, 1)
