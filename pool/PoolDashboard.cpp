@@ -608,22 +608,32 @@ void PoolDashboard::render() {
     unsigned int permPages = _counts.permPages;
     uint64_t requests = _server.getRequestCount();
 
-    // ---- Aligned two-column header (same cell() pattern as DigiAssetWindows) ----
+    // ---- Aligned two-column header ----
+    // COL1_VALUE_W is wide enough for the longest first-column value
+    // ("5,361 ok / 7,936" etc.) so the second column never starts mid-value.
     const int COL1_LABEL_W = 16;
-    const int COL1_VALUE_W = 14;
-    const int COL2_LABEL_W = 14;
+    const int COL1_VALUE_W = 20;
+    const int COL2_LABEL_W = 15;
 
     auto cell = [&](const std::string& label, const std::string& value,
                     const char* color, int labelWidth, int valueWidth) -> std::string {
-        std::string result;
-        std::string lp = label + ":" + std::string(std::max(0, labelWidth - (int) label.size() - 1), ' ');
-        result += lp;
+        // "label:" left-justified in labelWidth, ALWAYS followed by >=1 space so
+        // the value never butts against the colon (fixes "spend:from this wallet").
+        std::string labelField = label + ":";
+        if ((int) labelField.size() < labelWidth) {
+            labelField += std::string(labelWidth - (int) labelField.size(), ' ');
+        } else {
+            labelField += " ";
+        }
+        std::string result = labelField;
         result += color;
         result += value;
         result += RESET;
         if (valueWidth > 0) {
             int vpad = valueWidth - (int) value.size();
-            if (vpad > 0) result += std::string(vpad, ' ');
+            // Pad to the column width, or keep a 2-space gutter if the value
+            // overflowed, so the next column can't collide with it.
+            result += std::string(vpad > 0 ? vpad : 2, ' ');
         }
         return result;
     };
@@ -636,8 +646,34 @@ void PoolDashboard::render() {
 
     // Row: Listening | Requests
     out << ERASE_LINE << "  "
-        << cell("Listening", "Port " + std::to_string(_server.getPort()), FG_GREEN, COL1_LABEL_W, COL1_VALUE_W)
+        << cell("Listening", "Port " + std::to_string(_server.getPort()) + " (local)", FG_GREEN, COL1_LABEL_W, COL1_VALUE_W)
         << cell("Requests", formatNumber(requests), FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+        << "\n";
+
+    // External IP (resolved via an HTTP echo service, refreshed rarely so render
+    // stays cheap) + the ports the operator must open on the router/firewall.
+    {
+        int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        if (_externalIp.empty() || nowSec - _externalIpCheckedAt > 600) {
+            try {
+                std::string ip = CurlHandler::get("https://api.ipify.org", 4000);
+                while (!ip.empty() && (ip.back() == '\n' || ip.back() == '\r' ||
+                                       ip.back() == ' ' || ip.back() == '\t')) ip.pop_back();
+                if (!ip.empty() && ip.size() < 46) _externalIp = ip; // fits IPv4/IPv6
+            } catch (...) {}
+            _externalIpCheckedAt = nowSec;
+        }
+    }
+    // Row: External IP (full width)
+    out << ERASE_LINE << "  "
+        << cell("External IP", _externalIp.empty() ? "resolving..." : _externalIp,
+                _externalIp.empty() ? FG_YELLOW : FG_GREEN, COL1_LABEL_W, 0)
+        << "\n";
+    // Row: ports to open on the router/firewall (full width). The pool port
+    // itself is loopback-only (behind Caddy), so it is NOT in this list.
+    out << ERASE_LINE << "  "
+        << cell("Open ports", "80 + 443 (website via Caddy), 4001 (IPFS swarm)",
+                FG_BRIGHT_WHITE, COL1_LABEL_W, 0)
         << "\n";
 
     // Row: Registered | Active (1h)

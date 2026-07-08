@@ -62,6 +62,10 @@ private:
     // every ~30s so render() doesn't hit DigiByte RPC every frame. -1 = unknown.
     double _cachedWalletBalance{-1.0};
     int64_t _walletBalanceCheckedAt{0};
+    // Cached public IP (resolved via an HTTP echo service) for the "External IP"
+    // row, refreshed rarely. Empty = not resolved yet.
+    std::string _externalIp;
+    int64_t _externalIpCheckedAt{0};
     std::atomic<bool> _running{false};
     std::atomic<bool> _awaitingPayoutConfirm{false};
     // The exact payout plan (address -> DGB amount) computed at [E] time and
