@@ -59,11 +59,18 @@ function Get-Stat($name) {
     return -1
   } catch { return -1 }
 }
+# All node exe processes - matches the current name AND older names (e.g. a
+# leftover DigiAssetCore.exe from before the rename), but NOT the short-lived
+# *-cli helper. A stray old-named node holding the RPC port is exactly what made
+# the benchmark read a zombie height.
+function Get-NodeProcs {
+  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*DigiAsset*' -and $_.Name -notlike '*cli*' }
+}
 function Stop-AllNodes {
-  Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-NodeProcs | Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 3
-  $left = Get-Process DigiAssetWindows -ErrorAction SilentlyContinue
-  if ($left) { throw ("could not stop all DigiAssetWindows instances (ids: " + ($left.Id -join ',') + "). Are you elevated?") }
+  $left = Get-NodeProcs
+  if ($left) { throw ("could not stop all node instances (ids: " + ($left.Id -join ',') + "). Are you elevated?") }
 }
 function Set-Flag($v) {
   $lines = Get-Content $cfg
@@ -78,8 +85,8 @@ function Start-NodeLocked {
   return $proc.Id
 }
 function Assert-Single($ourPid) {
-  $extra = Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $ourPid }
-  if ($extra) { throw ("a SECOND node instance appeared (pid " + ($extra.Id -join ',') + "). A supervisor relaunched it - aborting so we don't measure the wrong node.") }
+  $extra = Get-NodeProcs | Where-Object { $_.Id -ne $ourPid }
+  if ($extra) { throw ("a SECOND node instance appeared (pid " + ($extra.Id -join ',') + "). A supervisor or a stray old-named node - aborting so we don't measure the wrong one.") }
   if (-not (Get-Process -Id $ourPid -ErrorAction SilentlyContinue)) { throw "the node (pid $ourPid) exited unexpectedly - check its window/log." }
 }
 
