@@ -762,6 +762,24 @@ void Database::disableWriteVerification() {
     sqlite3_exec(_db, "PRAGMA mmap_size = 1073741824", nullptr, nullptr, &zErrMsg);
 }
 
+/**
+ * Restores durable, shareable write settings after a fast catch-up. Used at the
+ * chain tip when the operator set verifydatabasewrite=true: the genesis->tip
+ * sync ran with relaxed durability (safe - re-derivable), but steady-state
+ * operation honors the durability request. The read-side perf pragmas
+ * (cache/temp/mmap) are kept because they don't affect durability.
+ */
+void Database::enableWriteVerification() {
+    char* zErrMsg = nullptr;
+    sqlite3_exec(_db, "PRAGMA synchronous = FULL", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA journal_mode = DELETE", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA locking_mode = NORMAL", nullptr, nullptr, &zErrMsg);
+    // Keep the durability-neutral read accelerators.
+    sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA temp_store = MEMORY", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA mmap_size = 1073741824", nullptr, nullptr, &zErrMsg);
+}
+
 /*
 ██████╗ ███████╗███████╗███████╗████████╗
 ██╔══██╗██╔════╝██╔════╝██╔════╝╚══██╔══╝

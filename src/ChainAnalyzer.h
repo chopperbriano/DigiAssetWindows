@@ -135,6 +135,10 @@ private:
     bool _storeNonAssetUTXOs;   //if false won't bother storing NonAsset UTXOS
     bool _verifyDatabaseWrite;  //if set to false will write without checking
     bool _showAllBlockSyncTime; //if true will not collapse blocks of 100 together when behind
+    // Fast (relaxed-durability) pragmas are used for the whole genesis->tip
+    // catch-up regardless of _verifyDatabaseWrite; if the operator wants durable
+    // writes they're restored once at the tip. Tracks that one-time restore.
+    bool _writeVerificationRestored = false;
     bool _hasRunOnce = false;   //tracks if mainFunction has been called before (for error recovery)
     int _errorCount = 0;        //consecutive error count for backoff/stop
 

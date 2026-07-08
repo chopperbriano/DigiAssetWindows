@@ -255,8 +255,15 @@ void ChainAnalyzer::startupFunction() {
     Database* db = main->getDatabase();
     DigiByteCore* dgb = main->getDigiByteCore();
 
-    //make sure everything is set up
-    if (!_verifyDatabaseWrite) db->disableWriteVerification();
+    //make sure everything is set up.
+    // Always use the fast/relaxed-durability pragmas for the genesis->tip
+    // catch-up: chain.db is fully re-derivable from the blockchain, so a crash
+    // mid-sync just means re-syncing - and this is the single biggest
+    // initial-sync speedup (avoids an fsync per block + gives a 256MB cache).
+    // If the operator asked for durable writes (verifydatabasewrite=true, the
+    // default), they're restored once we reach the tip in phaseSync().
+    db->disableWriteVerification();
+    _writeVerificationRestored = false;
 
     //find block we left off at
     _height = db->getBlockHeight();
@@ -492,6 +499,17 @@ void ChainAnalyzer::phaseSync() {
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
             db->executePerformanceIndex(_state);
+            // Reached the tip. If the operator wants durable writes, restore them
+            // now that the fast catch-up is done - but only after the deferred
+            // performance indexes have all been built (they build faster under
+            // the relaxed pragmas). One-time per run.
+            if (_verifyDatabaseWrite && !_writeVerificationRestored &&
+                !db->performanceIndexesPending()) {
+                db->enableWriteVerification();
+                _writeVerificationRestored = true;
+                Log::GetInstance()->addMessage(
+                    "Sync complete - durable write mode restored (verifydatabasewrite=1)", Log::INFO);
+            }
             _state = SYNCED;
             totalProcessed = 0;
             chrono::milliseconds dura(500);

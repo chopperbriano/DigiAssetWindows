@@ -383,6 +383,10 @@ public:
     void endTransaction();
     void
     disableWriteVerification(); //on power failure not all commands may be written.  If using need to check at startup
+    // Restores durable, shareable write settings (synchronous=FULL, on-disk
+    // journal, non-exclusive lock) after a fast catch-up. Keeps the read-side
+    // perf pragmas (cache/temp/mmap) since they don't affect durability.
+    void enableWriteVerification();
 
     //indexes
     bool indexExists(const std::string& indexName);
@@ -436,6 +440,8 @@ public:
         _performanceIndexes.emplace_back(pi);
     }
     void executePerformanceIndex(int& state);
+    // True while deferred performance indexes are still waiting to be built.
+    bool performanceIndexesPending() const { return !_performanceIndexes.empty(); }
 
     //reset database
     void reset(); //used in case of roll back exceeding pruned history
