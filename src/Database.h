@@ -351,6 +351,10 @@ private:
     //ipfs ram db values
     std::vector<std::pair<std::string, uint64_t>> _ipfsCurrentlyPaused;
     static std::map<std::string, IPFSCallbackFunction> _ipfsCallbacks;
+    // Guards every read/write of _ipfsCallbacks. The map is touched by up to 10
+    // IPFS worker threads plus the analyzer thread; without one shared lock a
+    // concurrent erase vs find/operator[] corrupts the tree. (audit M5)
+    static std::mutex _ipfsCallbacksMutex;
 
     //DigiBYte Domain ram values
     std::vector<std::string> _masterDomainAssetId = {};
@@ -530,9 +534,11 @@ public:
     void removeIPFSJob(unsigned int jobIndex, const std::string& sync);
     unsigned int addIPFSJob(const std::string& cid, const std::string& sync = "pin", const std::string& extra = "",
                             unsigned int maxSleep = 0, const std::string& callbackSymbol = "");
-    std::promise<std::string>
+    std::future<std::string>
     addIPFSJobPromise(const std::string& cid, const std::string& sync = "", unsigned int maxTime = 0);
-    IPFSCallbackFunction& getIPFSCallback(const std::string& callbackSymbol);
+    // Returns a COPY of the stored callback (not a reference into the map) so it
+    // stays valid to invoke even if another thread erases the entry. (audit M5)
+    IPFSCallbackFunction getIPFSCallback(const std::string& callbackSymbol);
     unsigned int getIPFSJobCount();
 
     //DigiByte Domain table(these should only ever be called by DigiByteDomain.cpp

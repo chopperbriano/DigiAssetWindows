@@ -105,6 +105,11 @@ private:
     // draw from) — the operator funds it by sweeping from the treasury.
     std::string _addrApiPrefix;
     std::mutex _statsMutex;
+    // Held with try_lock by the ONE thread doing a stats refresh, so blocking
+    // network I/O (Core RPC + explorer + ip-api) happens with _statsMutex
+    // RELEASED and never stalls the worker pool: other threads skip the refresh
+    // and serve the last-known-good cache instead of blocking. (audit M3)
+    std::mutex _statsRefreshMutex;
     double _cachedAvailable = 0.0;        // local pool wallet, ready to pay
     double _cachedReceived = 0.0;         // treasury all-time received (explorer)
     double _cachedTreasuryBalance = 0.0;  // treasury current balance (explorer)

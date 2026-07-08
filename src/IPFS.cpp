@@ -495,17 +495,17 @@ void IPFS::callOnDownload(const string& cid, const string& sync, const string& e
  * @param maxTime - max time in ms to wait for IPFS data before throwing an exception
  * @return
  */
-promise<string> IPFS::callOnDownloadPromise(const string& cid, const string& sync, unsigned int maxTime) {
+future<string> IPFS::callOnDownloadPromise(const string& cid, const string& sync, unsigned int maxTime) {
     //check if a known lost CID
     if (!isValidCID(cid)) {
         promise<string> result;
         result.set_exception(std::make_exception_ptr(exceptionInvalidCID(cid)));
-        return result;
+        return result.get_future();
     }
     if (isLostCID(cid)) {
         promise<string> result;
         result.set_exception(std::make_exception_ptr(exceptionTimeout()));
-        return result;
+        return result.get_future();
     } //well it would have timed out if we had let it
 
     //check if we can do synchronously quickly
@@ -518,7 +518,7 @@ promise<string> IPFS::callOnDownloadPromise(const string& cid, const string& syn
             // If an error occurs, set the exception
             result.set_exception(std::make_exception_ptr(e));
         }
-        return result;
+        return result.get_future();
     }
 
     //run asynchronously
@@ -534,7 +534,7 @@ promise<string> IPFS::callOnDownloadPromise(const string& cid, const string& syn
  * @return
  */
 std::string IPFS::callOnDownloadSync(const string& cid, const string& sync, unsigned int maxTime) {
-    return callOnDownloadPromise(cid, sync, maxTime).get_future().get();
+    return callOnDownloadPromise(cid, sync, maxTime).get();
 }
 
 /**

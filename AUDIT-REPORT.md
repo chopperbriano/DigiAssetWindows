@@ -2,6 +2,17 @@
 
 _Adversarially-verified findings, de-duplicated. Date: 2026-07-03._
 
+> **Remediation status (win.80):** All 8 MUST-FIX plus **M2** (verifier
+> substring match) and **M6** (payout ledger write) shipped in win.76.
+> Money-path mediums **M1** (payout takeover) + **M7** (payout idempotency)
+> shipped in win.77; encrypted-wallet payouts + per-address aggregation in
+> win.78. The remaining stability mediums — **M3** (stats network I/O under
+> lock), **M4** (promise NRVO), **M5** (`_ipfsCallbacks` data race), **M8**
+> (partial snapshot marked complete) — plus the `send`-worker crash, RPC
+> read-timeout/body-cap, and CLI empty-arg low items shipped in **win.80**.
+> **All High + Medium findings are now resolved.** Remaining low/perf/
+> observability + doc items are non-blocking.
+
 ---
 
 ## 1. Executive Summary

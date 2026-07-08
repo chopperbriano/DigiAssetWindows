@@ -109,9 +109,9 @@ public:
     // pinned and sync is empty the callback may run immediately/inline.
     void callOnDownload(const std::string& cid, const std::string& sync, const std::string& extra,
                         const std::string& callbackSymbol, unsigned int maxTime = 0);
-    // Queues a download and returns a promise resolved with the content (or an
+    // Queues a download and returns a future resolved with the content (or an
     // exception). Resolves immediately if the CID is already pinned.
-    std::promise<std::string>
+    std::future<std::string>
     callOnDownloadPromise(const std::string& cid, const std::string& sync = "", unsigned int maxTime = 0);
     // Blocking download: waits on callOnDownloadPromise's future and returns the content.
     std::string callOnDownloadSync(const std::string& cid, const std::string& sync = "", unsigned int maxTime = 0);

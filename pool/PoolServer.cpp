@@ -665,58 +665,84 @@ void PoolServer::handleStats(std::string& outBody) {
     // be used to hammer DigiByte Core.
     std::string donationAddress, explorerPrefix, nodesJson;
     double available = 0.0, received = 0.0, treasuryBalance = 0.0;
+
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+
+    // 1. Fast snapshot of the config + whether a refresh is due. No I/O here.
+    std::string rpcUser, rpcPass, donationAddr, addrApiPrefix;
+    int rpcPort;
+    bool refreshDue;
     {
         std::lock_guard<std::mutex> lk(_statsMutex);
-        int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                          std::chrono::system_clock::now().time_since_epoch()).count();
-        if (now - _statsCacheTime > 30) {
-            // Local pool wallet balance (what payouts actually draw from).
-            if (!_rpcUser.empty()) {
-                double bal = rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getbalance", "[]");
-                if (bal >= 0) _cachedAvailable = bal;
-            }
-            // Treasury received + balance from a public explorer, because the
-            // donation address lives in an external wallet this node can't
-            // query over RPC.
-            if (!_donationAddress.empty() && !_addrApiPrefix.empty()) {
-                double rec = 0.0, tbal = 0.0;
-                if (esploraAddress(_addrApiPrefix, _donationAddress, rec, tbal)) {
-                    _cachedReceived = rec;
-                    _cachedTreasuryBalance = tbal;
+        refreshDue = (now - _statsCacheTime > 30);
+        rpcUser = _rpcUser; rpcPass = _rpcPass; rpcPort = _rpcPort;
+        donationAddr = _donationAddress; addrApiPrefix = _addrApiPrefix;
+    }
+
+    // 2. Refresh the external data — but ONLY if a refresh is due AND no other
+    //    thread is already doing it (try_lock). The blocking Core RPC / explorer
+    //    / ip-api calls run with _statsMutex RELEASED, so a flood of stats
+    //    requests can't pin the worker pool: losers of the try_lock fall through
+    //    and serve the last-known-good cache below. (audit M3)
+    if (refreshDue && _statsRefreshMutex.try_lock()) {
+        std::lock_guard<std::mutex> refreshGuard(_statsRefreshMutex, std::adopt_lock);
+
+        // Local pool wallet balance (what payouts actually draw from).
+        double newAvail = 0.0; bool haveAvail = false;
+        if (!rpcUser.empty()) {
+            double bal = rpcNumber(rpcUser, rpcPass, rpcPort, "getbalance", "[]");
+            if (bal >= 0) { newAvail = bal; haveAvail = true; }
+        }
+        // Treasury received + balance from a public explorer (external wallet).
+        double rec = 0.0, tbal = 0.0; bool haveTreasury = false;
+        if (!donationAddr.empty() && !addrApiPrefix.empty()) {
+            if (esploraAddress(addrApiPrefix, donationAddr, rec, tbal)) haveTreasury = true;
+        }
+        // Node geolocation for the world map. Read the active IPs + which ones
+        // are uncached (under the lock), geolocate the uncached set (no lock),
+        // then merge + rebuild the array (under the lock).
+        int64_t weekAgo = now - 7 * 24 * 3600;
+        auto ipList = _db.getActiveNodeIps(weekAgo);
+        std::vector<std::string> ips, uncached;
+        {
+            std::lock_guard<std::mutex> lk(_statsMutex);
+            for (const auto& ip : ipList) {
+                if (ip.empty()) continue;
+                ips.push_back(ip);
+                if (!_geoCache.count(ip) &&
+                    std::find(uncached.begin(), uncached.end(), ip) == uncached.end()) {
+                    uncached.push_back(ip);
                 }
             }
-            // Node geolocation for the world map. Per-IP cached, so only new
-            // IPs hit ip-api; the nodes array is rebuilt each refresh.
-            {
-                int64_t weekAgo = now - 7 * 24 * 3600;
-                auto ipList = _db.getActiveNodeIps(weekAgo);
-                std::vector<std::string> ips, uncached;
-                for (const auto& ip : ipList) {
-                    if (ip.empty()) continue;
-                    ips.push_back(ip);
-                    if (!_geoCache.count(ip) &&
-                        std::find(uncached.begin(), uncached.end(), ip) == uncached.end()) {
-                        uncached.push_back(ip);
-                    }
-                }
-                if (!uncached.empty()) {
-                    auto geo = geolocateBatch(uncached);
-                    for (const auto& kv : geo) _geoCache[kv.first] = kv.second;
-                }
-                std::string arr = "[";
-                bool firstNode = true;
-                for (const auto& ip : ips) {
-                    auto it = _geoCache.find(ip);
-                    if (it == _geoCache.end()) continue;
-                    if (!firstNode) arr += ",";
-                    firstNode = false;
-                    arr += "{" + it->second + "}";
-                }
-                arr += "]";
-                _cachedNodesJson = arr;
+        }
+        std::map<std::string, std::string> freshGeo;
+        if (!uncached.empty()) freshGeo = geolocateBatch(uncached); // network, no lock
+
+        // Store all results under the data lock.
+        {
+            std::lock_guard<std::mutex> lk(_statsMutex);
+            if (haveAvail) _cachedAvailable = newAvail;
+            if (haveTreasury) { _cachedReceived = rec; _cachedTreasuryBalance = tbal; }
+            for (const auto& kv : freshGeo) _geoCache[kv.first] = kv.second;
+            std::string arr = "[";
+            bool firstNode = true;
+            for (const auto& ip : ips) {
+                auto it = _geoCache.find(ip);
+                if (it == _geoCache.end()) continue;
+                if (!firstNode) arr += ",";
+                firstNode = false;
+                arr += "{" + it->second + "}";
             }
+            arr += "]";
+            _cachedNodesJson = arr;
             _statsCacheTime = now;
         }
+    }
+
+    // 3. Serve the cache (fresh or last-known-good). Fast, no I/O.
+    {
+        std::lock_guard<std::mutex> lk(_statsMutex);
         donationAddress = _donationAddress;
         explorerPrefix = _explorerTxPrefix;
         available = _cachedAvailable;

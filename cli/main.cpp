@@ -39,6 +39,13 @@ int main(int argc, char* argv[]) {
         std::string argStr(argv[i]);
         Json::Value parsedValue;
 
+        // An empty arg ("") has no front()/back() - calling them is UB. Treat
+        // it as an empty string argument. (audit low)
+        if (argStr.empty()) {
+            args.append(argStr);
+            continue;
+        }
+
         // Check if the argument could be a JSON array or object
         if ((argStr.front() == '[' && argStr.back() == ']') || (argStr.front() == '{' && argStr.back() == '}')) {
             bool parsingSuccessful = reader.parse(argStr, parsedValue);

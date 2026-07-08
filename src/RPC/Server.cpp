@@ -365,6 +365,20 @@ namespace RPC {
      * @return the parsed JSON-RPC request document
      */
     Value Server::parseRequest(tcp::socket& socket) {
+        // Bound how long any single read may block, so a slowloris client that
+        // opens a socket and dribbles bytes (or none) can't park this worker
+        // thread forever. On timeout read_some throws and the connection is
+        // dropped by the caller's catch. (audit low)
+#ifdef _WIN32
+        DWORD rcvTimeout = 10000; // ms
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&rcvTimeout), sizeof(rcvTimeout));
+#else
+        struct timeval rcvTimeout; rcvTimeout.tv_sec = 10; rcvTimeout.tv_usec = 0;
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const void*>(&rcvTimeout), sizeof(rcvTimeout));
+#endif
+
         // Read the HTTP request headers
         char data[1024];
         size_t length = socket.read_some(boost::asio::buffer(data, sizeof(data)));
@@ -387,8 +401,19 @@ namespace RPC {
             throw DigiByteException(HTTP_UNAUTHORIZED, "Invalid HTTP request: No valid authentication provided.");
         }
 
-        // Find the Content-Length header
-        int contentLength = stoi(getHeader(headers, "Content-Length"));
+        // Find the Content-Length header. A missing/garbage value would make
+        // stoi throw; a huge value would make the read loop below exhaust
+        // memory. Validate and cap it. (audit low)
+        int contentLength = 0;
+        try {
+            contentLength = stoi(getHeader(headers, "Content-Length"));
+        } catch (...) {
+            throw DigiByteException(HTTP_BAD_REQUEST, "Invalid or missing Content-Length");
+        }
+        const int MAX_BODY = 16 * 1024 * 1024; // 16 MB is far beyond any real RPC call
+        if (contentLength < 0 || contentLength > MAX_BODY) {
+            throw DigiByteException(HTTP_BAD_REQUEST, "Request body length out of range");
+        }
 
         // Prepare to read the body
         std::string jsonContent = requestStr.substr(bodyStart + 4);

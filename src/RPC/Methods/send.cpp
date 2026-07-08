@@ -30,6 +30,12 @@ namespace RPC {
             //check if any domains in outputs
             Value newParams = params;
             for (Value& output: newParams[0]) {
+                // Each output must be a non-empty object ({address:amount}); a
+                // bare value or {} would make begin()/it.name() undefined and
+                // crash the worker (e.g. send [[5]] / send [[{}]]). (audit low)
+                if (!output.isObject() || output.empty()) {
+                    throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params: each output must be a non-empty object");
+                }
                 auto it = output.begin();
                 string key = it.name();
                 if (DigiByteDomain::isDomain(key)) {

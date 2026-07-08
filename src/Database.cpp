@@ -50,6 +50,8 @@ std::map<std::string, IPFSCallbackFunction> Database::_ipfsCallbacks = {
         {"",
          [](const std::string&, const std::string&, const std::string&, bool) {}} //generic do nothing callback
 };
+// One lock for every access to _ipfsCallbacks (see header note). (audit M5)
+std::mutex Database::_ipfsCallbacksMutex;
 
 /*
 ██████╗ ██╗   ██╗██╗██╗     ██████╗     ████████╗ █████╗ ██████╗ ██╗     ███████╗███████╗
@@ -624,12 +626,15 @@ void Database::initializeClassValues() {
 
     //remove non-permanent IPFS callbacks and pauses from ram
     _ipfsCurrentlyPaused.clear();
-    auto it = _ipfsCallbacks.begin();
-    while (it != _ipfsCallbacks.end()) {
-        if (it->first[0] == '_') {
-            it = _ipfsCallbacks.erase(it);
-        } else {
-            ++it;
+    {
+        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
+        auto it = _ipfsCallbacks.begin();
+        while (it != _ipfsCallbacks.end()) {
+            if (it->first[0] == '_') {
+                it = _ipfsCallbacks.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 
@@ -2325,6 +2330,7 @@ void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCall
     }
 
     //register callback
+    std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
     _ipfsCallbacks[callbackSymbol] = callback;
 }
 
@@ -2336,10 +2342,11 @@ void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCall
  * Possible Errors:
  *  std::out_of_range if no callback is registered under that symbol
  */
-IPFSCallbackFunction& Database::getIPFSCallback(const string& callbackSymbol) {
+IPFSCallbackFunction Database::getIPFSCallback(const string& callbackSymbol) {
+    std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
     auto it = _ipfsCallbacks.find(callbackSymbol);
     if (it == _ipfsCallbacks.end()) throw std::out_of_range("Non existent callback");
-    return it->second;
+    return it->second; // returns a copy - safe to invoke after the lock releases
 }
 
 /**
@@ -2440,7 +2447,10 @@ void Database::getNextIPFSJob(unsigned int& jobIndex, string& cid, string& sync,
     if (callbackSymbol == "_") {
         callbackSymbol += to_string(jobIndex);
     }
-    callback = _ipfsCallbacks[callbackSymbol]; //get callback(note there is a default callback if empty)
+    {
+        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
+        callback = _ipfsCallbacks[callbackSymbol]; //get callback(note there is a default callback if empty)
+    }
 
 
     //lock the sync if not pin or non synchronized
@@ -2524,6 +2534,7 @@ void Database::removeIPFSJob(unsigned int jobIndex, const string& sync) {
 
     //remove callback from ram if temp callback
     if (sync == "_") {
+        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
         _ipfsCallbacks.erase("_" + to_string(jobIndex));
     }
 }
@@ -2596,23 +2607,31 @@ vector<tuple<string, string, IPFSCallbackFunction>> toDoLater;
  * @param maxTime - max ms to wait (0 = forever)
  * @return
  */
-promise<string> Database::addIPFSJobPromise(const string& cid, const string& sync, unsigned int maxTime) {
-    promise<string> result;
+future<string> Database::addIPFSJobPromise(const string& cid, const string& sync, unsigned int maxTime) {
+    // Heap-allocate the promise so its lifetime is independent of this stack
+    // frame. The worker-thread callback captures the shared_ptr BY VALUE and
+    // fulfills the SAME shared state the returned future waits on - no reliance
+    // on NRVO, no dangling reference to a moved-from local promise. (audit M4)
+    auto resultPtr = std::make_shared<promise<string>>();
+    future<string> fut = resultPtr->get_future();
 
     //add job to the database
     unsigned int jobIndex = addIPFSJob(cid, sync, "", maxTime, "_");
 
     //register callback function
-    _ipfsCallbacks["_" + to_string(jobIndex)] = [&](const string& cid, const string& extra, const string& content,
-                                                    bool failed) {
-        if (failed) {
-            result.set_exception(std::make_exception_ptr(IPFS::exceptionTimeout()));
-        } else {
-            result.set_value(content);
-        }
-    };
+    {
+        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
+        _ipfsCallbacks["_" + to_string(jobIndex)] = [resultPtr](const string& cid, const string& extra,
+                                                                 const string& content, bool failed) {
+            if (failed) {
+                resultPtr->set_exception(std::make_exception_ptr(IPFS::exceptionTimeout()));
+            } else {
+                resultPtr->set_value(content);
+            }
+        };
+    }
 
-    return result;
+    return fut;
 }
 
 /*

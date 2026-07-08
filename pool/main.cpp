@@ -91,7 +91,11 @@ namespace {
     // populated" response) or a hard HTTP error. Pages 0..23 are populated
     // as of 2026-04-11 but don't hardcode the count.
     void firstRunSnapshot(PoolDatabase& db, PoolDashboard& dash) {
-        if (db.hasPermanentData()) return; // already populated
+        // Gate on the snapshotCompleted flag, NOT on "are there any rows". A
+        // snapshot that died mid-walk leaves SOME rows; keying the skip on row
+        // count would make a truncated import permanent. Re-import is safe:
+        // insertPermanentAsset is INSERT OR IGNORE. (audit M8)
+        if (db.getConfig("snapshotCompleted", "0") == "1") return; // already fully populated
 
         dash.addLog("First run: snapshotting mctrivia's /permanent pages...");
 
@@ -99,6 +103,7 @@ namespace {
         unsigned int totalAssets = 0;
         unsigned int page = 0;
         const unsigned int maxPages = 100; // safety cap
+        bool endedCleanly = false;         // true only if we reached the real end of the list
 
         for (; page < maxPages; page++) {
             std::string body;
@@ -106,7 +111,7 @@ namespace {
                 body = CurlHandler::get(base + std::to_string(page) + ".json", 15000);
             } catch (...) {
                 dash.addLog("  page " + std::to_string(page) + ": HTTP error, stopping");
-                break;
+                break; // dirty stop - endedCleanly stays false
             }
 
             // Cheap "is this an error envelope?" sniff. Mctrivia's server
@@ -114,6 +119,7 @@ namespace {
             if (body.find("\"error\"") != std::string::npos &&
                 body.find("\"changes\"") == std::string::npos) {
                 dash.addLog("  page " + std::to_string(page) + ": end of list");
+                endedCleanly = true; // walked the whole list
                 break;
             }
 
@@ -225,9 +231,25 @@ namespace {
                         (done ? " (done)" : " (still growing)"));
         }
 
-        db.setConfig("snapshotCompleted", "1");
-        dash.addLog("Snapshot complete: " + std::to_string(totalAssets) +
-                    " entries across " + std::to_string(page) + " pages");
+        // Reaching the safety cap without an error envelope means we imported
+        // every page we were allowed to - treat as clean (but flag it).
+        if (page >= maxPages) {
+            endedCleanly = true;
+            dash.addLog("  WARNING: hit the " + std::to_string(maxPages) +
+                        "-page safety cap; list may be larger than imported.");
+        }
+
+        if (endedCleanly) {
+            db.setConfig("snapshotCompleted", "1");
+            dash.addLog("Snapshot complete: " + std::to_string(totalAssets) +
+                        " entries across " + std::to_string(page) + " pages");
+        } else {
+            // Do NOT mark complete - a partial import must retry next start so
+            // the pool doesn't serve a truncated permanent list forever. (audit M8)
+            dash.addLog("WARNING: snapshot INCOMPLETE (HTTP error mid-walk after " +
+                        std::to_string(totalAssets) + " entries). Will retry on next start; "
+                        "pool serves a partial list until then.");
+        }
     }
 }
 
