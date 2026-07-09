@@ -65,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.16.0'
+$SCRIPT_VERSION = '2.17.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -866,20 +866,60 @@ function Write-NodeConfig($rpc) {
         }
         return
     }
+    # NOTE: the comment lines below are written INTO config.cfg (the node's config
+    # parser keeps lines starting with # and preserves them on write-back). Keep
+    # them ASCII and apostrophe-free to stay valid in this single-quoted array.
     $lines = @(
-        "rpcbind=127.0.0.1","rpcport=$RpcPort","rpcuser=$($rpc.user)","rpcpassword=$($rpc.pass)",
-        "ipfspath=http://localhost:5001/api/v0/",
-        # Pool 0 = local pool (your own pins); pool 1 = the DigiStamp pool you join.
-        # Both get a real payout address so neither needs to mint one from the wallet.
-        "psp0subscribe=1","psp0payout=$PayoutAddress",
-        "psp1server=$PoolServer","psp1subscribe=1","psp1payout=$PayoutAddress",
-        # Fast-path analyzer settings: verifydatabasewrite=0 syncs ~10x faster
-        # (~1 day vs ~10), storenonassetutxo=0 keeps the DB small + fast, pruneage
-        # keeps ~1 day of prunable history, bootstrapchainstate pulls chain.db.
-        "verifydatabasewrite=0","storenonassetutxo=0","pruneage=5760","bootstrapchainstate=1"
+        '# =============================================================================',
+        '# DigiAsset for Windows - node configuration (config.cfg)',
+        '#   Written by setup-digiasset.ps1. Safe to edit by hand; lines starting with',
+        '#   # are comments. Restart the node (DigiAssetWindows.exe) after any change.',
+        '# =============================================================================',
+        '',
+        '# --- DigiByte Core RPC (how this node reads the blockchain) -------------------',
+        '#   The node talks to DigiByte Core on THIS machine with these credentials.',
+        '#   They MUST match rpcuser / rpcpassword / rpcport in C:\DigiByte\digibyte.conf.',
+        '#   Local only - never port-forward 14022 to the internet.',
+        "rpcbind=127.0.0.1",
+        "rpcport=$RpcPort",
+        "rpcuser=$($rpc.user)",
+        "rpcpassword=$($rpc.pass)",
+        '',
+        '# --- IPFS (where DigiAsset files are stored) ----------------------------------',
+        '#   Local IPFS/Kubo HTTP API the node uses to pin and serve asset content.',
+        'ipfspath=http://localhost:5001/api/v0/',
+        '',
+        '# --- The pool this node joins (psp1) -----------------------------------------',
+        '#   psp1server = the pool your node registers with and hosts files for.',
+        '#   IMPORTANT: on a REMOTE node this must be the pool PUBLIC https address',
+        '#   (e.g. https://pool.digistamp.co). Do NOT use http://127.0.0.1:14028 - that',
+        '#   only works ON the pool server itself; on a node it shows "Pool unreachable".',
+        "psp1server=$PoolServer",
+        'psp1subscribe=1',
+        '#   psp1payout = the DGB address the pool pays your hosting earnings to.',
+        "psp1payout=$PayoutAddress",
+        '#   psp1secret is auto-generated on first run (this node identity). Never copy',
+        '#   it from another node - each node must have its own unique secret.',
+        '',
+        '# --- Local pool (psp0) - your own private pin list ---------------------------',
+        '#   Pool 0 is your own local pin list; pool 1 (above) is the pool you join.',
+        'psp0subscribe=1',
+        "psp0payout=$PayoutAddress",
+        '',
+        '# --- Sync / storage tuning ---------------------------------------------------',
+        '#   verifydatabasewrite=0 -> fast initial sync (relaxed durability only during',
+        '#     catch-up; safe because chain.db can be rebuilt; durable once synced).',
+        '#   storenonassetutxo=0   -> smaller, faster database (recommended).',
+        '#   pruneage=5760         -> keep ~1 day of prunable history.',
+        '#   bootstrapchainstate=1 -> fast-start chain.db over IPFS if it is missing.',
+        '#   pipelinesync=0        -> experimental sync speedup, off by default.',
+        'verifydatabasewrite=0',
+        'storenonassetutxo=0',
+        'pruneage=5760',
+        'bootstrapchainstate=1'
     )
     Set-Content -Path $NodeConfig -Value $lines -Encoding ASCII
-    Log "  + config.cfg (pool=$PoolServer, payout=$PayoutAddress)" 'OK'
+    Log "  + config.cfg (documented; pool=$PoolServer, payout=$PayoutAddress)" 'OK'
 }
 
 # Keep the local copy of THIS script current so the maintenance task always
@@ -1103,6 +1143,31 @@ function Invoke-Install {
         throw 'No valid DigiByte address provided. Re-run and paste a valid D..., S..., or dgb1... address.'
     }
 
+    # 0b. Which pool to join --------------------------------------------------
+    # Only ask if the caller did not pass -PoolServer explicitly. Almost everyone
+    # should accept the default; the prompt exists so a self-hosted-pool operator
+    # sets the right PUBLIC url and nobody accidentally leaves it as localhost.
+    if (-not $PSBoundParameters.ContainsKey('PoolServer')) {
+        Write-Host "`n--- Which pool will this node join? ---" -ForegroundColor Cyan
+        Write-Host 'Your node registers with a pool and hosts its files. Most people should just' -ForegroundColor White
+        Write-Host 'press Enter to use the main pool:' -ForegroundColor White
+        Write-Host "  $PoolServer" -ForegroundColor Green
+        Write-Host 'Only change this if you run your OWN pool - then paste its PUBLIC https address' -ForegroundColor Gray
+        Write-Host '(like https://pool.example.com). NEVER use 127.0.0.1 / localhost on a node -' -ForegroundColor Gray
+        Write-Host 'that only works on the pool server itself and shows "Pool unreachable" here.' -ForegroundColor Gray
+        $poolIn = ("$(Read-Host '  Pool URL (press Enter for the default)')").Trim()
+        if ($poolIn) {
+            if ($poolIn -notmatch '^[A-Za-z]+://') { $poolIn = "https://$poolIn" }   # assume https if no scheme
+            $script:PoolServer = $poolIn.TrimEnd('/')
+            $PoolServer = $script:PoolServer
+            if ($PoolServer -match '127\.0\.0\.1|localhost') {
+                Write-Host '  WARNING: that is a localhost URL - a remote node cannot reach it. Continuing,' -ForegroundColor Yellow
+                Write-Host '  but this node will show "Pool unreachable" unless it IS the pool server.' -ForegroundColor Yellow
+            }
+        }
+        Write-Host "  This node will join: $PoolServer" -ForegroundColor Green
+    }
+
     # --- Prerequisites ------------------------------------------------------
     Log 'Checking prerequisites (Visual C++ x64 runtime the node needs)...' 'STEP'
     Ensure-VCRuntime
@@ -1263,6 +1328,15 @@ function Invoke-Install {
     Write-Host '  * The node waits for IPFS + DigiByte to be ready before it starts (a short delay is normal).' -ForegroundColor White
     Write-Host '  * Once synced, the node registers with the pool automatically.' -ForegroundColor White
     Write-Host "  * Update + health checks run on every boot and every 6 hours." -ForegroundColor White
+    Write-Host ''
+    Write-Host 'YOUR SETTINGS (all in one documented file; edit then restart the node):' -ForegroundColor Cyan
+    Write-Host "  * Config file : $NodeConfig" -ForegroundColor Gray
+    Write-Host '                  (open in Notepad - every setting has a # comment explaining it)' -ForegroundColor DarkGray
+    Write-Host "  * Pool joined : $PoolServer   (key: psp1server)" -ForegroundColor Gray
+    Write-Host "  * Payout addr : $PayoutAddress   (key: psp1payout; re-run this installer to change)" -ForegroundColor Gray
+    Write-Host '  * In the node window, the "PSP Pool" line reads "reachable" once it connects to' -ForegroundColor Gray
+    Write-Host '    the pool. If it says "unreachable", double-check psp1server is the pool PUBLIC' -ForegroundColor Gray
+    Write-Host '    https URL (not 127.0.0.1) and that the pool is online.' -ForegroundColor Gray
     Write-Host ''
     Write-Host 'HANDY COMMANDS (Administrator PowerShell):' -ForegroundColor Cyan
     Write-Host "  * Check status : powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1" -ForegroundColor Gray
