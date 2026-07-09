@@ -88,8 +88,20 @@ function Describe-Pid($procId) {
   if ($p) { return ("pid $procId ($($p.Name)) $($p.Path)") } else { return "pid $procId (gone)" }
 }
 function Stop-AllNodes {
-  # Kill node-named processes AND whatever holds the RPC port (any name).
-  Get-NodeProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Clean shutdown FIRST. Force-killing a node whose SQLite runs journal_mode=MEMORY
+  # (the fast-sync pragma) can TEAR chain.db - there's no on-disk journal to replay.
+  # In -Prepare that torn db then gets backed up and restored by the measured runs,
+  # producing "Table creation failed". So ask the node to stop via its CLI, wait up
+  # to 30s, and only force-kill as a last resort.
+  if (Get-NodeProcs) {
+    if (Test-Path $cli) { try { Push-Location $Dir; & $cli shutdown 2>$null | Out-Null; Pop-Location } catch { try { Pop-Location } catch {} } }
+    for ($i=0; $i -lt 60 -and (Get-NodeProcs); $i++) { Start-Sleep -Milliseconds 500 }
+    if (Get-NodeProcs) {
+      Write-Host "  node did not stop cleanly within 30s - force-killing (chain.db may be left inconsistent)" -ForegroundColor Yellow
+      Get-NodeProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+  }
+  # Also clear anything squatting on the RPC port (a stray of any name).
   foreach ($op in Get-PortOwnerPids) { Stop-Process -Id $op -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Seconds 3
   $left = @(Get-NodeProcs) + @(Get-PortOwnerPids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
