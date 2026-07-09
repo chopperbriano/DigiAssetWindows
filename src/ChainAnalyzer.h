@@ -142,6 +142,8 @@ private:
     bool _writeVerificationRestored = false;
     bool _hasRunOnce = false;   //tracks if mainFunction has been called before (for error recovery)
     int _errorCount = 0;        //consecutive error count for backoff/stop
+    std::string _lastError;     //text of the last sync exception (for an informative recovery log)
+    unsigned int _lastErrorHeight = 0; //block being processed when the last error was thrown
 
     //config variable(meta data) - need to be static or make entire thing singleton.  decided to make static
     static unsigned int _pinAssetIcon;
