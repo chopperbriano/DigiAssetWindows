@@ -45,3 +45,6 @@ src/sqlite3_stubs.cpp
 
 # ---- Legacy: underscore-prefixed scratch files in subdirs ----
 */_*
+
+# Cloudflare R2 snapshot config (machine-specific; no secrets, but keep local)
+snapshots/snapshot-config.json

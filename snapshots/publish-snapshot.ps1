@@ -42,10 +42,23 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.1.0'
+$SCRIPT_VERSION = '1.2.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 function Step($n,$m){ Write-Host ''; Write-Host "[$n] $m" -ForegroundColor Cyan }
 $here     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+# Load defaults saved by setup-cloudflare-snapshots.ps1 (remote/bucket/publicUrl)
+# so this script runs with NO arguments after a one-time setup. Anything passed on
+# the command line still wins.
+$cfgFile = Join-Path $here 'snapshot-config.json'
+if (Test-Path $cfgFile) {
+    try {
+        $sc = Get-Content $cfgFile -Raw | ConvertFrom-Json
+        if (-not $PSBoundParameters.ContainsKey('RcloneRemote') -and $sc.remote)    { $RcloneRemote = $sc.remote }
+        if (-not $PSBoundParameters.ContainsKey('Bucket')       -and $sc.bucket)    { $Bucket       = $sc.bucket }
+        if (-not $PSBoundParameters.ContainsKey('BaseUrl')      -and $sc.publicUrl) { $BaseUrl      = $sc.publicUrl }
+    } catch { Say "  (couldn't read $cfgFile - using defaults)" 'Yellow' }
+}
 $makeSnap = Join-Path $here 'make-snapshot.ps1'
 $remote   = "${RcloneRemote}:${Bucket}"
 
@@ -78,11 +91,11 @@ if ($Schedule) {
 }
 
 # --- Preconditions -----------------------------------------------------------
-if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) { throw "rclone not found in PATH. Install rclone and configure the '$RcloneRemote' remote first." }
+if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) { throw "rclone not found. Run setup-cloudflare-snapshots.ps1 once to install + configure it: .\setup-cloudflare-snapshots.ps1" }
 # Verify the remote itself exists, not just the binary - otherwise the failure
 # only surfaces AFTER archives are built (services stopped/restarted, GBs written).
 $remotes = @(& rclone listremotes 2>$null)
-if ($remotes -notcontains "${RcloneRemote}:") { throw "rclone remote '${RcloneRemote}:' is not configured. Run 'rclone config' to set up your Cloudflare R2 remote named '$RcloneRemote' first (see snapshots README)." }
+if ($remotes -notcontains "${RcloneRemote}:") { throw "rclone remote '${RcloneRemote}:' is not configured. Run the one-time setup first: .\setup-cloudflare-snapshots.ps1 (it installs rclone + configures your R2 remote from your Cloudflare keys)." }
 if (-not (Test-Path $makeSnap)) { throw "make-snapshot.ps1 not found next to this script ($makeSnap)." }
 $flags = @('--s3-no-check-bucket','--s3-chunk-size','128M','--s3-upload-concurrency','8','--s3-disable-checksum','--progress')
 

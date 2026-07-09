@@ -7,17 +7,37 @@ operators never do.
 
 | Script | Purpose |
 |---|---|
-| `publish-snapshot.ps1` | **The one you want.** Build both archives → upload to R2 → rebuild + upload `snapshot.json` → verify. Can schedule itself weekly. |
+| `setup-cloudflare-snapshots.ps1` | **Run once.** Installs rclone + configures your Cloudflare R2 remote from your keys, then publishing needs no arguments. |
+| `publish-snapshot.ps1` | **The one you run each time.** Build both archives → upload to R2 → rebuild + upload `snapshot.json` → verify. Can schedule itself weekly. |
 | `make-snapshot.ps1` | The building block: creates the archives + `*-part.json` (and, with `-Component manifest`, `snapshot.json`). `publish-snapshot.ps1` calls this. |
 | `seed-digibyte.ps1` | Standalone consumer: seeds *any* DigiByte wallet from the published snapshot (install DigiByte, close it, run this). |
+
+## First: one-time Cloudflare R2 setup
+Run this **once** on the snapshot box — it installs rclone, configures the R2
+remote from your Cloudflare keys, verifies it can reach your bucket, and saves the
+defaults so `publish-snapshot.ps1` then needs **no arguments**:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup-cloudflare-snapshots.ps1
+```
+It prompts for (or takes as `-AccountId` / `-AccessKeyId` / `-SecretAccessKey` /
+`-Bucket` / `-PublicUrl`):
+- **Account ID** — Cloudflare dashboard → R2.
+- **R2 API token** (Access Key ID + Secret Access Key) — R2 → *Manage R2 API
+  Tokens* → create one with **Object Read & Write** on your bucket.
+- **Public bucket URL** — R2 → your bucket → Settings → enable public r2.dev
+  access → the `https://pub-XXXX.r2.dev` URL. **This must match the installer's
+  baked-in snapshot URL** (`$DefaultSnapshotUrl`).
+
+Your Secret Access Key goes straight into rclone's own (obfuscated) config and is
+**never written into this repo**; only non-secret defaults are saved to
+`snapshots/snapshot-config.json` (gitignored). Rotate the key in Cloudflare and
+re-run this if it's ever exposed.
 
 ## Prerequisites
 - One always-on box with a **fully-synced** DigiByte wallet **and** DigiAsset node
   (the "indexed wallet" box). Standard layout: DigiByte in `C:\DigiByte`
   (blockchain in `C:\DigiByte\Data`), node in `C:\DigiAssetWindows`.
-- **rclone** installed and a remote (default name `r2`) configured for your R2
-  account (`rclone config` → S3 → Cloudflare, using the **S3 API** endpoint
-  `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, not the public `r2.dev` URL).
+- The one-time R2 setup above (installs rclone + configures the `r2` remote).
 - `tar.exe` (built into Windows 10 1803+ / 11).
 
 ## Publish once (run when the box is fully synced)
