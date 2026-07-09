@@ -16,7 +16,7 @@ param(
     [int]$Every = 15
 )
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -81,14 +81,15 @@ function Show-Status {
         $myId = $id.ID
         $peers = 0
         try { $sw = Invoke-RestMethod -Uri ($ipfsApi + "swarm/peers") -Method Post -TimeoutSec 6; if ($sw.Peers) { $peers = $sw.Peers.Count } } catch {}
-        Line "IPFS Desktop" "OK" ("running, {0} peers" -f $peers)
+        if ($peers -gt 0) { Line "IPFS Desktop" "OK" ("running, {0} peers" -f $peers) }
+        else { Line "IPFS Desktop" "WARN" "running but 0 peers - still connecting to the IPFS network"; $issues += "IPFS has 0 peers - it can't host content yet; usually connects within a few minutes of starting." }
     } catch {
         Line "IPFS Desktop" "FAIL" "API not responding on 5001 (is the IPFS daemon running?)"
         $issues += "IPFS is down - hosting + verification won't work. Open IPFS Desktop (tray icon)."
     }
 
-    # --- DigiAsset for Windows process ---
-    if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) { Line "DigiAsset for Windows" "OK" "running" }
+    # --- DigiAsset for Windows process (accept the legacy exe name too) ---
+    if (Get-Process DigiAssetWindows,DigiAssetCore -ErrorAction SilentlyContinue) { Line "DigiAsset for Windows" "OK" "running" }
     else { Line "DigiAsset for Windows" "FAIL" "not running"; $issues += "DigiAsset for Windows isn't running - start $Root\DigiAssetWindows.exe." }
 
     # --- Hosting ports (must accept INBOUND so others can connect to you) ---
@@ -100,9 +101,21 @@ function Show-Status {
     if ($fwMissing.Count -eq 0) { Line "Local firewall" "OK" "hosting ports open (4001 TCP/UDP, 12024 TCP)" }
     else { Line "Local firewall" "WARN" ("{0} rule(s) missing - re-run the installer" -f $fwMissing.Count); $issues += "Local firewall is missing a hosting rule - re-run setup-digiasset.ps1 to re-open 4001/12024." }
 
-    function Test-Reach($port) { try { return (Invoke-RestMethod "https://ifconfig.co/port/$port" -TimeoutSec 12).reachable } catch { return $null } }
+    # The reachability test uses an external service (ifconfig.co). In -Watch mode
+    # don't hammer it every refresh (it will rate-limit and then always read "--");
+    # cache each port's result for ~3 minutes.
+    function Test-Reach($port) {
+        if (-not $script:reachCache) { $script:reachCache = @{} }
+        $c = $script:reachCache["$port"]
+        if ($c -and ((Get-Date) - $c.time).TotalSeconds -lt 180) { return $c.val }
+        $v = $null
+        try { $v = (Invoke-RestMethod "https://ifconfig.co/port/$port" -TimeoutSec 12).reachable } catch { $v = $null }
+        $script:reachCache["$port"] = @{ val = $v; time = (Get-Date) }
+        return $v
+    }
 
     $r4001 = Test-Reach 4001
+    $port4001ok = ($r4001 -eq $true)
     if ($r4001 -eq $true) { Line "Port 4001 (DigiAsset)" "OK" "reachable - hosting IPFS/DigiAsset content" }
     elseif ($r4001 -eq $false) { Line "Port 4001 (DigiAsset)" "WARN" "NOT reachable - forward TCP+UDP 4001 on your router"; $issues += "Port 4001 (DigiAsset/IPFS hosting) isn't reachable - forward TCP+UDP 4001 on your router or you may not be verified/paid." }
     else { Line "Port 4001 (DigiAsset)" "--" "could not run the online test right now" }
@@ -113,17 +126,19 @@ function Show-Status {
     else { Line "Port 12024 (DigiByte)" "--" "could not run the online test right now" }
 
     # --- Pool registration / self-check ---
+    $poolRegistered = $false
     try {
         $nodesJson = (Invoke-WebRequest "$pool/nodes.json" -UseBasicParsing -TimeoutSec 12).Content
         $ids = [regex]::Matches($nodesJson, '"id"\s*:\s*"([^"]+)"') | ForEach-Object { BarePeer $_.Groups[1].Value }
         $count = $ids.Count
-        if ($myId -and ($ids -contains $myId)) { Line "Pool" "OK" ("REGISTERED - you're in ({0} node(s) online)" -f $count) }
+        if ($myId -and ($ids -contains $myId)) { $poolRegistered = $true; Line "Pool" "OK" ("REGISTERED - you're in ({0} node(s) online)" -f $count) }
         elseif ($myId) { Line "Pool" "WARN" ("not listed yet ({0} node(s) online)" -f $count); $issues += "Your node isn't in the pool list yet - it registers after DigiByte syncs and port 4001 is open." }
         else { Line "Pool" "--" ("{0} node(s) online (can't self-check without IPFS)" -f $count) }
     } catch { Line "Pool" "--" "pool /nodes.json unreachable" }
 
     # --- Payout address ---
-    if ($cfg["psp1payout"]) { Line "Payout address" "OK" $cfg["psp1payout"] }
+    $payoutSet = [bool]$cfg["psp1payout"]
+    if ($payoutSet) { Line "Payout address" "OK" $cfg["psp1payout"] }
     else { Line "Payout address" "WARN" "not set in config.cfg"; $issues += "No payout address set - you won't be paid. Set psp1payout in config.cfg." }
 
     Write-Host ""
@@ -131,6 +146,18 @@ function Show-Status {
     else {
         Write-Host "Things to fix:" -ForegroundColor Yellow
         foreach ($i in $issues) { Write-Host "  - $i" -ForegroundColor White }
+    }
+
+    # --- Plain-English "will I get paid?" verdict (the whole point) ---
+    Write-Host ""
+    if ($poolRegistered -and $port4001ok -and $payoutSet) {
+        Write-Host "PAYOUT READINESS: you're set to be paid - registered with the pool, port 4001 open, and a payout address is set." -ForegroundColor Green
+    } else {
+        $need = @()
+        if (-not $payoutSet)      { $need += 'set your payout address' }
+        if (-not $port4001ok)     { $need += 'forward port 4001 on your router' }
+        if (-not $poolRegistered) { $need += 'get listed in the pool (needs a full sync + port 4001)' }
+        Write-Host ("PAYOUT READINESS: not yet - still need to " + ($need -join '; ') + ".") -ForegroundColor Yellow
     }
     Write-Host ""
     Write-Host "Pool + earnings: $pool" -ForegroundColor Gray

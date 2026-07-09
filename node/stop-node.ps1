@@ -25,7 +25,7 @@ param(
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Continue"
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 
 # Elevation (needed to stop SYSTEM tasks / remove firewall rules).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -54,7 +54,8 @@ $rules = "DigiStamp IPFS swarm (TCP 4001)", "DigiStamp IPFS swarm (UDP 4001)", "
 Write-Host "=== Stopping DigiStamp node stack  (v$ScriptVersion) ===" -ForegroundColor Cyan
 
 # 1. Graceful stops -----------------------------------------------------
-# DigiByte: ask it to stop cleanly via RPC (a hard kill risks chainstate corruption).
+# DigiByte: ask it to stop cleanly via RPC (a hard kill can corrupt chainstate
+# and force a multi-hour reindex on next start).
 $cfg = Read-Cfg (Join-Path $DigiAssetDir "config.cfg")
 if ($cfg["rpcuser"] -and $cfg["rpcpassword"]) {
     $port = 14022; if ($cfg["rpcport"]) { try { $port=[int]$cfg["rpcport"] } catch {} }
@@ -64,21 +65,35 @@ if ($cfg["rpcuser"] -and $cfg["rpcpassword"]) {
         Write-Host "  DigiByte Core: clean shutdown requested." -ForegroundColor Green
     } catch { Write-Host "  DigiByte Core: RPC stop failed (may already be down)." -ForegroundColor Yellow }
 }
-# IPFS: graceful shutdown via API.
+# DigiAsset node: clean shutdown via its CLI (avoids a torn chain.db).
+$cli = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
+if ((Test-Path $cli) -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) {
+    try { Push-Location $DigiAssetDir; & $cli shutdown 2>$null | Out-Null; Pop-Location } catch { try{Pop-Location}catch{} }
+}
+# IPFS: graceful shutdown via API (safe to force-stop afterwards if needed).
 try { Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/v0/shutdown" -Method Post -TimeoutSec 6 | Out-Null; Write-Host "  IPFS: shutdown requested." -ForegroundColor Green } catch {}
-Start-Sleep -Seconds 3
 
-# 2. Stop the scheduled tasks + any stragglers --------------------------
+# Wait for DigiByte + the node to exit CLEANLY (up to 90s) before any force-kill,
+# so we don't corrupt the DigiByte chainstate by killing it mid-flush.
+Write-Host "  waiting for a clean shutdown (up to 90s)..." -ForegroundColor Gray
+for ($i=0; $i -lt 180 -and (Get-Process digibyte-qt,digibyted,DigiAssetWindows,DigiAssetCore -EA SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
+if (Get-Process digibyte-qt,digibyted -EA SilentlyContinue) {
+    Write-Host "  WARNING: DigiByte did not stop within 90s - force-stopping now (it may recheck blocks on next start)." -ForegroundColor Yellow
+}
+
+# 2. Stop the scheduled tasks + any stragglers (incl. the legacy exe name) ----
 foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
 }
-foreach ($p in "DigiAssetWindows", "digibyte-qt", "digibyted", "IPFS Desktop", "ipfs") {
+foreach ($p in "DigiAssetWindows", "DigiAssetCore", "digibyte-qt", "digibyted", "IPFS Desktop", "ipfs") {
     Get-Process $p -ErrorAction SilentlyContinue | ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Host "  stopped $p" -ForegroundColor Green }
 }
 
 if (-not $DisableAutostart -and -not $Uninstall) {
-    Write-Host "`nStopped. Boot tasks are still in place - it will start again on next boot." -ForegroundColor Green
-    Write-Host "To also stop it restarting on boot, run with -DisableAutostart." -ForegroundColor Gray
+    Write-Host "`nStopped. Auto-start tasks are still in place - the node can come back at your" -ForegroundColor Green
+    Write-Host "next login, or within ~6 hours (a maintenance task re-checks it)." -ForegroundColor Green
+    Write-Host "To keep it from restarting:  -DisableAutostart" -ForegroundColor Gray
+    Write-Host "To remove everything:        -Uninstall" -ForegroundColor Gray
     return
 }
 

@@ -25,7 +25,12 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('both','digibyte','chaindb','manifest')][string]$Component = 'both',
+    [ValidateSet('both','digibyte','chaindb','manifest','archives')][string]$Component = 'both',
+    # archives = digibyte + chaindb, NO manifest (used by publish-snapshot step 1
+    #            so the unattended weekly run never hits an interactive prompt).
+    # Set for unattended/scheduled runs: any "are you sure?" prompt safe-aborts
+    # (throws) instead of blocking forever on Read-Host in a hidden window.
+    [switch]$NonInteractive,
     [string]$DigiByteDir  = 'C:\DigiByte',
     [string]$DigiAssetDir = 'C:\DigiAssetWindows',
     # The actual DigiByte data directory (the folder containing blocks\ and
@@ -39,11 +44,18 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.2.0'
+$ScriptVersion = '2.3.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
+# A yes/no gate that is SAFE to hit unattended: in -NonInteractive mode it never
+# waits on a human - it refuses (throws) so a scheduled run aborts cleanly with a
+# non-zero exit instead of hanging in a hidden window for hours.
+function Confirm-OrAbort($question, $reason){
+    if ($NonInteractive) { throw "Aborting (non-interactive): $reason" }
+    return ((Read-Host $question) -match '^[Yy]')
+}
 
 # --- Elevate --------------------------------------------------------------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -74,8 +86,11 @@ function New-DigiByteArchive {
     Say "`nDigiByte data: $DgbData" 'White'
     $h = if ($Height -gt 0) { $Height } else { 0 }
     $ver = 'unknown'
-    $qtPath  = (Get-Process digibyte-qt -ErrorAction SilentlyContinue | Select-Object -First 1).Path
-    $running = [bool](Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue)
+    # Capture whichever is running (GUI wallet OR headless daemon) so we restart
+    # the SAME one afterwards - previously a running digibyted was left stopped.
+    $dgbProc = Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue | Select-Object -First 1
+    $qtPath  = $dgbProc.Path
+    $running = [bool]$dgbProc
     if ($running) {
         # Try RPC (needs server=1 + creds/cookie) for the height and a clean stop.
         $cfg = Read-Cfg $DgbConf
@@ -90,7 +105,7 @@ function New-DigiByteArchive {
                 $pct=[math]::Round([double]$info.verificationprogress*100,2)
                 try { $ver=((Dgb 'getnetworkinfo').result.subversion) -replace '[^0-9\.]','' } catch {}
                 Say ("  height {0:N0}   synced {1}%   version {2}" -f $h,$pct,$ver) 'White'
-                if ($pct -lt 99.9) { Say "  WARNING: DigiByte is NOT fully synced." 'Yellow'; if((Read-Host "  Continue? (y/N)") -notmatch '^[Yy]'){ return } }
+                if ($pct -lt 99.9) { Say "  WARNING: DigiByte is NOT fully synced." 'Yellow'; if(-not (Confirm-OrAbort "  Continue anyway? (y/N)" "DigiByte not fully synced ($pct%)")){ return } }
                 Say "Stopping DigiByte cleanly (via RPC)..." 'Cyan'; try { Dgb 'stop' | Out-Null } catch {}
             } catch { Say "  RPC not answering (server=1 not enabled?)." 'Yellow' }
         } else { Say "  DigiByte is running but has no RPC access (no server=1 / creds)." 'Yellow' }
@@ -125,10 +140,16 @@ function New-ChainDbArchive {
     $height=0
     if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $height=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
     Say "`nStopping the DigiAsset node (clean shutdown)..." 'Cyan'
-    if (Get-Process DigiAssetWindows -EA SilentlyContinue) {
+    if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
         if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; & $CliExe shutdown 2>$null | Out-Null; Pop-Location } catch { try{Pop-Location}catch{} } }
-        for($i=0;$i -lt 40 -and (Get-Process DigiAssetWindows -EA SilentlyContinue);$i++){ Start-Sleep -Milliseconds 500 }
-        Get-Process DigiAssetWindows -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+        # Wait up to 60s for a CLEAN exit. We must NOT force-kill into the archive:
+        # the node runs SQLite with journal_mode=MEMORY, so a hard kill mid-write can
+        # leave chain.db torn (no -wal to replay) and that torn DB would be served to
+        # every new node. If it won't stop cleanly, abort rather than snapshot it.
+        for($i=0;$i -lt 120 -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue);$i++){ Start-Sleep -Milliseconds 500 }
+        if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
+            throw "The DigiAsset node did not shut down cleanly within 60s. Aborting so we don't snapshot a possibly-inconsistent chain.db. Close the node window and re-run."
+        }
     }
     Start-Sleep -Seconds 2
     $chainFiles = @('chain.db','chain.db-wal','chain.db-shm') | Where-Object { Test-Path (Join-Path $DigiAssetDir $_) }
@@ -147,7 +168,10 @@ function New-ChainDbArchive {
 
 # --- Assemble the manifest from the two parts -----------------------------
 function New-Manifest {
-    if (-not $BaseUrl) { $BaseUrl = (Read-Host "Enter your R2 public base URL (e.g. https://pub-xxxx.r2.dev)") }
+    if (-not $BaseUrl) {
+        if ($NonInteractive) { throw "manifest needs -BaseUrl in non-interactive mode (the public R2 URL)." }
+        $BaseUrl = (Read-Host "Enter your R2 public base URL (e.g. https://pub-xxxx.r2.dev)")
+    }
     $base = $BaseUrl.TrimEnd('/')
     function Load-Part($name){
         $local = Join-Path $OutDir $name
@@ -162,7 +186,7 @@ function New-Manifest {
         Say "`n  WARNING: chain.db height ($($c.height)) is AHEAD of the DigiByte snapshot ($($d.height))." 'Red'
         Say "  That is unsafe - the node would have analysis for blocks the wallet doesn't have yet." 'Red'
         Say "  Use a DigiByte snapshot at >= the chain.db height (regenerate the DigiByte part)." 'Red'
-        if ((Read-Host "  Write the manifest anyway? (y/N)") -notmatch '^[Yy]') { return }
+        if (-not (Confirm-OrAbort "  Write the manifest anyway? (y/N)" "chain.db height ahead of DigiByte snapshot")) { return }
     }
     $man=[ordered]@{ baseUrl=$base; created=(Get-Date).ToString('s'); digibyte=$d; chaindb=$c }
     ($man|ConvertTo-Json -Depth 6) | Set-Content -Path (Join-Path $OutDir 'snapshot.json') -Encoding UTF8
@@ -174,6 +198,7 @@ switch ($Component) {
     'digibyte' { New-DigiByteArchive }
     'chaindb'  { New-ChainDbArchive }
     'manifest' { New-Manifest }
+    'archives' { New-DigiByteArchive; New-ChainDbArchive }   # both archives, NO manifest
     default    { New-DigiByteArchive; New-ChainDbArchive; New-Manifest }
 }
 

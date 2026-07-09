@@ -25,11 +25,21 @@ param(
     [switch]$IncludePool,
     [switch]$FromBuild,
     [switch]$Build,
+    [switch]$Force,                 # reinstall even if already on the latest release
     [string]$Config = 'Release'
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.2.0'
+$ScriptVersion = '2.3.0'
+# A real Windows .exe starts with 'MZ'. Reject a truncated download or an HTML
+# error body before we overwrite a working binary with garbage.
+function Test-ValidExe($path) {
+    if (-not (Test-Path $path)) { return $false }
+    if ((Get-Item $path).Length -lt 100000) { return $false }   # our exes are >300 KB
+    try { $fs = [IO.File]::OpenRead($path); $b0 = $fs.ReadByte(); $b1 = $fs.ReadByte(); $fs.Close() } catch { return $false }
+    return ($b0 -eq 0x4D -and $b1 -eq 0x5A)   # 'M','Z'
+}
+$Supervisors = @('DigiStampNode','DigiStampMaintenance')
 $Repo     = 'chopperbriano/DigiAssetWindows'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RepoRoot 'build'
@@ -75,6 +85,15 @@ if ($FromBuild) {
 }
 Write-Host "Target: $DigiAssetDir`n" -ForegroundColor Gray
 
+# Already-up-to-date fast path: skip the download + node restart if we already
+# installed this exact release (recorded in .installed-tag). -Force overrides.
+$tagFile = Join-Path $DigiAssetDir '.installed-tag'
+if (-not $FromBuild -and -not $Force -and $tag -and (Test-Path $tagFile) -and (((Get-Content $tagFile -Raw) + '').Trim() -eq $tag)) {
+    Write-Host "Already on the latest release ($tag) - nothing to do." -ForegroundColor Green
+    Write-Host "(Use -Force to reinstall it anyway.)" -ForegroundColor Gray
+    return
+}
+
 # node + cli always; pool if asked or already present (so node boxes don't get it).
 $wantPool = $IncludePool -or (Test-Path (Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'))
 $items = @(
@@ -94,47 +113,75 @@ function Get-SourceExe($item) {
     for ($i = 1; $i -le 3; $i++) {
         try {
             Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 180
-            if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) { return $out }
+            # Verify it's a real exe (not a truncated download or an HTML/error
+            # body) BEFORE we let it overwrite the working binary.
+            if (Test-ValidExe $out) { return $out }
+            Write-Host "  downloaded $($item.name) failed validation (retry $i)..." -ForegroundColor Yellow
         } catch { Start-Sleep -Seconds (2 * $i) }
     }
     return $null
 }
 
+# Pause the auto-restart supervisors so they can't relaunch the OLD exe during
+# the swap (which would re-lock the file or leave two instances). Re-enabled in
+# the finally block no matter what happens.
+$disabledSupervisors = @()
+foreach ($tn in $Supervisors) {
+    try { if (Get-ScheduledTask -TaskName $tn -EA SilentlyContinue) { Disable-ScheduledTask -TaskName $tn -EA Stop | Out-Null; $disabledSupervisors += $tn } } catch {}
+}
+
 $updated = 0
 $restartList = @()
-foreach ($it in $items) {
-    if (-not $it.want) { continue }
-    $src = Get-SourceExe $it
-    if (-not $src) { Write-Host "  skip $($it.name) - could not get it (not built / not in the release?)" -ForegroundColor Yellow; continue }
-    $dst = Join-Path $DigiAssetDir $it.name
-    $wasRunning = $false
-    if ($it.proc -and (Get-Process $it.proc -ErrorAction SilentlyContinue)) {
-        $wasRunning = $true
-        Get-Process $it.proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        # Wait until every instance is really gone so the .exe unlocks before copy.
-        for ($w = 0; $w -lt 20 -and (Get-Process $it.proc -ErrorAction SilentlyContinue); $w++) { Start-Sleep -Milliseconds 500 }
-        if (Get-Process $it.proc -ErrorAction SilentlyContinue) { Write-Host "  WARNING: $($it.proc) still running after kill" -ForegroundColor Red }
-        else { Write-Host "  stopped $($it.proc)" -ForegroundColor Yellow }
+try {
+    foreach ($it in $items) {
+        if (-not $it.want) { continue }
+        $src = Get-SourceExe $it
+        if (-not $src) { Write-Host "  skip $($it.name) - could not get it (not built / not in the release?)" -ForegroundColor Yellow; continue }
+        $dst = Join-Path $DigiAssetDir $it.name
+        if ($it.proc -and (Get-Process $it.proc -ErrorAction SilentlyContinue)) {
+            Get-Process $it.proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            # Wait until every instance is really gone so the .exe unlocks before copy.
+            for ($w = 0; $w -lt 20 -and (Get-Process $it.proc -ErrorAction SilentlyContinue); $w++) { Start-Sleep -Milliseconds 500 }
+            if (Get-Process $it.proc -ErrorAction SilentlyContinue) { Write-Host "  WARNING: $($it.proc) still running after kill" -ForegroundColor Red }
+            else { Write-Host "  stopped $($it.proc)" -ForegroundColor Yellow }
+        }
+        # Back up the working exe so a bad copy can be rolled back.
+        $bak = "$dst.bak"
+        if (Test-Path $dst) { try { Copy-Item -LiteralPath $dst -Destination $bak -Force } catch {} }
+        # Copy, retrying briefly in case the file is momentarily still locked.
+        $copied = $false
+        for ($c = 1; $c -le 6 -and -not $copied; $c++) {
+            try { Copy-Item -LiteralPath $src -Destination $dst -Force; $copied = $true }
+            catch { Start-Sleep -Seconds 1 }
+        }
+        if (-not $copied) { Write-Host "  FAILED to update $($it.name) - file locked (is it still running?)" -ForegroundColor Red; continue }
+        # Validate what we just wrote; roll back from .bak if it's not a real exe.
+        if (-not (Test-ValidExe $dst)) {
+            Write-Host "  update of $($it.name) produced an INVALID file - rolling back to the previous version." -ForegroundColor Red
+            if (Test-Path $bak) { try { Copy-Item -LiteralPath $bak -Destination $dst -Force } catch {} }
+            continue
+        }
+        $updated++
+        Write-Host "  + updated $($it.name)" -ForegroundColor Green
+        if ($it.restart) { $restartList += @{ exe = $dst; proc = $it.proc } }
     }
-    # Copy, retrying briefly in case the file is momentarily still locked.
-    $copied = $false
-    for ($c = 1; $c -le 6 -and -not $copied; $c++) {
-        try { Copy-Item -LiteralPath $src -Destination $dst -Force; $copied = $true }
-        catch { Start-Sleep -Seconds 1 }
+
+    if ($updated -gt 0) {
+        foreach ($r in $restartList) {
+            # Only start it if it isn't somehow already running (supervisors are paused).
+            if (-not (Get-Process $r.proc -ErrorAction SilentlyContinue)) {
+                Start-Process -FilePath $r.exe -WorkingDirectory $DigiAssetDir -WindowStyle Normal
+                Write-Host "  restarted $(Split-Path -Leaf $r.exe)" -ForegroundColor Green
+            }
+        }
+        if (-not $FromBuild -and $tag) { try { Set-Content -Path $tagFile -Value $tag -Encoding ASCII } catch {} }
     }
-    if (-not $copied) { Write-Host "  FAILED to update $($it.name) - file locked (is it still running?)" -ForegroundColor Red; continue }
-    $updated++
-    Write-Host "  + updated $($it.name)" -ForegroundColor Green
-    if ($it.restart -and $wasRunning) { $restartList += $dst }
+}
+finally {
+    # Always restore the supervisors so the node keeps auto-starting normally.
+    foreach ($tn in $disabledSupervisors) { try { Enable-ScheduledTask -TaskName $tn -EA Stop | Out-Null } catch {} }
 }
 
 if ($updated -eq 0) { Write-Host "`nNothing updated." -ForegroundColor Yellow; return }
-
-foreach ($exe in $restartList) {
-    # -WindowStyle Normal so the node/pool dashboards come back VISIBLE.
-    Start-Process -FilePath $exe -WorkingDirectory $DigiAssetDir -WindowStyle Normal
-    Write-Host "  restarted $(Split-Path -Leaf $exe)" -ForegroundColor Green
-}
-
 Write-Host "`nDone. Updated $updated binary(ies) in $DigiAssetDir." -ForegroundColor Green
 if ($restartList.Count -eq 0) { Write-Host "(Apps weren't running - they'll start via your logon tasks / next login.)" -ForegroundColor Gray }

@@ -850,19 +850,43 @@ addnode=64.182.71.56:12024
 function Write-NodeConfig($rpc) {
     Ensure-Dir $DigiAssetDir
     if (Test-Path $NodeConfig) {
-        # Repair, don't clobber. The local pool (index 0) subscribes by default and
-        # needs a payout address; without psp0payout it falls back to the _psppayout
-        # label and CRITICALs trying to mint one from a wallet that may not exist.
-        # Add any missing psp0 payout line so an older/partial config still works.
+        # Repair in place - preserve the file (and its comments), but actually apply
+        # a changed payout address. Re-running the installer with a new address MUST
+        # update psp1payout (what the pool pays) + psp0payout; the old code only
+        # appended missing keys, so a re-run silently kept paying the old address.
         $existing = Get-Content $NodeConfig
+        $changed = $false
+        if ($PayoutAddress) {
+            # foreach STATEMENT (same scope) so $changed actually updates - a
+            # ForEach-Object block would set it in a child scope only.
+            $rebuilt = @()
+            foreach ($ln in $existing) {
+                if ($ln -match '^\s*psp1payout\s*=(.*)$') {
+                    if ($Matches[1].Trim() -ne $PayoutAddress) { $ln = "psp1payout=$PayoutAddress"; $changed = $true }
+                } elseif ($ln -match '^\s*psp0payout\s*=(.*)$') {
+                    if ($Matches[1].Trim() -ne $PayoutAddress) { $ln = "psp0payout=$PayoutAddress"; $changed = $true }
+                }
+                $rebuilt += $ln
+            }
+            $existing = $rebuilt
+        }
+        # Top up any missing keys an older/partial config lacks.
         $add = @()
-        if ($PayoutAddress -and -not ($existing -match '^psp0payout=')) { $add += @("psp0subscribe=1","psp0payout=$PayoutAddress") }
-        if (-not ($existing -match '^verifydatabasewrite=')) { $add += 'verifydatabasewrite=0' }   # fast path
-        if ($add.Count -gt 0) {
-            Add-Content -Path $NodeConfig -Value $add -Encoding ASCII
-            Log '  config.cfg existed - added missing psp0 payout / fast-path settings.' 'OK'
+        if ($PayoutAddress -and -not ($existing -match '^\s*psp0payout\s*=')) { $add += @('psp0subscribe=1',"psp0payout=$PayoutAddress") }
+        if ($PayoutAddress -and -not ($existing -match '^\s*psp1payout\s*=')) { $add += @('psp1subscribe=1',"psp1payout=$PayoutAddress") }
+        if (-not ($existing -match '^\s*verifydatabasewrite\s*=')) { $add += 'verifydatabasewrite=0' }   # fast path
+        if ($changed -or $add.Count -gt 0) {
+            $out = @($existing)
+            if ($add.Count -gt 0) {
+                # Newline guard: never concatenate onto a hand-edited last line.
+                if ($out.Count -gt 0 -and "$($out[-1])".Trim() -ne '') { $out += '' }
+                $out += $add
+            }
+            Set-Content -Path $NodeConfig -Value $out -Encoding ASCII
+            if ($changed)        { Log "  config.cfg: payout address updated to $PayoutAddress (node will re-register with the pool)." 'OK' }
+            if ($add.Count -gt 0) { Log '  config.cfg: added missing psp payout / fast-path settings.' 'OK' }
         } else {
-            Log '  config.cfg already exists - leaving it untouched.'
+            Log '  config.cfg already up to date - leaving it untouched.'
         }
         return
     }
@@ -916,7 +940,8 @@ function Write-NodeConfig($rpc) {
         'verifydatabasewrite=0',
         'storenonassetutxo=0',
         'pruneage=5760',
-        'bootstrapchainstate=1'
+        'bootstrapchainstate=1',
+        'pipelinesync=0'
     )
     Set-Content -Path $NodeConfig -Value $lines -Encoding ASCII
     Log "  + config.cfg (documented; pool=$PoolServer, payout=$PayoutAddress)" 'OK'
@@ -1134,7 +1159,16 @@ function Invoke-Install {
         for ($tries = 0; $tries -lt 5; $tries++) {
             $script:PayoutAddress = Read-Host '  Paste your DGB payout address'
             $PayoutAddress = ("$script:PayoutAddress").Trim()
-            if ($PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') { break }
+            if ($PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
+                # Read it back and confirm - the format check can't catch a
+                # transposed/truncated paste, and a wrong address = lost earnings.
+                Write-Host ''
+                Write-Host "  You entered:  $PayoutAddress" -ForegroundColor Cyan
+                Write-Host '  Earnings will be sent here. Double-check it matches YOUR wallet exactly.' -ForegroundColor Gray
+                if ((Read-Host '  Is this correct? (Y/n)') -notmatch '^[Nn]') { break }
+                Write-Host '  OK - paste it again.' -ForegroundColor Yellow
+                $PayoutAddress = ''; continue
+            }
             Write-Host '  That does not look like a DigiByte address (should start with D, S, or dgb1). Try again.' -ForegroundColor Yellow
             $PayoutAddress = ''
         }
@@ -1169,6 +1203,27 @@ function Invoke-Install {
     }
 
     # --- Prerequisites ------------------------------------------------------
+    # Internet: everything below downloads from GitHub / IPFS. Fail fast + clearly
+    # instead of a cryptic "could not download" halfway through.
+    Log 'Checking internet connection...' 'STEP'
+    try { Invoke-WebRequest 'https://github.com' -UseBasicParsing -Method Head -TimeoutSec 15 | Out-Null; Log '  internet OK.' 'OK' }
+    catch { throw "Can't reach the internet (couldn't contact github.com). Connect to the internet and re-run this installer - re-running is safe and resumes where it left off." }
+
+    # Disk space: a full archival node + fast-sync snapshot is tens of GB. Warn
+    # BEFORE downloading so a small disk doesn't fill up mid-sync with weird errors.
+    try {
+        $drive = New-Object System.IO.DriveInfo((Split-Path $DigiByteDir -Qualifier) + '\')
+        $freeGB = [math]::Round($drive.AvailableFreeSpace / 1GB, 1)
+        if ($freeGB -lt 70) {
+            Write-Host ''
+            Write-Host "  DISK SPACE WARNING: a full node + fast-sync snapshot needs about 60-80 GB." -ForegroundColor Yellow
+            Write-Host "  You have $freeGB GB free on drive $($drive.Name). It may fill up during sync." -ForegroundColor Yellow
+            if ((Read-Host '  Continue anyway? (y/N)') -notmatch '^[Yy]') { Write-Host 'Cancelled - free up disk space and re-run.' -ForegroundColor Yellow; return }
+        } else {
+            Log ("  disk space: {0:N0} GB free on {1} - OK." -f $freeGB, $drive.Name) 'OK'
+        }
+    } catch { Log '  (could not check free disk space - continuing)' 'WARN' }
+
     Log 'Checking prerequisites (Visual C++ x64 runtime the node needs)...' 'STEP'
     Ensure-VCRuntime
 

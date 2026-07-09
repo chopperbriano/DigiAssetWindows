@@ -42,7 +42,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.0.0'
+$SCRIPT_VERSION = '1.1.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 function Step($n,$m){ Write-Host ''; Write-Host "[$n] $m" -ForegroundColor Cyan }
 $here     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -79,6 +79,10 @@ if ($Schedule) {
 
 # --- Preconditions -----------------------------------------------------------
 if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) { throw "rclone not found in PATH. Install rclone and configure the '$RcloneRemote' remote first." }
+# Verify the remote itself exists, not just the binary - otherwise the failure
+# only surfaces AFTER archives are built (services stopped/restarted, GBs written).
+$remotes = @(& rclone listremotes 2>$null)
+if ($remotes -notcontains "${RcloneRemote}:") { throw "rclone remote '${RcloneRemote}:' is not configured. Run 'rclone config' to set up your Cloudflare R2 remote named '$RcloneRemote' first (see snapshots README)." }
 if (-not (Test-Path $makeSnap)) { throw "make-snapshot.ps1 not found next to this script ($makeSnap)." }
 $flags = @('--s3-no-check-bucket','--s3-chunk-size','128M','--s3-upload-concurrency','8','--s3-disable-checksum','--progress')
 
@@ -86,9 +90,14 @@ Say '==============================================================' 'Cyan'
 Say " Publish fast-sync snapshot ($Component) -> $remote   (v$SCRIPT_VERSION)" 'Cyan'
 Say '==============================================================' 'Cyan'
 
-# --- 1. Build the archives + part files --------------------------------------
+# --- 1. Build the archives + part files (NO manifest here) -------------------
+# Step 1 builds ARCHIVES ONLY in NON-INTERACTIVE mode. This is the fix for the
+# weekly-task hang: the old code built the manifest here too, which prompts for
+# the R2 URL via Read-Host and blocked the hidden scheduled run until timeout.
+# The manifest is built once, correctly, in Step 3 (which passes -BaseUrl).
+$step1Component = if ($Component -eq 'both') { 'archives' } else { $Component }
 Step 1 'Building snapshot archives (stops + restarts DigiByte / the node)'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component $Component -DigiByteDir $DigiByteDir -DigiAssetDir $DigiAssetDir -DataDir $DataDir -OutDir $OutDir
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component $step1Component -NonInteractive -DigiByteDir $DigiByteDir -DigiAssetDir $DigiAssetDir -DataDir $DataDir -OutDir $OutDir
 if ($LASTEXITCODE -ne 0) { throw "make-snapshot failed (exit $LASTEXITCODE)." }
 
 # --- 2. Upload archives + part files -----------------------------------------
@@ -96,9 +105,28 @@ Step 2 "Uploading archives to $remote"
 & rclone copy $OutDir "$remote/" --include "*.tar.gz" --include "*-part.json" @flags
 if ($LASTEXITCODE -ne 0) { throw "rclone upload of archives failed (exit $LASTEXITCODE)." }
 
+# --- 2b. Verify the uploaded archive bytes match locally ---------------------
+# --s3-disable-checksum means rclone doesn't hash-verify multipart uploads, so a
+# truncated/partial upload could otherwise be published and break fast-sync for
+# EVERY new node. Compare each uploaded archive's size on R2 to the local part
+# file's recorded size; abort before publishing the manifest on any mismatch.
+Step '2b' 'Verifying uploaded archive integrity on R2'
+foreach ($partName in 'digibyte-part.json','chaindb-part.json') {
+    $pf = Join-Path $OutDir $partName
+    if (-not (Test-Path $pf)) { continue }   # that component wasn't built this run
+    $part = Get-Content $pf -Raw | ConvertFrom-Json
+    $file = $part.file; $expect = [int64]$part.sizeBytes
+    $info = @(& rclone lsjson "$remote/" --include $file --no-modtime 2>$null | ConvertFrom-Json)
+    $got  = if ($info.Count -ge 1) { [int64]$info[0].Size } else { -1 }
+    if ($got -ne $expect) {
+        throw "Upload integrity check FAILED for $file : R2 has $got bytes, expected $expect. NOT publishing snapshot.json (new nodes would get a corrupt/partial file). Re-run to retry the upload."
+    }
+    Say "  OK  $file  ($('{0:N0}' -f $got) bytes match)" 'Green'
+}
+
 # --- 3. Rebuild + upload snapshot.json ---------------------------------------
 Step 3 'Rebuilding + uploading snapshot.json'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component manifest -BaseUrl $BaseUrl -OutDir $OutDir
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component manifest -NonInteractive -BaseUrl $BaseUrl -OutDir $OutDir
 $manifest = Join-Path $OutDir 'snapshot.json'
 if (-not (Test-Path $manifest)) { throw 'snapshot.json was not produced.' }
 & rclone copyto $manifest "$remote/snapshot.json" --s3-no-check-bucket
