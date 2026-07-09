@@ -873,12 +873,21 @@ void ConsoleDashboard::render() {
             << FG_BRIGHT_WHITE << formatNumber(_assetCount) << " local" << RESET;
         if (checked && tracked > 0) {
             double pct = 100.0 * (double)have / (double)tracked;
-            const char* cvrColor = (have == tracked) ? FG_GREEN :
-                                   (pct >= 99.0)     ? FG_YELLOW : FG_RED;
             char covBuf[96];
-            snprintf(covBuf, sizeof(covBuf), " / %u tracked / %.1f%% coverage",
-                     tracked, pct);
-            out << cvrColor << covBuf << RESET;
+            if (syncState != ChainAnalyzer::SYNCED) {
+                // Still catching up: "coverage" is really "how much of the chain
+                // we've decoded", which climbs as we sync. Show it calmly, not as
+                // an alarming red 0% (nothing is wrong). See PERMANENT-STORAGE.md.
+                snprintf(covBuf, sizeof(covBuf), " / %u tracked / %.1f%% decoded (syncing)",
+                         tracked, pct);
+                out << DIM << covBuf << RESET;
+            } else {
+                const char* cvrColor = (have == tracked) ? FG_GREEN :
+                                       (pct >= 99.0)     ? FG_YELLOW : FG_RED;
+                snprintf(covBuf, sizeof(covBuf), " / %u tracked / %.1f%% coverage",
+                         tracked, pct);
+                out << cvrColor << covBuf << RESET;
+            }
         } else if (!checked) {
             out << DIM << " / checking coverage..." << RESET;
         }
@@ -1221,8 +1230,22 @@ void ConsoleDashboard::checkPermanentCoverage() {
         }
     }
 
-    // Log any gap at WARNING so normal users notice without flipping to DEBUG.
-    if (!missing.empty()) {
+    // "Missing" here means "this permanent-list asset is not in our local chain
+    // database YET" - i.e. we haven't decoded the block it was issued in. During
+    // initial sync that is completely normal and NOT a problem (it resolves as we
+    // catch up), so only shout about it once we are fully synced. (Note: this is
+    // a CHAIN-DECODE progress measure, not IPFS pin status - the permanent CIDs
+    // are pinned separately by the PSP fetcher thread. See PERMANENT-STORAGE.md.)
+    ChainAnalyzer* covAnalyzer = AppMain::GetInstance()->getChainAnalyzerIfSet();
+    bool fullySynced = covAnalyzer && (covAnalyzer->getSync() == ChainAnalyzer::SYNCED);
+    if (!missing.empty() && !fullySynced) {
+        // Still syncing - calm, single INFO line, no per-asset "missing" spam.
+        log->addMessage("Permanent-list: " + std::to_string(have) + "/" +
+                                std::to_string(tracked) +
+                                " assets decoded so far (still syncing - the rest appear as you catch up)",
+                        Log::INFO);
+    } else if (!missing.empty()) {
+        // Fully synced but still missing entries: a genuine gap worth a WARNING.
         log->addMessage("Permanent-list coverage: " + std::to_string(have) +
                                 "/" + std::to_string(tracked) +
                                 " (" + std::to_string(missing.size()) + " missing)",
