@@ -131,8 +131,13 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
                 skipUpToVersion = 6; //tell not to execute steps until version 6 to 7 transition
                 if (rc != SQLITE_OK) {
+                    // Surface the ACTUAL sqlite error - "database is locked",
+                    // "disk I/O error", "database disk image is malformed"
+                    // (corrupt), "table ... already exists" (half-created), etc.
+                    // so the FATAL line says WHY instead of a useless generic.
+                    std::string err = zErrMsg ? zErrMsg : sqlite3_errmsg(_db);
                     sqlite3_free(zErrMsg);
-                    throw exceptionFailedToCreateTable();
+                    throw exceptionFailedToCreateTable("Table creation failed (rc=" + std::to_string(rc) + "): " + err);
                 }
             },
 
@@ -181,8 +186,9 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                                   "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
                 if (rc != SQLITE_OK) {
+                    std::string err = zErrMsg ? zErrMsg : sqlite3_errmsg(_db);
                     sqlite3_free(zErrMsg);
-                    throw exceptionFailedToCreateTable();
+                    throw exceptionFailedToCreateTable("Table upgrade (5->6) failed (rc=" + std::to_string(rc) + "): " + err);
                 }
             }
 

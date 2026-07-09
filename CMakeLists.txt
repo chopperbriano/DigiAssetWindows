@@ -43,7 +43,7 @@ SET(SO_VERSION    0)
 # This is the SOURCE OF TRUTH for the version — it is substituted into
 # src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
 # match the win.<N> tag on every release; do NOT hand-edit the generated header.
-SET(WIN_BUILD 87)
+SET(WIN_BUILD 88)
 
 # Add source directory
 include_directories(src)
