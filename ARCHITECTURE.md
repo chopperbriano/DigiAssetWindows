@@ -124,10 +124,11 @@ DigiByte Core  →  ChainAnalyzer  →  chain.db (SQLite)  →  asset/UTXO model
     pool server over HTTP (`psp1server`, default `https://pool.digistamp.co`).
     Two threads: `keepAliveTask` (stay visible on the node map) and
     `permanentFetcherTask` (walk `/permanent/<page>.json`, pin every listed CID).
-    **Historical note carried in the code:** the original on-chain fee-matching
-    payment protocol was never deployed server-side, so `serializeMetaProcessor`
-    is dead and the `/list` payout endpoints have returned HTTP 500 since ~2024.
-    The **permanent-list pinning is the part that still does useful work.**
+    **Design note:** mctrivia's protocol included an on-chain fee-matching payment
+    path; in this fork payouts run through the pool server instead, so
+    `serializeMetaProcessor` is retired and the legacy `/list` endpoint is probed
+    only for a dashboard indicator. The **permanent-list pinning is the core,
+    ongoing useful work.**
   - `PermanentStoragePoolMetaProcessor.*` — decides, per file in an asset, whether
     to pin it.
 
@@ -175,8 +176,9 @@ Permanent Storage Pools, and exposes RPC/web/CLI. Installed and kept healthy by
 ### B. The pool server — `DigiAssetPoolServer.exe` + Caddy website
 
 Under **`pool/`**. An **optional** companion that lets an operator run their own
-Permanent Storage Pool implementing mctrivia's wire protocol (since mctrivia's
-own server returns 500s on payout endpoints). Only pool operators run it.
+Permanent Storage Pool implementing the wire protocol mctrivia designed - so the
+community can run independent pools building on that original work. Only pool
+operators run it.
 
 - **`pool/main.cpp`** — reads `pool.cfg`, opens `pool.db`, binds the listen
   socket (default port **14028**), runs a one-time **first-run snapshot** that

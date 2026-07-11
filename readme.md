@@ -298,11 +298,12 @@ operators.
 4. Watch the dashboard's **Payment** row for your status (`registered (no payouts
    yet)` → the pool hasn't enabled payouts; `active` → it has).
 
-> **Heads-up about the original pool.** The pool historically run by Matthew
-> Cornelisse (`ipfs.digiassetx.com`, pool #1) has not paid anyone since ~July
-> 2024 — its payout endpoints return HTTP 500. Registration and hosting still
-> work, but no DGB arrives. This is exactly why this fork ships a pool server so
-> the community can run **their own** paying pools.
+> **About pools.** Matthew Cornelisse (mctrivia) created the original DigiAsset
+> Permanent Storage Pool at `ipfs.digiassetx.com` (pool #1) — the design and
+> protocol that make all of this possible, and huge credit for it. Building on
+> that foundation, this fork ships its own pool server so the **community can run
+> their own paying pools** (like DigiStamp) with full control over registration
+> and payouts. Point your node at whichever pool you like via `psp1server`.
 
 ### Pool operator — you want to run a pool and pay hosts
 

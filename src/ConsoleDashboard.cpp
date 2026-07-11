@@ -702,9 +702,9 @@ void ConsoleDashboard::render() {
     //   2. mctrivia::getPermanentFetchHealth()  -> /permanent/<page>.json works,
     //      we're actively pinning canonical content for the pool
     //   3. mctrivia::getRegistrationHealth()    -> /list/<floor>.json POST works,
-    //      meaning payout registration would succeed. This has been returning
-    //      HTTP 500 on mctrivia's server since ~July 2024 and the pool operator
-    //      is uncontactable, so the Ok branch is primarily future-proofing.
+    //      meaning the legacy registration endpoint responds. Registration +
+    //      payouts are handled by the pool server (psp1server) in this fork, so
+    //      this signal just drives a dashboard indicator.
     //
     // See memory/project_psp_payment_diagnosis.md for the full story.
     {
@@ -786,7 +786,7 @@ void ConsoleDashboard::render() {
         //   yellow registered (no payouts yet)  - pool registered, payoutsEnabled=false
         //                                         (Phase 1 local pool, or legacy server
         //                                         that doesn't send the field)
-        //   red    unavailable                  - /list probe fails (mctrivia's dead server)
+        //   red    unavailable                  - /list registration probe didn't respond
         //   dim    checking...                  - not probed yet
         if (pool) {
             std::string lp2 = std::string("Payment:") + std::string(COL1_LABEL_W - 8, ' ');
@@ -1800,7 +1800,7 @@ void ConsoleDashboard::printSwarmConnectCommands() {
                         "or wait for relay addresses to appear)", Log::WARNING);
     } else {
         log->addMessage("Then: ipfs swarm peers | grep " + peerId.substr(0, 20));
-        log->addMessage("If the connect succeeds, mctrivia's server can reach you too.");
+        log->addMessage("If the connect succeeds, the pool can reach you too.");
     }
     log->addMessage("--- end verify ---");
 }

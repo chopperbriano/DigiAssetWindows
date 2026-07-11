@@ -1,10 +1,10 @@
 //
 // DigiAssetPoolServer - optional companion exe for DigiAsset for Windows.
 //
-// Implements mctrivia's pool wire protocol so the win.31+ C++ client can
-// register payout addresses and fetch the permanent asset list from a pool
-// this operator controls (rather than mctrivia's server, which has been
-// returning HTTP 500 on payout-related endpoints since ~July 2024).
+// Implements the pool wire protocol mctrivia designed, so the win.31+ C++ client
+// can register payout addresses and fetch the permanent asset list from a pool
+// this operator controls - letting the community run their own independent pools
+// on top of mctrivia's excellent original design.
 //
 // Phase 1 scope:
 //   - Minimal HTTP endpoints: /permanent/<page>.json, /list/<floor>.json,

@@ -1,12 +1,13 @@
 # DigiAssetPoolServer
 
 An optional companion executable (`DigiAssetPoolServer.exe`) that lets an
-operator run their **own** Permanent Storage Pool server for the Windows fork,
-instead of depending on `ipfs.digiassetx.com` (which has returned HTTP 500 on
-payout-related endpoints since ~July 2024). It re-implements mctrivia's pool
-wire protocol: serving the permanent-asset list, accepting node registrations,
-verifying that registered nodes actually host the content, and — if the
-operator opts in — paying verified nodes in DGB.
+operator run their **own** Permanent Storage Pool server for the Windows fork.
+It builds on the excellent pool protocol mctrivia designed for
+`ipfs.digiassetx.com`, re-implementing that wire protocol so the community can
+run independent pools: serving the permanent-asset list, accepting node
+registrations, verifying that registered nodes actually host the content, and —
+if the operator opts in — paying verified nodes in DGB. Full credit to mctrivia
+for the original design this stands on.
 
 There are two roles:
 

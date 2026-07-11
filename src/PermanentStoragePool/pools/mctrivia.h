@@ -12,13 +12,12 @@
 //     to the local IPFS node, and opportunistically probes /list/<floor>.json
 //     to report pool-registration/payout health to the dashboard.
 //
-// Historical note carried through this file: the original design assumed an
-// on-chain fee-matching payment protocol that was never deployed server-side.
-// The on-chain serializer path is therefore dead (serializeMetaProcessor always
-// returns ""), and the /list registration/payout endpoints have been returning
-// HTTP 500 since ~July 2024. The permanent-list pinning is the part that still
-// does useful work. Used by the node (DigiAssetWindows.exe); the pool side is
-// served by DigiAssetPoolServer.exe.
+// Design note: mctrivia's original protocol included an on-chain fee-matching
+// payment path; in practice payouts are handled by the pool server instead, so
+// the on-chain serializer path is retired (serializeMetaProcessor returns "")
+// and the legacy /list endpoint is probed only for a dashboard health indicator.
+// The permanent-list pinning is the core, ongoing useful work. Used by the node
+// (DigiAssetWindows.exe); the pool side is served by DigiAssetPoolServer.exe.
 //
 
 #ifndef DIGIASSET_CORE_MCTRIVIA_H
@@ -149,9 +148,10 @@ public:
     // user-visible benefit today.
 };
 
-// Stub metadata processor. The old mctriviaMetaProcessor used serialized-byte
-// budgets produced by the dead on-chain serializer path; it is never reached
-// now that serializeMetaProcessor always returns "".
+// Stub metadata processor. The original mctriviaMetaProcessor used serialized-byte
+// budgets from the on-chain serializer path; that path is retired (payouts run
+// through the pool server), so serializeMetaProcessor returns "" and this is a
+// no-op kept for interface compatibility.
 class mctriviaMetaProcessor : public PermanentStoragePoolMetaProcessor {
 public:
     mctriviaMetaProcessor(const std::string& serializedData, unsigned int poolIndex);

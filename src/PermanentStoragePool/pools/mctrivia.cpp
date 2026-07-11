@@ -2,12 +2,13 @@
 // Created by mctrivia on 04/11/23.
 //
 //
-// mctrivia.cpp - implementation of the networked "MCTrivia's PSP" (see
-// mctrivia.h). Contains the two background thread bodies (keepalive + permanent
-// fetcher), the HTTP glue to the pool server, cost/enable logic for asset
-// creators, and the bad-list maintenance. See the header for the historical
-// context on why the on-chain payment path is dead and the /list endpoint is
-// only probed for diagnostics.
+// mctrivia.cpp - implementation of the networked Permanent Storage Pool client
+// (see mctrivia.h), named for mctrivia who designed this elegant pool protocol.
+// Contains the two background thread bodies (keepalive + permanent fetcher), the
+// HTTP glue to the pool server, cost/enable logic for asset creators, and the
+// bad-list maintenance. Registration + payouts are handled by whichever pool you
+// point psp1server at (the community DigiStamp pool by default, or your own); the
+// legacy /list endpoint is probed only for diagnostics.
 //
 
 #include "mctrivia.h"
@@ -26,13 +27,14 @@
 using namespace std;
 
 namespace {
-    // Default base URL for the pool server used when `psp1server` is not set
-    // in config.cfg. Defaults to the DigiStamp pool because mctrivia's original
-    // (https://ipfs.digiassetx.com) has returned HTTP 500 on payout endpoints
-    // since ~July 2024 and no longer pays. Override by setting `psp1server`
-    // in config.cfg — e.g. `http://127.0.0.1:14028` for a local
-    // DigiAssetPoolServer.exe instance. Keep this in sync with the wizard
-    // default in src/main.cpp.
+    // Default base URL for the pool server used when `psp1server` is not set in
+    // config.cfg. mctrivia's DigiAssetX pool (https://ipfs.digiassetx.com)
+    // pioneered permanent storage and the payout protocol this builds on - huge
+    // credit to that original work. The Windows fork simply defaults to the
+    // community DigiStamp pool, and you can point at ANY pool - including your
+    // own - by setting `psp1server` (e.g. `http://127.0.0.1:14028` for a local
+    // DigiAssetPoolServer.exe). Keep this in sync with the wizard default in
+    // src/main.cpp.
     const std::string DEFAULT_POOL_BASE = "https://pool.digistamp.co";
 }
 
@@ -147,10 +149,10 @@ void mctrivia::enable(DigiByteTransaction& tx) {
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool("psp1visible", true);
 
-    // Pool server base URL. Defaults to the DigiStamp pool (mctrivia's original
-    // no longer pays — see the DEFAULT_POOL_BASE comment above). Set
-    // psp1server=http://... in config.cfg to point at a different pool (e.g. a
-    // local DigiAssetPoolServer.exe).
+    // Pool server base URL. Defaults to the community DigiStamp pool (see the
+    // DEFAULT_POOL_BASE comment above). Set psp1server=http://... in config.cfg
+    // to point at a different pool - e.g. a local DigiAssetPoolServer.exe you run
+    // yourself for full control over registration + payouts.
     _baseUrl = config.getString("psp1server", DEFAULT_POOL_BASE);
     // Strip any trailing slash so later url construction like `_baseUrl +
     // "/permanent/..."` produces clean paths regardless of how the user
@@ -239,10 +241,9 @@ void mctrivia::keepAliveTask() {
  * page reports `done: true`, advances to the next page and persists progress
  * to config.cfg so restarts don't re-walk from scratch.
  *
- * This is the one piece of mctrivia's protocol that works server-side today.
- * It's the real "what should this node pin" signal. No payments flow from it
- * currently (the /list/<floor>.json registration endpoint has been returning
- * HTTP 500 since ~July 2024), but the pinning itself is useful work.
+ * This is the core "what should this node pin" signal in mctrivia's protocol,
+ * and the pinning is genuinely useful work regardless of which pool handles
+ * registration + payouts (that's whatever pool you point psp1server at).
  */
 void mctrivia::permanentFetcherTask() {
     Log* log = Log::GetInstance();
@@ -279,10 +280,11 @@ void mctrivia::permanentFetcherTask() {
         }
 
         // Probe the /list endpoint once per 3 iterations (~30 min). Purely
-        // diagnostic — the server has been 500ing on it since the pool stopped
-        // paying, but if it ever starts working again the dashboard will flip
-        // to green without a client update. Wrapped in its own try/catch so a
-        // transport error can never take down the fetcher thread.
+        // diagnostic: registration + payouts are handled by whichever pool you
+        // point psp1server at, so this legacy endpoint's response just drives a
+        // dashboard indicator - if it responds, the dashboard reflects it with no
+        // client update. Wrapped in its own try/catch so a transport error can
+        // never take down the fetcher thread.
         if ((probeCounter % 3) == 0) {
             try {
                 probeListEndpoint();
@@ -402,9 +404,9 @@ bool mctrivia::fetchAndPinPermanentPage(unsigned int page) {
 }
 
 /**
- * POSTs to /list/<floor>.json once. Best-effort — the server has been
- * returning HTTP 500 on this endpoint since payments stopped working, so we
- * expect failure. We record the result for dashboard display.
+ * POSTs to /list/<floor>.json once. Best-effort - this legacy endpoint may or
+ * may not respond depending on the pool in use; either way we record the result
+ * for the dashboard indicator.
  */
 void mctrivia::probeListEndpoint() {
     Log* log = Log::GetInstance();
