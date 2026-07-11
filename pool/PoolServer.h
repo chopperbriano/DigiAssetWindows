@@ -66,6 +66,13 @@ public:
     void setPayoutsEnabled(bool enabled) { _payoutsEnabled.store(enabled); }
     bool getPayoutsEnabled() const { return _payoutsEnabled.load(); }
 
+    // Shared secret gating POST /permanent/add (the marketplace/operator
+    // ingestion endpoint). Set once from pool.cfg `pooladmintoken` BEFORE
+    // start(); an empty token disables the endpoint entirely (403). Because
+    // it's assigned before the accept threads launch and only read afterwards,
+    // a plain string is safe (no lock needed).
+    void setIngestToken(const std::string& token) { _ingestToken = token; }
+
     // Info needed to serve GET /pool/stats.json (the public donation/balance
     // page). The donation address is published on the web page; the RPC creds
     // let the server read the wallet balance + amount received. All optional —
@@ -89,6 +96,8 @@ private:
     std::atomic<bool> _running{false};
     std::atomic<uint64_t> _requestCount{0};
     std::atomic<bool> _payoutsEnabled{false};
+    // Shared secret for POST /permanent/add; empty = endpoint disabled.
+    std::string _ingestToken;
 
     // Donation/stats state. Guarded by _statsMutex; the balance is cached and
     // only refreshed via RPC at most every ~30s so a public endpoint can't be
@@ -141,6 +150,12 @@ private:
     // list (assetId/txHash -> CIDs) that clients pin, mirroring mctrivia's
     // wire format. Parses the page number out of `path`.
     void handlePermanent(const std::string& path, int& outStatus, std::string& outBody);
+    // POST /permanent/add — token-gated ingestion. Adds an asset's CIDs to the
+    // permanent list so pool nodes pin+serve it. Body is JSON:
+    //   {"token":"...","assetId":"La..","txHash":"<issuance txid>","cids":"cid1,cid2"}
+    // Idempotent (INSERT OR IGNORE). Lets the marketplace publish freshly
+    // minted assets so they propagate to wallets via the pool fleet.
+    void handlePermanentAdd(const std::string& body, int& outStatus, std::string& outBody);
     // POST /keepalive — a registered node checking in. Records the node's
     // liveness (keyed off `body` + `clientIp`) in the pool database.
     void handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody);

@@ -72,6 +72,15 @@ public:
     // whether mctrivia's source page had done=true at fetch time.
     void setPermanentPageDone(unsigned int page, bool done, const std::string& daily);
 
+    // Pick the page an operator/marketplace-added asset should be written to.
+    // Returns the highest page that is NOT yet marked done, so clients (which
+    // walk pages upward and park on the first non-done page, re-fetching it
+    // each cycle) pick up new additions without a restart. Rolls to a fresh
+    // page — marking the current one done — once it fills, to keep page bodies
+    // a sane size. On an empty pool it returns the stock client start page (23)
+    // so a default client's walk actually reaches these entries.
+    unsigned int getWritablePage();
+
     // Has the first-run snapshot already populated the db?
     bool hasPermanentData();
 

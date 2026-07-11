@@ -98,6 +98,7 @@ from the working directory. Keys:
 |---|---|---|
 | `poolport` | `14028` | TCP port the pool server listens on |
 | `pooldbpath` | `pool.db` | sqlite file for pool state |
+| `pooladmintoken` | *(unset)* | Shared secret gating `POST /permanent/add`. Unset = the ingestion endpoint is **disabled** (403). Set it (and give the same value to your publisher, e.g. the marketplace) to let a trusted service push freshly-minted asset CIDs onto the permanent list. |
 | `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
 | `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
@@ -160,6 +161,34 @@ A node is **eligible for payout** only if it was verified (reachable) within the
 last 24h, has fewer than 3 consecutive verification failures, was seen in the
 last 7 days, AND is provably hosting (`coverageScore > 0`). Each eligible node's
 share is then **weighted by its coverage x reliability** — see **[FAIRNESS.md](FAIRNESS.md)**.
+
+---
+
+## Marketplace / operator ingestion — `POST /permanent/add`
+
+So freshly-minted assets propagate to wallets, a trusted publisher (e.g. the
+DigiStamp marketplace) can push an asset's CIDs onto the permanent list. The
+pool nodes then pin them, announce them to the IPFS DHT, and any indexer /
+wallet resolving those CIDs can fetch them.
+
+- **Auth:** set `pooladmintoken` in `pool.cfg` and send the same value in the
+  request. Unset token = endpoint disabled (403).
+- **Request:** `POST /permanent/add`, JSON body:
+  ```json
+  { "token": "<pooladmintoken>",
+    "assetId": "La6Xoi...",
+    "txHash": "<issuance txid>",
+    "cids": "<metadataCid>,<mediaCid>" }
+  ```
+  `cids` is a **comma-separated** list (metadata first, then any media/sub-files).
+- **Behaviour:** each CID is inserted (idempotent — `INSERT OR IGNORE`) on the
+  current open **frontier page** (`getWritablePage()`), the page clients are
+  parked on, so nodes pick it up on their next `~10 min` fetch without a
+  restart. Pages roll to a fresh one after 500 entries.
+- **Response:** `{"ok":true,"page":<n>,"added":<count>}`.
+
+Verify it landed: `GET /permanent/<page>.json` should list the `assetId-txHash`
+key with its CIDs; then watch a subscribed node pin them.
 
 ---
 

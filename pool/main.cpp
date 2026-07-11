@@ -312,6 +312,15 @@ int main(int /*argc*/, char** /*argv*/) {
         server = new PoolServer(*db, (unsigned int) port);
         server->setPayoutsEnabled(payoutsEnabled);
 
+        // Optional token gating POST /permanent/add so a trusted publisher
+        // (e.g. the DigiStamp marketplace) can push freshly-minted asset CIDs
+        // into the permanent list. Unset = endpoint disabled (403).
+        std::string ingestToken = cfg.count("pooladmintoken") ? cfg["pooladmintoken"] : "";
+        server->setIngestToken(ingestToken);
+        std::cout << "  permanent/add ingest: "
+                  << (ingestToken.empty() ? "disabled (set pooladmintoken)" : "ENABLED")
+                  << "\n";
+
         // Donation/treasury stats page (GET /pool/stats.json). Optional — if
         // the donation address or RPC creds are unset the endpoint reports
         // zeros. Uses the SAME DigiByte Core RPC creds the payout path uses.

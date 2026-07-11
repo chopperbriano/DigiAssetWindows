@@ -604,6 +604,12 @@ void PoolServer::handleRequest(const std::string& method,
         return;
     }
 
+    // --- POST /permanent/add (token-gated marketplace/operator ingestion) --
+    if (method == "POST" && path == "/permanent/add") {
+        handlePermanentAdd(body, outStatus, outBody);
+        return;
+    }
+
     // --- GET /nodes.json ---------------------------------------------------
     if (method == "GET" && path == "/nodes.json") {
         handleNodes(outBody);
@@ -811,6 +817,69 @@ void PoolServer::handlePermanent(const std::string& path, int& outStatus, std::s
         return;
     }
     outBody = _db.buildPermanentPageJson(page);
+}
+
+// POST /permanent/add — token-gated. Adds an asset's CIDs to the permanent
+// list (on the current open frontier page) so pool nodes pin + re-serve them.
+// Body JSON: {"token":"..","assetId":"La..","txHash":"<txid>","cids":"cid1,cid2"}.
+// cids is a comma-separated list (avoids a JSON-array parser). Idempotent via
+// INSERT OR IGNORE, so re-posting the same asset is a harmless no-op.
+void PoolServer::handlePermanentAdd(const std::string& body, int& outStatus, std::string& outBody) {
+    // Disabled unless the operator set a token in pool.cfg.
+    if (_ingestToken.empty()) {
+        outStatus = 403;
+        outBody = "{\"error\":\"ingestion disabled: set pooladmintoken in pool.cfg\"}";
+        return;
+    }
+    std::string token = jsonField(body, "token");
+    // Length check first, then a full compare (rejects empty/short guesses).
+    if (token.size() != _ingestToken.size() || token != _ingestToken) {
+        outStatus = 403;
+        outBody = "{\"error\":\"forbidden\"}";
+        return;
+    }
+
+    std::string assetId = jsonField(body, "assetId");
+    std::string txHash = jsonField(body, "txHash");
+    std::string cidsRaw = jsonField(body, "cids");
+    if (assetId.empty() || txHash.empty() || cidsRaw.empty()) {
+        outStatus = 400;
+        outBody = "{\"error\":\"assetId, txHash and cids (comma-separated) are required\"}";
+        return;
+    }
+
+    // Split the comma-separated CID list, trimming whitespace.
+    std::vector<std::string> cids;
+    size_t start = 0;
+    while (start <= cidsRaw.size()) {
+        size_t comma = cidsRaw.find(',', start);
+        std::string piece = (comma == std::string::npos)
+                                ? cidsRaw.substr(start)
+                                : cidsRaw.substr(start, comma - start);
+        size_t a = piece.find_first_not_of(" \t\r\n");
+        size_t b = piece.find_last_not_of(" \t\r\n");
+        if (a != std::string::npos) cids.push_back(piece.substr(a, b - a + 1));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    if (cids.empty()) {
+        outStatus = 400;
+        outBody = "{\"error\":\"cids contained no valid entries\"}";
+        return;
+    }
+
+    unsigned int page = _db.getWritablePage();
+    int added = 0;
+    for (const auto& cid : cids) {
+        try {
+            _db.insertPermanentAsset(assetId, txHash, cid, page);
+            added++;
+        } catch (...) {
+            // best-effort per CID; keep going
+        }
+    }
+    outBody = "{\"ok\":true,\"page\":" + std::to_string(page) +
+              ",\"added\":" + std::to_string(added) + "}";
 }
 
 // Handle a node keepalive: parse the form-encoded body, and if it carries both

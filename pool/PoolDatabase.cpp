@@ -573,6 +573,66 @@ void PoolDatabase::setPermanentPageDone(unsigned int page, bool done, const std:
     sqlite3_finalize(stmt);
 }
 
+unsigned int PoolDatabase::getWritablePage() {
+    std::lock_guard<std::mutex> lk(_mutex);
+
+    // Highest page that currently holds assets (-1 when the pool is empty).
+    long long maxPage = -1;
+    {
+        const char* sql = "SELECT COALESCE(MAX(page), -1) FROM permanent_assets;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) maxPage = sqlite3_column_int64(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+    }
+    // Empty pool: start at the stock client default (psp1permanentpage=23) so a
+    // default client, which begins its walk there, reaches our entries.
+    if (maxPage < 0) return 23;
+
+    // If that page has been finalized (done=true), open the next one.
+    bool done = false;
+    {
+        const char* sql = "SELECT done FROM permanent_pages WHERE page=?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, (int) maxPage);
+            if (sqlite3_step(stmt) == SQLITE_ROW) done = sqlite3_column_int(stmt, 0) != 0;
+            sqlite3_finalize(stmt);
+        }
+    }
+    if (done) return (unsigned int) (maxPage + 1);
+
+    // Keep pages a reasonable size: once the open page fills, mark it done so
+    // clients advance past it, and write new entries to the next page.
+    const unsigned int PAGE_CAP = 500;
+    unsigned int count = 0;
+    {
+        const char* sql = "SELECT COUNT(*) FROM permanent_assets WHERE page=?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, (int) maxPage);
+            if (sqlite3_step(stmt) == SQLITE_ROW) count = (unsigned int) sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+    }
+    if (count >= PAGE_CAP) {
+        // Finalize the full page inline (the mutex is already held here, so we
+        // can't call setPermanentPageDone which would re-lock).
+        const char* sql =
+            "INSERT INTO permanent_pages (page, done, daily) VALUES (?, 1, '0') "
+            "ON CONFLICT(page) DO UPDATE SET done=1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, (int) maxPage);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+        return (unsigned int) (maxPage + 1);
+    }
+    return (unsigned int) maxPage;
+}
+
 bool PoolDatabase::hasPermanentData() {
     std::lock_guard<std::mutex> lk(_mutex);
     const char* sql = "SELECT COUNT(*) FROM permanent_assets;";
