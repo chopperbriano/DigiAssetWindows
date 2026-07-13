@@ -145,6 +145,13 @@ A node is eligible only if it was verified (reachable) in the last 24 h, has
 
 ## 7. Keep it running
 
+- **Verify the whole stack** — run `pool/deploy/verify-pool-stack.ps1` any time you
+  touch a config. It cross-checks that `digibyte.conf`, `config.cfg`, and `pool.cfg`
+  agree on the RPC handshake, confirms DigiByte Core is reachable + synced, and
+  proves **every full-node index (txindex, coinstatsindex, block filters, DigiDollar)
+  is enabled and current** — so the node fully serves old and new DigiByte features.
+  Add `-Fix` (elevated) to append any missing index/feature setting to
+  `digibyte.conf`, then restart Core so it builds.
 - **Auto-updates** — because `DigiAssetPoolServer.exe` lives in `C:\DigiAssetWindows`, the
   node's maintenance task keeps it **in sync with the node**: when a new release
   ships, it stops the pool, swaps the exe, and restarts it (the pool + node are
