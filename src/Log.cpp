@@ -8,9 +8,27 @@
 
 #include "Log.h"
 #include "ConsoleDashboard.h"
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 std::mutex Log::_mutex;
 Log* Log::_pinstance = nullptr;
+
+// Current local time as "YYYY-MM-DD HH:MM:SS" for log-file / console lines.
+static std::string logStamp() {
+    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tmv, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
 
 // Return the singleton instance, lazily constructing it under lock on first use.
 Log* Log::GetInstance() {
@@ -80,14 +98,14 @@ void Log::addMessage(const string& message, LogLevel level) {
 
     if (level >= _minLevelToScreen) {
         if (_dashboard) {
-            _dashboard->addMessage(logMessage);
+            _dashboard->addMessage(logMessage);   // the dashboard prepends its own screen timestamp
         } else {
-            cout << logMessage << endl;
+            cout << logStamp() << " " << logMessage << endl;
         }
     }
 
     if (level >= _minLevelToFile && _logFile.is_open()) {
-        _logFile << logMessage << endl;
+        _logFile << logStamp() << " " << logMessage << endl;
     }
 }
 

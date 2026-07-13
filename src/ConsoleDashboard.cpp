@@ -122,9 +122,24 @@ void ConsoleDashboard::stop() {
  * Appends a log line to the scrolling message pane, evicting the oldest once the
  * MAX_MESSAGES cap is reached. Thread-safe; called by Log from any thread.
  */
+// Current local time as a fixed-width "MM-DD HH:MM:SS " prefix (15 chars) for
+// on-screen log lines. The render loop colorizes the level keyword that follows.
+static std::string logScreenStamp() {
+    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tmv, "%m-%d %H:%M:%S");
+    return oss.str();
+}
+
 void ConsoleDashboard::addMessage(const std::string& message) {
     std::lock_guard<std::mutex> lock(_msgMutex);
-    _messages.push_back(message);
+    _messages.push_back(logScreenStamp() + " " + message);
     while (_messages.size() > MAX_MESSAGES) {
         _messages.pop_front();
     }
@@ -994,14 +1009,19 @@ void ConsoleDashboard::render() {
         for (int i = startIdx; i < (int)_messages.size() && printed < logRows; ++i, ++printed) {
             out << ERASE_LINE << "  ";
             const std::string& msg = _messages[i];
-            // Colorize by level prefix
-            if (msg.substr(0, 8) == "CRITICAL") {
+            // Colorize by level keyword, which follows the fixed-width
+            // "MM-DD HH:MM:SS " timestamp prefix (15 chars).
+            const size_t TS = 15;
+            auto lvlIs = [&](const char* s, size_t n) {
+                return msg.size() >= TS + n && msg.compare(TS, n, s) == 0;
+            };
+            if (lvlIs("CRITICAL", 8)) {
                 out << FG_RED;
-            } else if (msg.substr(0, 7) == "WARNING") {
+            } else if (lvlIs("WARNING", 7)) {
                 out << FG_YELLOW;
-            } else if (msg.substr(0, 5) == "ERROR") {
+            } else if (lvlIs("ERROR", 5)) {
                 out << FG_RED;
-            } else if (msg.substr(0, 5) == "DEBUG") {
+            } else if (lvlIs("DEBUG", 5)) {
                 out << DIM;
             } else {
                 out << FG_WHITE;

@@ -302,9 +302,23 @@ void PoolDashboard::stop() {
     std::cout << SHOW_CURSOR << std::flush;
 }
 
+// Current local time as a "MM-DD HH:MM:SS " prefix for pool log lines.
+static std::string poolLogStamp() {
+    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tmv, "%m-%d %H:%M:%S");
+    return oss.str();
+}
+
 void PoolDashboard::addLog(const std::string& line) {
     std::lock_guard<std::mutex> lk(_logMutex);
-    _logLines.push_back(line);
+    _logLines.push_back(poolLogStamp() + " " + line);
     while (_logLines.size() > MAX_LOG_LINES) _logLines.pop_front();
 }
 
@@ -778,7 +792,19 @@ void PoolDashboard::render() {
         }
         int printed = 0;
         for (int i = startIdx; i < (int) _logLines.size(); i++) {
-            out << ERASE_LINE << "  " << _logLines[i] << "\n";
+            const std::string& ln = _logLines[i];
+            // Colorize by severity keyword (indent varies, so search the line).
+            const char* color = FG_BRIGHT_WHITE;
+            if (ln.find("FAIL") != std::string::npos || ln.find("ERROR") != std::string::npos ||
+                ln.find("CRITICAL") != std::string::npos) {
+                color = FG_RED;
+            } else if (ln.find("WARNING") != std::string::npos || ln.find("TIMEOUT") != std::string::npos ||
+                       ln.find("locked") != std::string::npos) {
+                color = FG_YELLOW;
+            } else if (ln.find("SENT") != std::string::npos) {
+                color = FG_GREEN;
+            }
+            out << ERASE_LINE << "  " << color << ln << RESET << "\n";
             printed++;
         }
         // Pad the log area with blank lines so the key hints row stays pinned
