@@ -19,6 +19,7 @@
 #include "utils.h"
 #include <csignal>
 #include <cstdio>
+#include <ctime>
 #include <iostream>
 #include <memory>
 
@@ -255,14 +256,36 @@ int main() {
      * Connect to Database
      * Make sure it is initialized with correct database
      */
-    Database* db;
+    Database* db = nullptr;
     try {
         log->addMessage("Loading Database");
         db = new Database("chain.db");
         main->setDatabase(db);
-    } catch (const Database::exceptionFailedToOpen& e) {
-        log->addMessage("Database could not be opened", Log::CRITICAL);
-        return -1;
+    } catch (const std::exception& e) {
+        // chain.db is unusable (corrupt or half-built). It is 100% re-derivable
+        // from the blockchain, so instead of dying and making the user delete it
+        // by hand, rename the bad file aside and rebuild ONCE from scratch.
+        log->addMessage(std::string("chain.db is unusable (") + e.what() +
+                                ") - renaming it aside and rebuilding from scratch.",
+                        Log::WARNING);
+        std::string stamp = std::to_string(static_cast<long long>(time(nullptr)));
+        const char* suffixes[] = {"", "-wal", "-shm"};
+        for (const char* suffix: suffixes) {
+            std::string from = std::string("chain.db") + suffix;
+            if (utils::fileExists(from)) {
+                std::rename(from.c_str(), ("chain.db.corrupt-" + stamp + suffix).c_str());
+            }
+        }
+        try {
+            db = new Database("chain.db"); // fresh, clean build
+            main->setDatabase(db);
+            log->addMessage("Rebuilt a fresh chain.db (old one saved as chain.db.corrupt-*). "
+                            "The node will re-scan assets from the blockchain.",
+                            Log::WARNING);
+        } catch (const std::exception& e2) {
+            log->addMessage(std::string("Could not rebuild chain.db: ") + e2.what(), Log::CRITICAL);
+            return -1;
+        }
     }
 
     /**

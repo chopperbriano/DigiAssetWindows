@@ -76,56 +76,60 @@ void Database::buildTables(unsigned int dbVersionNumber) {
             [&]() {
                 char* zErrMsg = nullptr;
                 int rc;
+                // Idempotent: CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so this
+                // step can safely RE-RUN on a half-built DB (e.g. after a torn write)
+                // without ever throwing "table already exists". dbVersion is upserted
+                // so a partial DB is completed and correctly marked version 6.
                 const char* sql =
                         //chain data tables
                         "BEGIN TRANSACTION;"
 
-                        "CREATE TABLE \"assets\" (\"assetIndex\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \"assetId\" TEXT NOT NULL, \"cid\" TEXT, \"issueAddress\" TEXT NOT NULL, \"rules\" BLOB, \"heightCreated\" INTEGER NOT NULL, \"heightUpdated\" INTEGER NOT NULL, \"expires\" INTEGER);"
-                        "INSERT INTO \"assets\" VALUES (1,'DigiByte','QmfSVLAntanDUKrEHUnTXRh53GLUBHFfxk5x6LH4zz9PM4','STANDARD','',1,1,NULL);"
+                        "CREATE TABLE IF NOT EXISTS \"assets\" (\"assetIndex\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \"assetId\" TEXT NOT NULL, \"cid\" TEXT, \"issueAddress\" TEXT NOT NULL, \"rules\" BLOB, \"heightCreated\" INTEGER NOT NULL, \"heightUpdated\" INTEGER NOT NULL, \"expires\" INTEGER);"
+                        "INSERT OR IGNORE INTO \"assets\" VALUES (1,'DigiByte','QmfSVLAntanDUKrEHUnTXRh53GLUBHFfxk5x6LH4zz9PM4','STANDARD','',1,1,NULL);"
 
-                        "CREATE TABLE \"blocks\" (\"height\" INTEGER NOT NULL, \"hash\" BLOB NOT NULL, \"time\" INTEGER NOT NULL, \"algo\" INTEGER NOT NULL, \"difficulty\" REAL NOT NULL, PRIMARY KEY(\"height\"));"
-                        "INSERT INTO \"blocks\" VALUES (1,X'4da631f2ac1bed857bd968c67c913978274d8aabed64ab2bcebc1665d7f4d3a0',1389392876,1,0.000244140625);"
+                        "CREATE TABLE IF NOT EXISTS \"blocks\" (\"height\" INTEGER NOT NULL, \"hash\" BLOB NOT NULL, \"time\" INTEGER NOT NULL, \"algo\" INTEGER NOT NULL, \"difficulty\" REAL NOT NULL, PRIMARY KEY(\"height\"));"
+                        "INSERT OR IGNORE INTO \"blocks\" VALUES (1,X'4da631f2ac1bed857bd968c67c913978274d8aabed64ab2bcebc1665d7f4d3a0',1389392876,1,0.000244140625);"
 
-                        "CREATE TABLE \"exchange\" (\"address\" TEXT NOT NULL, \"index\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"value\" REAL NOT NULL, PRIMARY KEY(\"address\",\"index\",\"height\"));"
+                        "CREATE TABLE IF NOT EXISTS \"exchange\" (\"address\" TEXT NOT NULL, \"index\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"value\" REAL NOT NULL, PRIMARY KEY(\"address\",\"index\",\"height\"));"
 
-                        "CREATE TABLE \"exchangeWatch\" (\"address\" TEXT NOT NULL, PRIMARY KEY(\"address\"));"
-                        "INSERT INTO \"exchangeWatch\" VALUES (\"dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh\");"
-                        "INSERT INTO \"exchangeWatch\" VALUES (\"dgb1qlk3hldeynl3prqw259u8gv0jh7w5nwppxlvt3v\");"
+                        "CREATE TABLE IF NOT EXISTS \"exchangeWatch\" (\"address\" TEXT NOT NULL, PRIMARY KEY(\"address\"));"
+                        "INSERT OR IGNORE INTO \"exchangeWatch\" VALUES (\"dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh\");"
+                        "INSERT OR IGNORE INTO \"exchangeWatch\" VALUES (\"dgb1qlk3hldeynl3prqw259u8gv0jh7w5nwppxlvt3v\");"
 
-                        "CREATE TABLE \"flags\" (\"key\" TEXT NOT NULL, \"value\" INTEGER NOT NULL, PRIMARY KEY(\"key\"));"
-                        "INSERT INTO \"flags\" VALUES (\"wasPrunedExchangeHistory\",-1);"
-                        "INSERT INTO \"flags\" VALUES (\"wasPrunedUTXOHistory\",-1);"
-                        "INSERT INTO \"flags\" VALUES (\"wasPrunedVoteHistory\",-1);"
-                        "INSERT INTO \"flags\" VALUES (\"wasPrunedNonAssetUTXOHistory\",0);"
-                        "INSERT INTO \"flags\" VALUES (\"dbVersion\",6);"
+                        "CREATE TABLE IF NOT EXISTS \"flags\" (\"key\" TEXT NOT NULL, \"value\" INTEGER NOT NULL, PRIMARY KEY(\"key\"));"
+                        "INSERT OR IGNORE INTO \"flags\" VALUES (\"wasPrunedExchangeHistory\",-1);"
+                        "INSERT OR IGNORE INTO \"flags\" VALUES (\"wasPrunedUTXOHistory\",-1);"
+                        "INSERT OR IGNORE INTO \"flags\" VALUES (\"wasPrunedVoteHistory\",-1);"
+                        "INSERT OR IGNORE INTO \"flags\" VALUES (\"wasPrunedNonAssetUTXOHistory\",0);"
+                        "INSERT INTO \"flags\"(\"key\",\"value\") VALUES (\"dbVersion\",6) ON CONFLICT(\"key\") DO UPDATE SET \"value\"=6;"
 
-                        "CREATE TABLE \"kyc\" (\"address\" TEXT NOT NULL, \"country\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"hash\" BLOB NOT NULL, \"height\" INTEGER NOT NULL, \"revoked\" INTEGER, PRIMARY KEY(\"address\"));"
+                        "CREATE TABLE IF NOT EXISTS \"kyc\" (\"address\" TEXT NOT NULL, \"country\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"hash\" BLOB NOT NULL, \"height\" INTEGER NOT NULL, \"revoked\" INTEGER, PRIMARY KEY(\"address\"));"
 
-                        "CREATE TABLE \"utxos\" (\"address\" TEXT NOT NULL, \"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"aout\" INTEGER, \"assetIndex\" Integer NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, issuance INTEGER, spentTXID BLOB DEFAULT null, PRIMARY KEY(\"address\",\"txid\",\"vout\",\"aout\"));"
-                        "CREATE INDEX idx_utxos_txid_vout ON utxos(txid, vout);"
-                        "CREATE INDEX idx_utxos_txid_vout_aout ON utxos(txid, vout, aout);"
+                        "CREATE TABLE IF NOT EXISTS \"utxos\" (\"address\" TEXT NOT NULL, \"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"aout\" INTEGER, \"assetIndex\" Integer NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, issuance INTEGER, spentTXID BLOB DEFAULT null, PRIMARY KEY(\"address\",\"txid\",\"vout\",\"aout\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_utxos_txid_vout ON utxos(txid, vout);"
+                        "CREATE INDEX IF NOT EXISTS idx_utxos_txid_vout_aout ON utxos(txid, vout, aout);"
 
-                        "CREATE TABLE \"votes\" (\"assetIndex\" Integer NOT NULL, \"address\" TEXT NOT NULL, \"height\" INTEGER NOT NULL, \"count\" INTEGER NOT NULL, PRIMARY KEY(\"assetIndex\",\"address\",\"height\"));"
+                        "CREATE TABLE IF NOT EXISTS \"votes\" (\"assetIndex\" Integer NOT NULL, \"address\" TEXT NOT NULL, \"height\" INTEGER NOT NULL, \"count\" INTEGER NOT NULL, PRIMARY KEY(\"assetIndex\",\"address\",\"height\"));"
 
                         //IPFS job tables
-                        "CREATE TABLE \"ipfs\" (\"jobIndex\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \"sync\" TEXT NOT NULL, \"lock\" BOOL NOT NULL, \"cid\" TEXT NOT NULL, \"extra\" TEXT, \"callback\" TEXT NOT NULL, \"pause\" INTEGER, \"maxTime\" INTEGER);"
-                        "INSERT INTO \"ipfs\" VALUES (1,'pin',false,'QmfSVLAntanDUKrEHUnTXRh53GLUBHFfxk5x6LH4zz9PM4','','',NULL,NULL);" //DigiByte Native Coin data
-                        "INSERT INTO \"ipfs\" VALUES (2,'pin',false,'QmSAcz2H7veyeuuSyACLkSj9ts9EWm1c9v7uTqbHynsVbj','','',NULL,NULL);" //DigiByte Logo
+                        "CREATE TABLE IF NOT EXISTS \"ipfs\" (\"jobIndex\" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \"sync\" TEXT NOT NULL, \"lock\" BOOL NOT NULL, \"cid\" TEXT NOT NULL, \"extra\" TEXT, \"callback\" TEXT NOT NULL, \"pause\" INTEGER, \"maxTime\" INTEGER);"
+                        "INSERT OR IGNORE INTO \"ipfs\" VALUES (1,'pin',false,'QmfSVLAntanDUKrEHUnTXRh53GLUBHFfxk5x6LH4zz9PM4','','',NULL,NULL);" //DigiByte Native Coin data
+                        "INSERT OR IGNORE INTO \"ipfs\" VALUES (2,'pin',false,'QmSAcz2H7veyeuuSyACLkSj9ts9EWm1c9v7uTqbHynsVbj','','',NULL,NULL);" //DigiByte Logo
 
                         //PSP tables
-                        "CREATE TABLE \"pspFiles\" (\"cid\" TEXT NOT NULL,\"poolIndex\");"
-                        "CREATE TABLE \"pspAssets\" (\"assetIndex\" INT NOT NUll,\"poolIndex\");"
+                        "CREATE TABLE IF NOT EXISTS \"pspFiles\" (\"cid\" TEXT NOT NULL,\"poolIndex\");"
+                        "CREATE TABLE IF NOT EXISTS \"pspAssets\" (\"assetIndex\" INT NOT NUll,\"poolIndex\");"
 
                         //DigiByte Domain tables
-                        "CREATE TABLE \"domains\" (\"domain\" TEXT NOT NULL, \"assetId\" TEXT NOT NULL, \"revoked\" BOOL NOT NULL);"
-                        "CREATE TABLE \"domainsMasters\" (\"assetId\" TEXT NOT NULL, \"active\" BOOL NOT NULL);"
-                        "INSERT INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);"
+                        "CREATE TABLE IF NOT EXISTS \"domains\" (\"domain\" TEXT NOT NULL, \"assetId\" TEXT NOT NULL, \"revoked\" BOOL NOT NULL);"
+                        "CREATE TABLE IF NOT EXISTS \"domainsMasters\" (\"assetId\" TEXT NOT NULL, \"active\" BOOL NOT NULL);"
+                        "INSERT OR IGNORE INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);"
 
                         //Unknown Data table
-                        "CREATE TABLE \"unknown\" (\"txid\" BLOB NOT NULL, \"data\" BLOB NOT NULL);"
+                        "CREATE TABLE IF NOT EXISTS \"unknown\" (\"txid\" BLOB NOT NULL, \"data\" BLOB NOT NULL);"
 
                         //Encrypted keys table
-                        "CREATE TABLE \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
+                        "CREATE TABLE IF NOT EXISTS \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
 
                         "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
@@ -180,8 +184,8 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                 int rc;
 
                 const char* sql = "BEGIN TRANSACTION;"
-                                  "CREATE TABLE \"unknown\" (\"txid\" BLOB NOT NULL, \"data\" BLOB NOT NULL);"
-                                  "CREATE TABLE \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
+                                  "CREATE TABLE IF NOT EXISTS \"unknown\" (\"txid\" BLOB NOT NULL, \"data\" BLOB NOT NULL);"
+                                  "CREATE TABLE IF NOT EXISTS \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
                                   "UPDATE \"flags\" set \"value\"=6 WHERE \"key\"=\"dbVersion\";"
                                   "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
@@ -691,26 +695,91 @@ Database::Database(const string& newFileName) {
     //open database
     int rc;
     rc = sqlite3_open_v2(newFileName.c_str(), &_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nullptr);
-    if (rc) throw exceptionFailedToOpen();
-
-    //create needed tables
-    if (firstRun) {
-        buildTables();
-    } else {
-        //get database version number
-        sqlite3_stmt* stmt;
-        const char* sql = "SELECT `value` FROM `flags` WHERE `key`=\"dbVersion\";";
-        rc = sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr);
-        if (rc != SQLITE_OK) throw exceptionCreatingStatement();
-        if (executeSqliteStepWithRetry(stmt) != SQLITE_ROW) throw exceptionFailedSelect();
-        unsigned int dbVersion = sqlite3_column_int(stmt, 0);
-
-        //make sure tables are in the newest format
-        buildTables(dbVersion);
+    if (rc) {
+        if (_db) { sqlite3_close_v2(_db); _db = nullptr; }
+        throw exceptionFailedToOpen();
     }
 
-    //create needed statements
-    initializeClassValues();
+    // On ANY failure below, close the handle before rethrowing so the caller can
+    // rename/rebuild the file (an open handle would block that on Windows).
+    try {
+        if (firstRun) {
+            buildTables();
+        } else {
+            // "File exists" does NOT mean "healthy". A crash/power loss during the
+            // relaxed-durability catch-up can leave chain.db half-built or torn.
+            // 1) Reject a structurally corrupt file - the caller rebuilds it.
+            if (!isStructurallySound()) throw exceptionFailedToOpen();
+
+            // 2) Read the schema version DEFENSIVELY. A missing flags table / row,
+            //    or value 0, means the DB was never finished. Rather than run
+            //    buildTables(0) - which would collide on the existing 'assets'
+            //    table and FATAL - drop what's there and rebuild it cleanly.
+            unsigned int dbVersion = 0;
+            bool coherent = false;
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(_db, "SELECT `value` FROM `flags` WHERE `key`='dbVersion';", -1, &stmt, nullptr) == SQLITE_OK) {
+                if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+                    dbVersion = (unsigned int) sqlite3_column_int(stmt, 0);
+                    coherent = (dbVersion > 0);
+                }
+            }
+            sqlite3_finalize(stmt);
+
+            if (!coherent) {
+                Log::GetInstance()->addMessage(
+                        "chain.db was incomplete (no valid dbVersion) - rebuilding it in place. "
+                        "This is safe: chain.db is re-derivable, so the node re-scans assets from the blockchain.",
+                        Log::WARNING);
+                dropAllTables();
+                buildTables();          // fresh build (dbVersion defaults to 0)
+            } else {
+                buildTables(dbVersion); // normal path / version migration
+            }
+        }
+        initializeClassValues();
+    } catch (...) {
+        if (_db) { sqlite3_close_v2(_db); _db = nullptr; }
+        throw;
+    }
+}
+
+// Runs PRAGMA quick_check - a fast structural scan. Returns true only if sqlite
+// reports "ok"; a torn/corrupt file returns false so the caller can rebuild.
+bool Database::isStructurallySound() {
+    sqlite3_stmt* stmt = nullptr;
+    bool ok = false;
+    if (sqlite3_prepare_v2(_db, "PRAGMA quick_check;", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* res = sqlite3_column_text(stmt, 0);
+            ok = (res != nullptr && std::string(reinterpret_cast<const char*>(res)) == "ok");
+        }
+    }
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+// Drops every table this schema builds so buildTables() can recreate a clean
+// schema in place. Used to recover an incomplete/incoherent chain.db without
+// forcing the user to delete the file by hand. Dynamic Stats_* tables are left
+// alone (they are regenerated and never collide with buildTables()).
+void Database::dropAllTables() {
+    static const char* const tables[] = {
+            "assets", "blocks", "exchange", "exchangeWatch", "flags", "kyc", "utxos",
+            "votes", "ipfs", "pspFiles", "pspAssets", "domains", "domainsMasters",
+            "unknown", "encryptedkeys"};
+    char* zErrMsg = nullptr;
+    sqlite3_exec(_db, "BEGIN TRANSACTION;", nullptr, nullptr, &zErrMsg);
+    sqlite3_free(zErrMsg);
+    zErrMsg = nullptr;
+    for (const char* t: tables) {
+        std::string sql = std::string("DROP TABLE IF EXISTS \"") + t + "\";";
+        sqlite3_exec(_db, sql.c_str(), nullptr, nullptr, &zErrMsg);
+        sqlite3_free(zErrMsg);
+        zErrMsg = nullptr;
+    }
+    sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, &zErrMsg);
+    sqlite3_free(zErrMsg);
 }
 
 Database::~Database() {

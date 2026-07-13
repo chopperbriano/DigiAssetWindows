@@ -331,6 +331,8 @@ private:
 
     void buildTables(unsigned int dbVersionNumber = 0);
     void initializeClassValues();
+    bool isStructurallySound();   // PRAGMA quick_check - false if the file is corrupt/malformed
+    void dropAllTables();         // DROP every schema table (used to rebuild an incoherent chain.db)
 
     //flag table
     int getFlagInt(const std::string& flag);
