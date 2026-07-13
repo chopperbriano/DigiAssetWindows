@@ -730,7 +730,17 @@ void PoolServer::handleStats(std::string& outBody) {
             std::lock_guard<std::mutex> lk(_statsMutex);
             if (haveAvail) _cachedAvailable = newAvail;
             if (haveTreasury) { _cachedReceived = rec; _cachedTreasuryBalance = tbal; }
-            for (const auto& kv : freshGeo) _geoCache[kv.first] = kv.second;
+            // Rebuild the geo cache keeping ONLY IPs still in the active set, so it
+            // cannot grow without bound as node IPs churn over long uptime. Prefer a
+            // fresh geolocation this cycle, else carry the previously-cached value.
+            std::map<std::string, std::string> nextGeo;
+            for (const auto& ip : ips) {
+                auto fresh = freshGeo.find(ip);
+                if (fresh != freshGeo.end()) { nextGeo[ip] = fresh->second; continue; }
+                auto prev = _geoCache.find(ip);
+                if (prev != _geoCache.end()) nextGeo[ip] = prev->second;
+            }
+            _geoCache.swap(nextGeo);
             std::string arr = "[";
             bool firstNode = true;
             for (const auto& ip : ips) {

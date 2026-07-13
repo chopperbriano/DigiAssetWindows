@@ -41,8 +41,8 @@ namespace RPC {
 
     // Under lock, insert a new entry or overwrite an existing one and reset its
     // timestamp. New entries add their byte size (plus per-entry overhead) to
-    // the running total; then removeOldestEntries() enforces the size cap.
-    // Note: overwriting an existing entry does not adjust the size total.
+    // the running total; overwriting an existing entry adjusts the total by the
+    // size DELTA so the cap stays accurate; then removeOldestEntries() enforces it.
     void Cache::addResponse(const std::string& method, const Json::Value& params, const Response& response) {
         // Never store a "never cache" response (blocksGoodFor<0). Eviction relies
         // on newBlockAdded(), which is skipped during bulk sync, so caching a live
@@ -55,7 +55,10 @@ namespace RPC {
         // Check if the entry already exists and update it
         auto it = _cacheMap.find(key);
         if (it != _cacheMap.end()) {
-            // Update existing entry
+            // Update existing entry - adjust the running total by the size delta.
+            // Safe as size_t modular arithmetic: the old entry already contributed
+            // its size, so _currentCacheSize >= the old size and cannot underflow.
+            _currentCacheSize += response.size() - it->second.response.size();
             it->second.response = response;
             it->second.timestamp = std::chrono::steady_clock::now();
         } else {
