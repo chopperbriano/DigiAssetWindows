@@ -11,6 +11,7 @@ operators never do.
 | `publish-snapshot.ps1` | **The one you run each time.** Build both archives → upload to R2 → rebuild + upload `snapshot.json` → verify. Can schedule itself weekly. |
 | `make-snapshot.ps1` | The building block: creates the archives + `*-part.json` (and, with `-Component manifest`, `snapshot.json`). `publish-snapshot.ps1` calls this. |
 | `seed-digibyte.ps1` | Standalone consumer: seeds *any* DigiByte wallet from the published snapshot (install DigiByte, close it, run this). |
+| `snapshot-digibyte-datadir.ps1` | **Local / LAN fleet provisioning.** `-Mode Snapshot` archives one healthy box's `blocks`+`chainstate`+`indexes` (wallet excluded); `-Mode Restore` applies it to another box directly (file or `\\share`) — no R2 round-trip, no reindex, no re-sync. Restored nodes inherit the built indexes. |
 
 ## First: one-time Cloudflare R2 setup
 Run this **once** on the snapshot box — it installs rclone, configures the R2
