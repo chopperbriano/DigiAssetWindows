@@ -44,10 +44,14 @@ namespace CurlHandler {
     void postDownload(const std::string& url, const std::string& fileName, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
 
     // Thrown by the above functions when a request exceeds its timeout.
+    // NOTE: what() MUST match std::exception's signature (const + noexcept) to
+    // actually override it - otherwise catching as std::exception& and calling
+    // e.what() returns the compiler's default ("Unknown exception" on MSVC),
+    // which is exactly what made connection timeouts unreadable in the log.
     class exceptionTimeout : public std::exception {
     public:
-        char* what() {
-            return const_cast<char*>("request timed out");
+        const char* what() const noexcept override {
+            return "request timed out";
         }
     };
 
