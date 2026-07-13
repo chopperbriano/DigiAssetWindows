@@ -69,7 +69,9 @@ Say "Refreshing scripts..." 'White'
 Get-Raw 'node/update-binaries.ps1'          (Join-Path $Root   'update-binaries.ps1')
 Get-Raw 'pool/deploy/start-digistamp.ps1'   (Join-Path $deploy 'start-digistamp.ps1')
 Get-Raw 'pool/deploy/verify-pool-stack.ps1' (Join-Path $deploy 'verify-pool-stack.ps1')
+Get-Raw 'pool/deploy/diagnose-website.ps1'  (Join-Path $deploy 'diagnose-website.ps1')
 Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1')
+Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
 Get-Raw 'pool/deploy/backup-digistamp.ps1'  (Join-Path $deploy 'backup-digistamp.ps1')
 
 # 2) Update the exes (node + pool) from the latest release. Run as a child

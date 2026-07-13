@@ -10,21 +10,18 @@
       2. checks the IPFS API is up (warns if not),
       3. launches DigiAssetWindows.exe and DigiAssetPoolServer.exe (each in its own
          window, from the data folder so they read config.cfg / pool.cfg), and
-      4. HEALTH-CHECKS the Caddy website (caddy.exe running AND 443 listening) and
-         restarts it if it is actually down - not just "is the task Running".
+      4. ALWAYS restarts the Caddy website (stops the task + any stray caddy.exe,
+         starts the task, waits for 443) so every run gives a known-good site.
 
     Self-elevates (restarting Caddy + killing a stray caddy.exe needs admin).
 
-.PARAMETER WebsiteOnly          Skip Core/IPFS/node/pool; only heal + restart Caddy.
-.PARAMETER ForceRestartWebsite  Restart Caddy even if it currently looks healthy.
+.PARAMETER WebsiteOnly  Skip Core/IPFS/node/pool; only (re)start the Caddy website.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
 .EXAMPLE
-    # Site is timing out - just fix the website, fast:
+    # Site is down - just restart the website, fast:
     powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -WebsiteOnly
-.EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -ForceRestartWebsite
 #>
 [CmdletBinding()]
 param(
@@ -32,10 +29,8 @@ param(
     # that is where this box's data actually lives, so an existing pool keeps working.
     [string]$Root = $(if (Test-Path 'C:\DigiAssetWindows\config.cfg') { 'C:\DigiAssetWindows' } elseif (Test-Path 'C:\DigiAsset\config.cfg') { 'C:\DigiAsset' } else { 'C:\DigiAssetWindows' }),
     [int]   $WaitForCoreSeconds = 300,
-    # -WebsiteOnly: skip Core/IPFS/node/pool and only health-check + restart Caddy.
-    [switch]$WebsiteOnly,
-    # -ForceRestartWebsite: restart Caddy even if it currently looks healthy.
-    [switch]$ForceRestartWebsite
+    # -WebsiteOnly: skip Core/IPFS/node/pool and only (re)start the Caddy website.
+    [switch]$WebsiteOnly
 )
 $ErrorActionPreference = "Stop"
 $ScriptVersion = '1.3.0'
@@ -46,8 +41,7 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not $admin) {
     if ($PSCommandPath) {
         $a = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Root `"$Root`" -WaitForCoreSeconds $WaitForCoreSeconds"
-        if ($WebsiteOnly)         { $a += ' -WebsiteOnly' }
-        if ($ForceRestartWebsite) { $a += ' -ForceRestartWebsite' }
+        if ($WebsiteOnly) { $a += ' -WebsiteOnly' }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $a
         return
     }
@@ -143,30 +137,19 @@ $caddyTask = Get-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyC
 if (-not $caddyTask) {
     Write-Warning "Caddy task 'DigiStampCaddy' not found. Run setup-caddy.ps1 once to install the website."
 } else {
-    $caddyUp = [bool](Get-Process -Name caddy -ErrorAction SilentlyContinue)
-    $port443 = Test-Listening 443
-    $healthy = ($caddyUp -and $port443)
-
-    if ($healthy -and -not $ForceRestartWebsite) {
-        Write-Host "Caddy website healthy (caddy running, 443 listening)." -ForegroundColor Green
+    # ALWAYS restart the website when this runs, for a known-good fresh start:
+    # stop the task + kill any stray caddy, then start the task and wait for 443.
+    Write-Host "Restarting the Caddy website..." -ForegroundColor Cyan
+    try { Stop-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyContinue } catch {}
+    Get-Process -Name caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-ScheduledTask -TaskName "DigiStampCaddy"
+    $ok = $false
+    for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Seconds 1; if (Test-Listening 443) { $ok = $true; break } }
+    if ($ok) {
+        Write-Host "Caddy restarted - 443 is now listening." -ForegroundColor Green
     } else {
-        if ($ForceRestartWebsite) {
-            Write-Host "Restarting Caddy website (forced)..." -ForegroundColor Cyan
-        } else {
-            Write-Warning "Caddy website is DOWN (caddy running: $caddyUp, 443 listening: $port443) - restarting it."
-        }
-        # Stop the task + kill any stray caddy so we relaunch clean.
-        try { Stop-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyContinue } catch {}
-        Get-Process -Name caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Start-ScheduledTask -TaskName "DigiStampCaddy"
-        $ok = $false
-        for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Seconds 1; if (Test-Listening 443) { $ok = $true; break } }
-        if ($ok) {
-            Write-Host "Caddy restarted - 443 is now listening." -ForegroundColor Green
-        } else {
-            Write-Warning "Caddy started but 443 is still NOT listening. Check the Caddy config/logs (a bad Caddyfile or the cert step failing); re-run setup-caddy.ps1 if needed."
-        }
+        Write-Warning "Caddy started but 443 is still NOT listening. Run diagnose-website.ps1 to see the real error (usually a bad Caddyfile or the cert step failing)."
     }
 
     # If 443 IS listening locally but the site still times out from the internet,

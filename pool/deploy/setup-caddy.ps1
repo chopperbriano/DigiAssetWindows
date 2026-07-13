@@ -46,8 +46,10 @@ Assert-Admin
 $caddyExe    = Join-Path $InstallDir "caddy.exe"
 $siteDir     = Join-Path $InstallDir "site"
 $caddyfile   = Join-Path $InstallDir "Caddyfile"
+$caddyData   = Join-Path $InstallDir "caddydata"   # FIXED cert store shared by manual + SYSTEM runs
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 New-Item -ItemType Directory -Force -Path $siteDir    | Out-Null
+New-Item -ItemType Directory -Force -Path $caddyData  | Out-Null
 Write-Host "Install dir: $InstallDir" -ForegroundColor Gray
 
 # --- 2. Download Caddy (official build endpoint) --------------------------
@@ -61,16 +63,23 @@ if (Test-Path $caddyExe) {
     Write-Host ("Caddy downloaded ({0:N0} bytes)." -f (Get-Item $caddyExe).Length) -ForegroundColor Green
 }
 
-# --- 3. Copy the landing page --------------------------------------------
-Copy-Item -Path (Join-Path $scriptDir "site\*") -Destination $siteDir -Recurse -Force
-Write-Host "Landing page copied to $siteDir" -ForegroundColor Green
+# --- 3. Copy the landing page (skip if this folder has no site/ - e.g. when
+#        re-running from a partial download; the installed site/ is kept) ------
+$srcSite = Join-Path $scriptDir "site"
+if (Test-Path $srcSite) {
+    Copy-Item -Path (Join-Path $srcSite "*") -Destination $siteDir -Recurse -Force
+    Write-Host "Landing page copied to $siteDir" -ForegroundColor Green
+} else {
+    Write-Host "No site\ next to this script - keeping the existing landing page in $siteDir." -ForegroundColor Yellow
+}
 
 # --- 4. Generate a resolved Caddyfile from the template -------------------
 $template = Get-Content (Join-Path $scriptDir "Caddyfile") -Raw
 $resolved = $template.
     Replace('{$DOMAIN}',   $Domain).
     Replace('{$POOLPORT}', "$PoolPort").
-    Replace('{$SITE_ROOT}', ($siteDir -replace '\\','/'))
+    Replace('{$SITE_ROOT}', ($siteDir -replace '\\','/')).
+    Replace('{$CADDY_DATA}', ($caddyData -replace '\\','/'))
 Set-Content -Path $caddyfile -Value $resolved -Encoding UTF8
 Write-Host "Caddyfile written: $caddyfile" -ForegroundColor Green
 
@@ -93,10 +102,17 @@ foreach ($p in 80,443) {
 $taskName = "DigiStampCaddy"
 $action   = New-ScheduledTaskAction -Execute $caddyExe `
              -Argument "run --config `"$caddyfile`"" -WorkingDirectory $InstallDir
-$trigger  = New-ScheduledTaskTrigger -AtStartup
+# Trigger at boot AND at any logon - if the network isn't up yet at boot (so the
+# ACME/cert step would fail), the logon trigger gives it a second, later start.
+$trigStart = New-ScheduledTaskTrigger -AtStartup
+$trigLogon = New-ScheduledTaskTrigger -AtLogOn
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+# ExecutionTimeLimit 0 = NO limit (the default is 3 days, which would silently
+# kill this long-running web server). RestartCount high so a transient failure
+# (e.g. network not ready at boot) keeps retrying instead of giving up.
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -RestartCount 30 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigStart, $trigLogon `
     -Principal $principal -Settings $settings -Force | Out-Null
 Write-Host "Scheduled task '$taskName' registered (starts Caddy at boot)." -ForegroundColor Green
 

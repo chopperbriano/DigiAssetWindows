@@ -12,8 +12,18 @@
 #     ACME HTTP challenge and 443 to serve HTTPS).
 #   - DigiAssetPoolServer.exe running locally with poolport=14028.
 #
-# setup-caddy.ps1 rewrites the two placeholders below (DOMAIN, SITE_ROOT) and the
-# pool port before launching Caddy. If you edit this by hand, set them yourself.
+# setup-caddy.ps1 rewrites the placeholders below (DOMAIN, SITE_ROOT, POOLPORT,
+# CADDY_DATA) before launching Caddy. If you edit this by hand, set them yourself.
+
+# Global options. Persist certificates + the ACME account key in a FIXED shared
+# folder so the SAME cert is reused whether Caddy runs manually (your user
+# profile) or as the SYSTEM scheduled task (the system profile). Without this,
+# each runs under a different profile with its own EMPTY cert store, so the
+# SYSTEM task re-requests a cert every boot and fails - the classic "works when I
+# run it by hand, dies as a task" symptom.
+{
+	storage file_system {$CADDY_DATA}
+}
 
 {$DOMAIN} {
 	encode gzip
