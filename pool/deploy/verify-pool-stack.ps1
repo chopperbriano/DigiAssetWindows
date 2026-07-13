@@ -203,6 +203,30 @@ if ($suspect.Count -gt 0) {
     Ok "No inline-comment / trailing-space corruption detected"
 }
 
+# ---- reindex trap ---------------------------------------------------------
+# A permanent reindex setting re-replays the ENTIRE 23M-block chain on EVERY
+# startup - the usual cause of "it keeps reindexing". reindex is a ONE-TIME
+# repair passed once on the command line, never a persistent conf/launch option.
+Section "Reindex safety"
+$reTrap = $false
+foreach ($rk in @('reindex', 'reindex-chainstate')) {
+    $rv = $dgb[$rk]
+    if ($rv -and ($rv.Trim() -eq '1' -or $rv.Trim() -eq 'true')) {
+        Bad ("digibyte.conf has " + $rk + "=" + $rv.Trim()) "This re-replays the whole chain on EVERY boot. Let the current one FINISH, then DELETE this line. It is NOT how you enable indexes."
+        $reTrap = $true
+    }
+}
+try {
+    $procs = Get-CimInstance Win32_Process -Filter "Name='digibyted.exe' OR Name='digibyte-qt.exe'" -ErrorAction Stop
+    foreach ($pr in $procs) {
+        if ($pr.CommandLine -and ($pr.CommandLine -match '(?i)\-reindex')) {
+            Warn ("running " + $pr.Name + " was launched with -reindex") "OK as a one-time repair. Remove -reindex from the shortcut/scheduled task/launch script or it reindexes every launch."
+            $reTrap = $true
+        }
+    }
+} catch {}
+if (-not $reTrap) { Ok "No permanent reindex setting found" }
+
 # ---- 2. required digibyte.conf settings -----------------------------------
 Section "Required settings in digibyte.conf"
 $missingRequired = [ordered]@{}
