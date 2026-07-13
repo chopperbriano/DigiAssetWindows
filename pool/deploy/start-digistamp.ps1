@@ -10,21 +10,49 @@
       2. checks the IPFS API is up (warns if not),
       3. launches DigiAssetWindows.exe and DigiAssetPoolServer.exe (each in its own
          window, from the data folder so they read config.cfg / pool.cfg), and
-      4. makes sure the Caddy website task is running.
+      4. HEALTH-CHECKS the Caddy website (caddy.exe running AND 443 listening) and
+         restarts it if it is actually down - not just "is the task Running".
+
+    Self-elevates (restarting Caddy + killing a stray caddy.exe needs admin).
+
+.PARAMETER WebsiteOnly          Skip Core/IPFS/node/pool; only heal + restart Caddy.
+.PARAMETER ForceRestartWebsite  Restart Caddy even if it currently looks healthy.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
-    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -Root C:\DigiAssetWindows
+.EXAMPLE
+    # Site is timing out - just fix the website, fast:
+    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -WebsiteOnly
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1 -ForceRestartWebsite
 #>
 [CmdletBinding()]
 param(
     # Prefer the current layout (C:\DigiAssetWindows); fall back to the old folder if
     # that is where this box's data actually lives, so an existing pool keeps working.
     [string]$Root = $(if (Test-Path 'C:\DigiAssetWindows\config.cfg') { 'C:\DigiAssetWindows' } elseif (Test-Path 'C:\DigiAsset\config.cfg') { 'C:\DigiAsset' } else { 'C:\DigiAssetWindows' }),
-    [int]   $WaitForCoreSeconds = 300
+    [int]   $WaitForCoreSeconds = 300,
+    # -WebsiteOnly: skip Core/IPFS/node/pool and only health-check + restart Caddy.
+    [switch]$WebsiteOnly,
+    # -ForceRestartWebsite: restart Caddy even if it currently looks healthy.
+    [switch]$ForceRestartWebsite
 )
 $ErrorActionPreference = "Stop"
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.3.0'
+
+# Restarting the Caddy task + killing a stray caddy.exe needs admin. Elevate,
+# preserving args, so the website heal below actually works.
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) {
+    if ($PSCommandPath) {
+        $a = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Root `"$Root`" -WaitForCoreSeconds $WaitForCoreSeconds"
+        if ($WebsiteOnly)         { $a += ' -WebsiteOnly' }
+        if ($ForceRestartWebsite) { $a += ' -ForceRestartWebsite' }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $a
+        return
+    }
+    Write-Warning "Not elevated - Caddy restart may fail. Re-run in an Administrator PowerShell."
+}
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -51,6 +79,7 @@ Write-Host "Data folder: $Root" -ForegroundColor Gray
 
 if (-not (Test-Path $Root)) { throw "Data folder not found: $Root" }
 
+if (-not $WebsiteOnly) {
 # --- 1. Wait for DigiByte Core (you start it manually) --------------------
 $cfg  = Read-Cfg (Join-Path $Root "config.cfg")
 $user = $cfg["rpcuser"]
@@ -99,18 +128,53 @@ function Start-Exe([string]$name) {
 }
 Start-Exe "DigiAssetWindows.exe"
 Start-Exe "DigiAssetPoolServer.exe"
+}  # end: if (-not $WebsiteOnly)
 
-# --- 4. Caddy website ------------------------------------------------------
-$task = Get-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyContinue
-if ($task) {
-    if ($task.State -ne "Running") {
-        Start-ScheduledTask -TaskName "DigiStampCaddy"
-        Write-Host "Started Caddy website (DigiStampCaddy task)." -ForegroundColor Green
-    } else {
-        Write-Host "Caddy website already running." -ForegroundColor Gray
-    }
-} else {
+# --- 4. Caddy website (health-check + heal) --------------------------------
+# The website is served by Caddy (TLS on 443, reverse-proxy to the pool exe). A
+# scheduled task can show "Running" while caddy.exe has actually died or isn't
+# listening, so check the PROCESS + port 443 - not just the task state - and
+# restart it when it is really down.
+function Test-Listening([int]$p) {
+    try { return [bool](Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) } catch { return $false }
+}
+
+$caddyTask = Get-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyContinue
+if (-not $caddyTask) {
     Write-Warning "Caddy task 'DigiStampCaddy' not found. Run setup-caddy.ps1 once to install the website."
+} else {
+    $caddyUp = [bool](Get-Process -Name caddy -ErrorAction SilentlyContinue)
+    $port443 = Test-Listening 443
+    $healthy = ($caddyUp -and $port443)
+
+    if ($healthy -and -not $ForceRestartWebsite) {
+        Write-Host "Caddy website healthy (caddy running, 443 listening)." -ForegroundColor Green
+    } else {
+        if ($ForceRestartWebsite) {
+            Write-Host "Restarting Caddy website (forced)..." -ForegroundColor Cyan
+        } else {
+            Write-Warning "Caddy website is DOWN (caddy running: $caddyUp, 443 listening: $port443) - restarting it."
+        }
+        # Stop the task + kill any stray caddy so we relaunch clean.
+        try { Stop-ScheduledTask -TaskName "DigiStampCaddy" -ErrorAction SilentlyContinue } catch {}
+        Get-Process -Name caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Start-ScheduledTask -TaskName "DigiStampCaddy"
+        $ok = $false
+        for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Seconds 1; if (Test-Listening 443) { $ok = $true; break } }
+        if ($ok) {
+            Write-Host "Caddy restarted - 443 is now listening." -ForegroundColor Green
+        } else {
+            Write-Warning "Caddy started but 443 is still NOT listening. Check the Caddy config/logs (a bad Caddyfile or the cert step failing); re-run setup-caddy.ps1 if needed."
+        }
+    }
+
+    # If 443 IS listening locally but the site still times out from the internet,
+    # the block is the router/firewall - not Caddy. Point that out.
+    if (Test-Listening 443) {
+        Write-Host "Note: 443 is listening locally. If the site still times out from OUTSIDE," -ForegroundColor DarkGray
+        Write-Host "      the block is your router forward (TCP 80+443) or the Windows firewall - not Caddy." -ForegroundColor DarkGray
+    }
 }
 
 Write-Host ""
