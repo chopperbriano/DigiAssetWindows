@@ -38,35 +38,43 @@
 param(
     [string]$DigiByteDir = 'C:\DigiByte',
     [string]$NodeDir     = 'C:\DigiAssetWindows',
-    [switch]$Fix
+    [switch]$Fix,
+    [switch]$IncludeServiceIndexes
 )
 
 $ErrorActionPreference = 'Stop'
 
-# The canonical "full DigiByte node supporting all aspects, new and old" set.
-# Keep this in sync with $required in setup-digiasset.ps1. Value shown is what
-# a missing key is set to by -Fix; an existing-but-different value is only
-# WARNED about (never overwritten), because it may be intentional.
+# --- REQUIRED for a DigiAsset node to function ------------------------------
+# These are cheap to add to an already-synced node: they are runtime/relay
+# settings or (txindex) an index normally already built during initial sync.
+# None of these trigger a chain -reindex. FAIL if missing. -Fix adds them.
+# NOTE: 'digidollar' is handled separately below - enabling it after sync can
+# force a -reindex, so we never auto-add it.
 $requiredConf = [ordered]@{
-    'server'               = '1'          # accept RPC
-    'listen'               = '1'          # accept inbound P2P peers
-    'prune'                = '0'          # MUST be 0 - pruning is incompatible with txindex
-    'txindex'              = '1'          # full tx lookup by id (DigiAsset needs this)
-    'coinstatsindex'       = '1'          # fast UTXO-set / supply stats
-    'blockfilterindex'     = 'basic'      # BIP157/158 compact block filters (modern light clients)
-    'peerblockfilters'     = '1'          # serve those filters to peers (new)
-    'peerbloomfilters'     = '1'          # BIP37 bloom filters (old SPV wallets)
-    'datacarrier'          = '1'          # relay OP_RETURN - where DigiAsset data lives
-    'deprecatedrpc'        = 'addresses'  # DigiAsset reads the "addresses" field from RPC
-    'digidollar'           = '1'          # DigiDollar consensus tracking (newest feature)
-    'digidollarstatsindex' = '1'          # DigiDollar stats index
-    'rpcthreads'           = '16'         # keep up with the node's parallel RPC calls
-    'rpcworkqueue'         = '128'        # avoid 503 "work queue depth exceeded" under load
-    'disablewallet'        = '0'          # pool box receives + pays DGB - wallet must stay on
+    'server'        = '1'          # accept RPC
+    'listen'        = '1'          # accept inbound P2P peers
+    'prune'         = '0'          # MUST be 0 - pruning is incompatible with txindex
+    'txindex'       = '1'          # full tx lookup by id (DigiAsset needs this)
+    'datacarrier'   = '1'          # relay OP_RETURN - where DigiAsset data lives
+    'deprecatedrpc' = 'addresses'  # DigiAsset reads the "addresses" field from RPC
+    'rpcthreads'    = '16'         # keep up with the node's parallel RPC calls
+    'rpcworkqueue'  = '128'        # avoid 503 "work queue depth exceeded" under load
+    'disablewallet' = '0'          # box receives + pays DGB - wallet must stay on
 }
 
-# Indexes we expect getindexinfo to report (name substrings, case-insensitive).
-$expectedIndexes = @('txindex', 'coinstatsindex', 'block filter', 'digidollar')
+# --- OPTIONAL "full public service node" indexes ----------------------------
+# The pool pins, verifies, and pays perfectly WITHOUT these - they only add
+# features for OTHER network participants / explorer queries. Enabling one on an
+# ALREADY-SYNCED node triggers a ONE-TIME BACKGROUND build (NOT a -reindex): the
+# node stays online and usable while it catches up, then stays current forever.
+# Reported as INFO only, never FAIL. -Fix skips them unless -IncludeServiceIndexes.
+$serviceConf = [ordered]@{
+    'coinstatsindex'       = '1'       # gettxoutsetinfo / supply stats (background build)
+    'blockfilterindex'     = 'basic'   # BIP157/158 compact filters (background build)
+    'peerblockfilters'     = '1'       # serve the above to peers (no build)
+    'peerbloomfilters'     = '1'       # BIP37 bloom filters for old SPV wallets (no build)
+    'digidollarstatsindex' = '1'       # DigiDollar stats (background build)
+}
 
 # ---- result tracking -------------------------------------------------------
 $script:pass = 0; $script:warn = 0; $script:fail = 0
@@ -196,13 +204,13 @@ if ($suspect.Count -gt 0) {
 }
 
 # ---- 2. required digibyte.conf settings -----------------------------------
-Section "Full-node settings present in digibyte.conf"
-$missing = [ordered]@{}
+Section "Required settings in digibyte.conf"
+$missingRequired = [ordered]@{}
 foreach ($k in $requiredConf.Keys) {
     $want = $requiredConf[$k]
     $have = $dgb[$k]
     if ($null -eq $have) {
-        $missing[$k] = $want
+        $missingRequired[$k] = $want
     } elseif ($k -eq 'deprecatedrpc') {
         if ($have -notmatch 'addresses') { Warn ("deprecatedrpc does not include 'addresses'") ("have: " + $have) }
     } elseif (($k -eq 'rpcthreads' -or $k -eq 'rpcworkqueue')) {
@@ -212,10 +220,31 @@ foreach ($k in $requiredConf.Keys) {
         Warn ($k + " is set but not to the recommended value") ("have=" + $have + " recommended=" + $want)
     }
 }
-if ($missing.Count -eq 0) {
-    Ok "All required full-node settings are present"
+if ($missingRequired.Count -eq 0) {
+    Ok "All required settings are present"
 } else {
-    Bad ("Missing " + $missing.Count + " required setting(s): " + ($missing.Keys -join ', ')) "Run with -Fix (or re-run setup-digiasset.ps1) to add them, then restart DigiByte Core."
+    Bad ("Missing " + $missingRequired.Count + " required setting(s): " + ($missingRequired.Keys -join ', ')) "These are cheap to add (no -reindex). Run with -Fix, then restart DigiByte Core."
+}
+
+# DigiDollar is consensus-level: enabling it AFTER the chain is synced can force
+# a full -reindex, so we report it but never auto-add it.
+if ($dgb['digidollar'] -eq '1') {
+    Ok "DigiDollar tracking enabled (digidollar=1)"
+} else {
+    Warn "DigiDollar not enabled" "For full DigiByte support set digidollar=1. On an already-synced chain this may need a one-time -reindex, so ideally set it BEFORE initial sync."
+}
+
+# Optional service-node indexes: report only. Absent = feature off (fine for the
+# pool). Present = will build in the background one time (no -reindex).
+Section "Optional service-node indexes (not required for the pool)"
+$missingService = [ordered]@{}
+foreach ($k in $serviceConf.Keys) {
+    if ($null -eq $dgb[$k]) { $missingService[$k] = $serviceConf[$k] }
+}
+if ($missingService.Count -eq 0) {
+    Ok "All optional service indexes are enabled"
+} else {
+    Warn ("Not enabled: " + ($missingService.Keys -join ', ')) "Optional. To turn them on (one-time BACKGROUND build, NOT a -reindex): -Fix -IncludeServiceIndexes"
 }
 
 # ---- 3. DigiByte Core live checks -----------------------------------------
@@ -253,11 +282,11 @@ if ($coreUp) {
             if ($s) { Ok ("index: " + $p.Name + " synced") ("height=" + $bh) }
             else    { Warn ("index: " + $p.Name + " still building") ("height=" + $bh + " - node works, some queries slower until done") }
         }
-        foreach ($exp in $expectedIndexes) {
-            $found = $false
-            foreach ($n in $names) { if ($n -like ('*' + $exp + '*')) { $found = $true; break } }
-            if (-not $found) { Bad ("expected index not enabled: " + $exp) "Enable it in digibyte.conf (-Fix), restart, and let it build." }
-        }
+        # Only txindex is REQUIRED. Others are optional and reported above if
+        # present; their absence from getindexinfo just means they're off.
+        $haveTx = $false
+        foreach ($n in $names) { if ($n -like '*txindex*') { $haveTx = $true; break } }
+        if (-not $haveTx) { Bad "txindex is not enabled" "Required. Add txindex=1 (-Fix) and restart; it builds in the background, no -reindex." }
     } catch {
         Warn "getindexinfo unavailable" $_.Exception.Message
     }
@@ -300,8 +329,17 @@ if ($havePool) {
     else { Warn ("Pool port " + $poolPort + " not listening") "Is DigiAssetPoolServer.exe running?" }
 }
 
-# ---- 5. -Fix: append missing required settings ----------------------------
-if ($Fix -and $missing.Count -gt 0) {
+# ---- 5. -Fix: append missing settings -------------------------------------
+# Build the set to add: always the required ones; service indexes only if the
+# operator explicitly opts in (they cost a one-time background build).
+$toAdd = [ordered]@{}
+foreach ($k in $missingRequired.Keys) { $toAdd[$k] = $missingRequired[$k] }
+$serviceCount = 0
+if ($IncludeServiceIndexes) {
+    foreach ($k in $missingService.Keys) { $toAdd[$k] = $missingService[$k]; $serviceCount++ }
+}
+
+if ($Fix -and $toAdd.Count -gt 0) {
     Section "Repairing digibyte.conf (-Fix)"
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
     if (-not $isAdmin) {
@@ -313,16 +351,25 @@ if ($Fix -and $missing.Count -gt 0) {
         $raw = Get-Content -Path $dgbPath -Raw
         if ($raw.Length -gt 0 -and -not $raw.EndsWith("`n")) { Add-Content -Path $dgbPath -Value "" -Encoding ASCII }
         Add-Content -Path $dgbPath -Value "" -Encoding ASCII
-        Add-Content -Path $dgbPath -Value "# --- added by verify-pool-stack.ps1 (full-node settings) ---" -Encoding ASCII
-        foreach ($k in $missing.Keys) {
-            Add-Content -Path $dgbPath -Value ($k + '=' + $missing[$k]) -Encoding ASCII
+        Add-Content -Path $dgbPath -Value "# --- added by verify-pool-stack.ps1 ---" -Encoding ASCII
+        foreach ($k in $toAdd.Keys) {
+            Add-Content -Path $dgbPath -Value ($k + '=' + $toAdd[$k]) -Encoding ASCII
         }
-        Ok ("Appended " + $missing.Count + " setting(s)") ("backup: " + $bak)
-        Write-Host "       RESTART DigiByte Core now so the new indexes build (one-time)." -ForegroundColor Yellow
+        Ok ("Appended " + $toAdd.Count + " setting(s)") ("backup: " + $bak)
+        Write-Host "       Restart DigiByte Core to apply. Required settings are cheap;" -ForegroundColor Yellow
+        if ($serviceCount -gt 0) {
+            Write-Host "       the service indexes build in the BACKGROUND (one-time, NOT a -reindex)." -ForegroundColor Yellow
+            Write-Host "       The node stays online; watch progress with getindexinfo." -ForegroundColor DarkGray
+        }
     }
-} elseif ($missing.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Tip: re-run with -Fix (elevated) to add the missing settings automatically." -ForegroundColor DarkGray
+} else {
+    if ($missingRequired.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Tip: re-run with -Fix (elevated) to add the missing REQUIRED settings (no -reindex)." -ForegroundColor DarkGray
+    }
+    if ($missingService.Count -gt 0 -and -not $IncludeServiceIndexes) {
+        Write-Host "Optional: add -IncludeServiceIndexes to also enable service indexes (one-time background build)." -ForegroundColor DarkGray
+    }
 }
 
 # ---- summary --------------------------------------------------------------
