@@ -56,7 +56,15 @@ param(
     # By default the GUI apps (DigiByte wallet, IPFS Desktop, node dashboard)
     # auto-start when you log in. Pass -NoStartOnLogon to install them but NOT
     # register the logon auto-start (you'd start them by hand).
-    [switch]$NoStartOnLogon
+    [switch]$NoStartOnLogon,
+    # -Lean: build a leaner DigiByte node that skips the OPTIONAL service indexes
+    # (coinstatsindex, block/bloom filters, digidollar stats) to save disk + CPU.
+    # Default (omit) = full public service node. Interactive install also offers this.
+    [switch]$Lean,
+    # -NoUpnp: skip the automatic router port-forward (UPnP) attempt.
+    [switch]$NoUpnp,
+    # -NoEncryptPrompt: skip offering to encrypt the wallet during an interactive install.
+    [switch]$NoEncryptPrompt
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.17.0'
+$SCRIPT_VERSION = '2.18.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -98,6 +106,10 @@ $TaskIpfs       = 'DigiStampIPFS'       # legacy headless task (removed on upgra
 $TaskWallet     = 'DigiStampWallet'     # DigiByte GUI wallet, visible at logon
 $TaskNode       = 'DigiStampNode'       # DigiAsset node dashboard, visible at logon
 $TaskMaint      = 'DigiStampMaintenance'
+
+# Node service level. $true = lean (skip optional service indexes). Set from the
+# -Lean switch and/or the interactive prompt; read by Write-DigiByteConf.
+$script:LeanNode = [bool]$Lean
 
 # GUI apps. IPFS Desktop (Electron) installs per-user and registers its own
 # login auto-start; it exposes the same :5001 API the node uses.
@@ -334,6 +346,39 @@ function Ensure-Firewall {
     Open-Port 'DigiByte P2P (TCP 12024)'        TCP 12024
 }
 
+# Best-effort automatic router port-forward via UPnP (IGD). Opens 4001 TCP/UDP
+# (IPFS/DigiAsset hosting - what the pool verifies) and 12024 TCP (DigiByte P2P).
+# Many home routers support this; if UPnP is off/unsupported it just no-ops and
+# the user forwards manually. DigiByte's own upnp=1 also maps 12024 on its own.
+function Invoke-UpnpForward {
+    $ip = Get-LocalIPv4
+    if (-not $ip) { Log '  UPnP: could not determine this PC''s LAN IP - skipping.' 'WARN'; return $false }
+    $maps = @(
+        @{ port = 4001;  proto = 'TCP'; desc = 'DigiAsset-IPFS' },
+        @{ port = 4001;  proto = 'UDP'; desc = 'DigiAsset-IPFS-QUIC' },
+        @{ port = 12024; proto = 'TCP'; desc = 'DigiByte-P2P' }
+    )
+    $any = $false
+    try {
+        $nat = New-Object -ComObject HNetCfg.NATUPnP
+        $col = $nat.StaticPortMappingCollection
+        if ($null -eq $col) { Log '  UPnP: no UPnP router found (enable UPnP on the router, or forward manually).' 'WARN'; return $false }
+        foreach ($m in $maps) {
+            try {
+                $col.Add($m.port, $m.proto, $m.port, $ip, $true, ('DigiStamp ' + $m.desc)) | Out-Null
+                Log ("  UPnP: mapped {0} {1} -> {2}" -f $m.proto, $m.port, $ip) 'OK'
+                $any = $true
+            } catch {
+                Log ("  UPnP: router refused {0} {1} (forward it manually)" -f $m.proto, $m.port) 'WARN'
+            }
+        }
+    } catch {
+        Log '  UPnP: not available on this network - forward ports manually (see summary).' 'WARN'
+        return $false
+    }
+    return $any
+}
+
 # Pre-authorize an app in Windows Firewall so Windows does NOT pop the "Do you
 # want to allow this app?" dialog the first time the app listens. Adding an
 # allow rule for the program before it starts suppresses that prompt.
@@ -411,6 +456,51 @@ function Ensure-DigiByteWallet {
         Invoke-DgbRpc 'createwallet' '["digiasset"]' | Out-Null
         Log '  created a DigiByte wallet ("digiasset"). ENCRYPT it + back up wallet.dat (see the notes at the end).' 'OK'
     } catch { Log "  could not create a DigiByte wallet yet (will retry): $($_.Exception.Message)" 'WARN' }
+}
+
+# Offer to encrypt the payout wallet during an interactive install. Encrypting
+# protects the earnings on this box (a passphrase is required to SPEND; receiving
+# still works with no passphrase). Skips silently when non-interactive, already
+# encrypted, or the wallet/RPC isn't ready. The passphrase is never stored or
+# logged. encryptwallet stops DigiByte, so we restart the wallet afterward.
+function Protect-Wallet {
+    if ($NoEncryptPrompt -or -not [Environment]::UserInteractive) { return }
+    Ensure-DigiByteWallet
+    $wi = $null
+    try { $wi = Invoke-DgbRpc 'getwalletinfo' } catch { return }   # no wallet/RPC yet
+    if ($null -ne $wi -and $null -ne $wi.unlocked_until) { Log '  wallet is already encrypted - good.' 'OK'; return }
+
+    Write-Host "`n--- Protect your wallet (recommended) ---" -ForegroundColor Cyan
+    Write-Host 'Encrypting means a passphrase is needed to SPEND your earnings, so someone with' -ForegroundColor White
+    Write-Host 'access to this PC cannot drain it. Receiving payouts still works normally.' -ForegroundColor White
+    Write-Host 'WRITE THE PASSPHRASE DOWN and keep it safe - if you lose it, the coins are GONE.' -ForegroundColor Yellow
+    Write-Host 'There is no reset or recovery.' -ForegroundColor Yellow
+    if ((Read-Host 'Encrypt the wallet now? (Y/n)') -match '^[Nn]') {
+        Log '  skipped wallet encryption. You can do it later in DigiByte-Qt: Settings > Encrypt Wallet.' 'WARN'
+        return
+    }
+    for ($i = 0; $i -lt 3; $i++) {
+        $sec1 = Read-Host 'Enter a wallet passphrase' -AsSecureString
+        $sec2 = Read-Host 'Re-enter to confirm'       -AsSecureString
+        $p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec1))
+        $p2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2))
+        if ($p1 -ne $p2)      { Write-Host '  Passphrases do not match - try again.' -ForegroundColor Yellow; continue }
+        if ($p1.Length -lt 8) { Write-Host '  Please use at least 8 characters.'    -ForegroundColor Yellow; continue }
+        try {
+            # JSON-escape backslash first, then double-quote, so odd passphrases survive.
+            $esc = ($p1 -replace '\\', '\\\\') -replace '"', '\"'
+            Invoke-DgbRpc 'encryptwallet' ('["' + $esc + '"]') | Out-Null
+            Log '  wallet ENCRYPTED. DigiByte is restarting to apply the change.' 'OK'
+            $p1 = $null; $p2 = $null; $esc = $null
+            Start-Sleep -Seconds 5
+            for ($w = 0; $w -lt 30 -and (Test-ProcRunning 'digibyte-qt'); $w++) { Start-Sleep -Seconds 1 }
+            Start-DigiByteWallet | Out-Null
+            Wait-ForDigiByteRpc 180 | Out-Null
+        } catch {
+            Log "  encryptwallet failed: $($_.Exception.Message). Encrypt later in DigiByte-Qt (Settings > Encrypt Wallet)." 'WARN'
+        }
+        break
+    }
 }
 function Test-IpfsUp {
     $api = 'http://127.0.0.1:5001/api/v0/'
@@ -742,25 +832,53 @@ function Write-DigiByteConf {
 
     # Every setting this node needs to be a good public service node. Used to build
     # a fresh conf and to top up a pre-existing one (append-missing on re-run).
+    # Base settings every node needs (required for DigiAsset + a good peer).
+    # upnp/natpmp try to auto-forward the P2P port on the router.
     $required = [ordered]@{
         server='1'; listen='1'; discover='1'; dnsseed='1'; port='12024'; deprecatedrpc='addresses'
-        prune='0'; txindex='1'; coinstatsindex='1'
-        blockfilterindex='basic'; peerblockfilters='1'; peerbloomfilters='1'
+        upnp='1'; natpmp='1'
+        prune='0'; txindex='1'
         blocksonly='0'; persistmempool='1'; maxmempool='1024'; mempoolexpiry='336'; datacarrier='1'
         maxconnections='400'; maxuploadtarget='0'; dbcache="$dbcache"; par='0'; disablewallet='0'
-        digidollar='1'; digidollarstatsindex='1'
+        digidollar='1'
         rpcport="$RpcPort"; rpcbind='127.0.0.1'; rpcallowip='127.0.0.1'; rpcthreads='16'; rpcworkqueue='128'
         rest='0'; logtimestamps='1'; logips='0'; shrinkdebugfile='1'
+    }
+    # OPTIONAL service indexes - only on a FULL (non-lean) node. Built during the
+    # initial sync at no extra cost; they let this box serve light clients +
+    # explorers. A -Lean node omits them to save disk + CPU.
+    if (-not $script:LeanNode) {
+        $required['coinstatsindex']       = '1'
+        $required['blockfilterindex']     = 'basic'
+        $required['peerblockfilters']     = '1'
+        $required['peerbloomfilters']     = '1'
+        $required['digidollarstatsindex'] = '1'
     }
     $addnodes = @('64.182.71.55:12024','64.182.71.56:12024')
 
     if (-not $rpcUser -or -not $rpcPass) {
         $rpcUser = 'digiasset'; $rpcPass = New-Password 32
+        # Optional service-index block - full node only.
+        $svcBlock = ''
+        if (-not $script:LeanNode) {
+            $svcBlock = @"
+
+# --- Extra service indexes (FULL node) ---------------------------------------
+# Serve light clients + explorers. Built during initial sync at no extra cost.
+# A -Lean node omits these to save disk + CPU.
+coinstatsindex=1
+blockfilterindex=basic
+peerblockfilters=1
+peerbloomfilters=1
+digidollarstatsindex=1
+"@
+        }
+        $levelLabel = if ($script:LeanNode) { 'Lean' } else { 'Full Public Service' }
         $conf = @"
 ###############################################################################
-# DigiByte Core Public Service Node Configuration  (written by DigiAsset for Windows)
+# DigiByte Core $levelLabel Node Configuration  (written by DigiAsset for Windows)
 #   - Helps the network: inbound peers, tx relay, full historical blocks + indexes
-#   - Forward TCP 12024 from your router to this machine.
+#   - upnp/natpmp try to auto-forward P2P 12024 on your router.
 #   - Do NOT expose RPC 14022 to the public internet.
 # Target: DigiByte Core v9.26.x mainnet
 ###############################################################################
@@ -772,16 +890,13 @@ discover=1
 dnsseed=1
 port=12024
 deprecatedrpc=addresses
+# Try to auto-open the P2P port on the router (UPnP / NAT-PMP).
+upnp=1
+natpmp=1
 
 # --- Full archival node ------------------------------------------------------
 prune=0
 txindex=1
-coinstatsindex=1
-
-# --- Compact block filters ---------------------------------------------------
-blockfilterindex=basic
-peerblockfilters=1
-peerbloomfilters=1
 
 # --- Transaction relay / mempool ---------------------------------------------
 blocksonly=0
@@ -801,14 +916,13 @@ par=0
 
 # --- Wallet ------------------------------------------------------------------
 # Wallet ENABLED (disablewallet=0): the DigiAsset node needs a payout address and
-# the installer auto-creates + asks you to encrypt a wallet. Set to 1 only if you
-# will NOT receive payouts on this box.
+# the installer offers to encrypt a wallet. Set to 1 only if you will NOT
+# receive payouts on this box.
 disablewallet=0
 
 # --- DigiDollar --------------------------------------------------------------
 digidollar=1
-digidollarstatsindex=1
-
+$svcBlock
 # --- RPC (LOCAL ONLY - never port-forward 14022) -----------------------------
 # The DigiAsset node + pool authenticate with these credentials (also copied into
 # config.cfg / pool.cfg). Keep them in sync across all three files.
@@ -831,7 +945,7 @@ addnode=64.182.71.55:12024
 addnode=64.182.71.56:12024
 "@
         Set-Content -Path $DgbConf -Value $conf -Encoding ASCII
-        Log "  wrote digibyte.conf (public service node; dbcache=${dbcache}MB) + RPC credentials." 'OK'
+        Log "  wrote digibyte.conf ($levelLabel node; dbcache=${dbcache}MB) + RPC credentials." 'OK'
     } else {
         # Existing conf: top up any required setting / addnode it is missing.
         $raw = (Get-Content $DgbConf -Raw); $added = @()
@@ -1202,6 +1316,25 @@ function Invoke-Install {
         Write-Host "  This node will join: $PoolServer" -ForegroundColor Green
     }
 
+    # 0c. Service level (full vs lean) ---------------------------------------
+    # Full = also serve DigiByte light clients + explorers (best for the network,
+    # and FREE on a fresh sync - the indexes build while the chain downloads).
+    # Lean = skip those optional indexes to save disk + CPU on a small box.
+    if (-not $Lean -and [Environment]::UserInteractive) {
+        Write-Host "`n--- How much should this node help the network? ---" -ForegroundColor Cyan
+        Write-Host 'FULL service node (recommended): also serves DigiByte light clients + explorers' -ForegroundColor White
+        Write-Host '  (compact block filters, coin stats, DigiDollar stats). On a fresh sync this is' -ForegroundColor White
+        Write-Host '  FREE - the extra indexes build while the blockchain downloads.' -ForegroundColor White
+        Write-Host 'LEAN node: skips those optional indexes to save disk + CPU on a small box.' -ForegroundColor Gray
+        Write-Host 'Either way, this node fully hosts DigiAssets and can be paid.' -ForegroundColor Gray
+        if ((Read-Host '  Press Enter for FULL, or type L for Lean') -match '^[Ll]') {
+            $script:LeanNode = $true
+            Write-Host '  This node will be LEAN (optional service indexes skipped).' -ForegroundColor Yellow
+        } else {
+            Write-Host '  This node will be a FULL public service node. Thank you for supporting DigiByte!' -ForegroundColor Green
+        }
+    }
+
     # --- Prerequisites ------------------------------------------------------
     # Internet: everything below downloads from GitHub / IPFS. Fail fast + clearly
     # instead of a cryptic "could not download" halfway through.
@@ -1236,6 +1369,7 @@ function Invoke-Install {
     if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData -conf=$DgbConf" }
     Start-DigiByteWallet | Out-Null
     Log '  DigiByte wallet (GUI) running + opens at every logon. Blockchain syncs in the background.' 'OK'
+    Log '  what this does: runs a FULL DigiByte node - validates + relays the blockchain for the whole network, not just your wallet.'
 
     # 2. IPFS Desktop (GUI) --------------------------------------------------
     Step 2 'Installing IPFS Desktop (GUI, tray icon)...'
@@ -1243,6 +1377,7 @@ function Invoke-Install {
     $ipfsVer = Install-IpfsDesktop
     Start-IpfsDesktop | Out-Null
     Log '  IPFS Desktop running (tray icon) + auto-starts at logon.' 'OK'
+    Log '  what this does: IPFS stores the DigiAsset files; your node PINS them so they stay online for everyone.'
 
     # 3. DigiAsset node ------------------------------------------------------
     Step 3 'Installing DigiAsset for Windows (latest release)...'
@@ -1255,14 +1390,23 @@ function Invoke-Install {
     Log '  waiting for IPFS + DigiByte to be ready before the node starts...'
     Wait-ForIpfs 300 | Out-Null
     Wait-ForDigiByteRpc 300 | Out-Null
+    Protect-Wallet             # offer to encrypt the payout wallet (may restart the wallet + re-wait for RPC)
     Start-Node | Out-Null
     Log '  DigiAsset node dashboard started.' 'OK'
 
-    # 4. Firewall ------------------------------------------------------------
-    Step 4 'Opening the local Windows firewall for hosting (inbound)...'
+    # 4. Firewall + automatic router forward ---------------------------------
+    Step 4 'Opening the local firewall + trying to auto-forward on your router...'
     Ensure-Firewall
     Log '  local firewall now allows inbound 4001/TCP + 4001/UDP (DigiAsset/IPFS) and 12024/TCP (DigiByte).' 'OK'
-    Log '  You must ALSO forward these on your home router - see the summary below.' 'WARN'
+    if (-not $NoUpnp) {
+        Log '  attempting automatic router port-forward (UPnP)...' 'STEP'
+        $upnpAny = Invoke-UpnpForward
+        if ($upnpAny) { Log '  UPnP forward attempted - the port 4001 reachability test below confirms it.' 'OK' }
+        else { Log '  UPnP could not map the ports - forward 4001 (+ 12024) on your router manually (see summary).' 'WARN' }
+    } else {
+        Log '  You must forward these on your home router - see the summary below.' 'WARN'
+    }
+    Log '  why this matters: without an open port 4001, the pool cannot verify you, so you are NOT paid and cannot host for others.'
 
     # 5. Maintenance task ----------------------------------------------------
     Step 5 'Installing the auto-update + self-heal maintenance task...'
@@ -1348,7 +1492,8 @@ function Invoke-Install {
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.' -ForegroundColor White
     Write-Host ''
     Write-Host 'HOSTING PORTS - your local Windows firewall is ALREADY open for these.' -ForegroundColor Cyan
-    Write-Host 'To accept incoming connections you must ALSO forward them on your home router:' -ForegroundColor White
+    Write-Host 'The installer tried to auto-forward them on your router via UPnP. If the port 4001' -ForegroundColor White
+    Write-Host 'test above did NOT say OPEN, UPnP was blocked - forward these on your router manually:' -ForegroundColor White
     Write-Host '   TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)' -ForegroundColor White
     Write-Host '   UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)' -ForegroundColor White
     Write-Host '   TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)' -ForegroundColor White
