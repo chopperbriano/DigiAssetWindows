@@ -978,6 +978,29 @@ namespace {
         if (slash != std::string::npos) u = u.substr(0, slash);
         return u;
     }
+    // ASCII -> lowercase hex (for OP_RETURN data).
+    std::string toHex(const std::string& s) {
+        static const char* H = "0123456789abcdef";
+        std::string o;
+        o.reserve(s.size() * 2);
+        for (unsigned char c: s) { o += H[c >> 4]; o += H[c & 0xF]; }
+        return o;
+    }
+    // Decode a DigiStamp OP_RETURN scriptPubKey hex ("...DGSP1<url>") -> url or "".
+    std::string decodeAnnouncement(const std::string& hex) {
+        size_t m = hex.find("4447535031");   // "DGSP1"
+        if (m == std::string::npos) return "";
+        std::string urlHex = hex.substr(m + 10);
+        std::string url;
+        for (size_t i = 0; i + 1 < urlHex.size(); i += 2) {
+            int b = 0;
+            try { b = std::stoi(urlHex.substr(i, 2), nullptr, 16); } catch (...) { break; }
+            if (b < 0x20 || b > 0x7e) break;   // stop at end of the pushed data
+            url += (char) b;
+        }
+        if (url.rfind("http", 0) != 0) return "";
+        return url;
+    }
 }
 
 void PoolServer::setPeers(const std::vector<std::string>& peers, const std::string& token) {
@@ -1207,6 +1230,9 @@ void PoolServer::discoveryLoop() {
                 CurlHandler::postJson(_seed + "/peer/announce", "{\"url\":\"" + _publicUrl + "\"}", resp, 8000);
             } catch (...) {}
         }
+        // On-chain: announce ourselves (weekly) so seedless pools can find us.
+        onchainAnnounce();
+
         // Pull each source's /peer/list; collect new pool URLs.
         std::set<std::string> toProbe;
         for (const auto& src: sources) {
@@ -1225,6 +1251,9 @@ void PoolServer::discoveryLoop() {
                 toProbe.insert(u);
             }
         }
+        // On-chain: scan new blocks for peer announcements (seedless discovery).
+        onchainScan(toProbe);
+
         // Probe + refresh the directory.
         for (const auto& u: toProbe) {
             if (!_discoveryRunning.load()) break;
@@ -1298,6 +1327,75 @@ void PoolServer::handlePeerAnnounce(const std::string& body, int& outStatus, std
         }
     }
     outBody = "{\"ok\":true}";
+}
+
+// ===========================================================================
+//  On-chain discovery (phase 2): a pool ANNOUNCES its public URL in a DigiByte
+//  OP_RETURN (weekly) and SCANS new blocks for others' announcements, so pools
+//  find each other with NO seed. Still display-only - a scanned URL is only
+//  listed after probePool() validates it. Announcing costs a tiny tx fee and
+//  needs the pool wallet; scanning is read-only. All best-effort: any RPC error
+//  just skips this round.
+// ===========================================================================
+std::string PoolServer::rpcRaw(const std::string& method, const std::string& paramsJson) {
+    if (_rpcUser.empty()) return "";
+    std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pooldisc\",\"method\":\"" + method +
+                       "\",\"params\":" + paramsJson + "}";
+    std::string url = "http://" + _rpcUser + ":" + _rpcPass + "@127.0.0.1:" + std::to_string(_rpcPort);
+    std::string resp;
+    try { CurlHandler::postJson(url, body, resp, 15000); } catch (...) { return ""; }
+    return resp;
+}
+
+void PoolServer::onchainAnnounce() {
+    if (!_onchain || _publicUrl.empty() || _rpcUser.empty()) return;
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t last = 0;
+    try { last = std::stoll(_db.getConfig("lastOnchainAnnounce", "0")); } catch (...) {}
+    if (now - last < 7 * 24 * 3600) return;   // re-announce at most weekly
+
+    std::string data = "DGSP1" + _publicUrl;
+    if (data.size() > 78) return;             // OP_RETURN standard data limit (~80B)
+    std::string dataHex = toHex(data);
+
+    std::string rawHex = jsonField(rpcRaw("createrawtransaction", "[[],[{\"data\":\"" + dataHex + "\"}]]"), "result");
+    if (rawHex.empty() || rawHex == "null") return;
+    std::string fundedHex = jsonField(rpcRaw("fundrawtransaction", "[\"" + rawHex + "\"]"), "hex");
+    if (fundedHex.empty()) return;            // no funds / RPC error -> skip quietly
+    if (!_walletPass.empty()) rpcRaw("walletpassphrase", "[\"" + jsonEscape(_walletPass) + "\",60]");
+    std::string signedHex = jsonField(rpcRaw("signrawtransactionwithwallet", "[\"" + fundedHex + "\"]"), "hex");
+    if (signedHex.empty()) { if (!_walletPass.empty()) rpcRaw("walletlock", "[]"); return; }
+    std::string txid = jsonField(rpcRaw("sendrawtransaction", "[\"" + signedHex + "\"]"), "result");
+    if (!_walletPass.empty()) rpcRaw("walletlock", "[]");
+    if (!txid.empty() && txid != "null") _db.setConfig("lastOnchainAnnounce", std::to_string(now));
+}
+
+void PoolServer::onchainScan(std::set<std::string>& out) {
+    if (!_onchain || _rpcUser.empty()) return;
+    long tip = (long) rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getblockcount", "[]");
+    if (tip <= 0) return;
+    long last = tip;   // first run: forward-only (don't back-scan the whole chain)
+    std::string lastStr = _db.getConfig("lastOnchainScanHeight", "");
+    if (!lastStr.empty()) { try { last = std::stol(lastStr); } catch (...) { last = tip; } }
+    const long MAXPERCYCLE = 60;
+    long to = std::min(tip, last + MAXPERCYCLE);
+    for (long h = last + 1; h <= to && _discoveryRunning.load(); h++) {
+        std::string hash = jsonField(rpcRaw("getblockhash", "[" + std::to_string(h) + "]"), "result");
+        if (hash.empty() || hash == "null") break;
+        std::string rb = rpcRaw("getblock", "[\"" + hash + "\",2]");
+        size_t p = 0;
+        while ((p = rb.find("44475350", p)) != std::string::npos) {   // "DGSP"
+            size_t start = rb.rfind('"', p);
+            size_t end = rb.find('"', p);
+            if (start != std::string::npos && end != std::string::npos && end > start) {
+                std::string u = decodeAnnouncement(rb.substr(start + 1, end - start - 1));
+                if (!u.empty() && u != _publicUrl) out.insert(u);
+            }
+            p += 8;
+        }
+    }
+    if (to > last) _db.setConfig("lastOnchainScanHeight", std::to_string(to));
 }
 
 // Parse the page number out of /permanent/<page>.json and serve that page's

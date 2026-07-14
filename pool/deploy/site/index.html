@@ -324,8 +324,9 @@
     <p class="muted">It is not a wallet or an explorer. It talks to DigiAsset Core nodes, not to browsers.</p>
   </div>
 
-  <h2>Nodes around the world</h2>
+  <h2>The network &mdash; pools &amp; nodes worldwide</h2>
   <div class="card">
+    <p id="netBanner" class="muted" style="margin-top:0">&mdash;</p>
     <div id="nodeMap"></div>
     <p class="maphint" id="mapHint">Each pin is a node hosting DigiAsset content. Nearby nodes group into a count.</p>
   </div>
@@ -406,6 +407,17 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     document.getElementById("statTreasury").textContent = fmt(d.treasuryBalance);
     document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
     document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + ((d.activeNodes != null ? d.activeNodes : d.totalNodes) || 0);
+
+    var net = d.network || {};
+    var banner = document.getElementById("netBanner");
+    if (banner) {
+      var pools = net.totalPools || net.pools || 1;
+      var nn = (net.nodesActive != null) ? net.nodesActive : (d.activeNodes || 0);
+      banner.innerHTML = "This pool is part of a network of <strong style=\"color:#7ee787\">" + pools +
+        "</strong> permanent-storage pool" + (pools === 1 ? "" : "s") + ", hosting <strong style=\"color:#7ee787\">" +
+        nn + "</strong> active node" + (nn === 1 ? "" : "s") + " worldwide" +
+        (pools > 1 ? " &mdash; map pins are colored by pool (blue = this pool, amber = others)." : ".");
+    }
     if (window._plotNodes) window._plotNodes(d.nodes);
 
     var addr = d.donationAddress || "";
@@ -495,28 +507,36 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     attribution: "&copy; OpenStreetMap &copy; CARTO", subdomains: "abcd", maxZoom: 19
   }).addTo(map);
 
-  var pin = '<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">' +
-            '<path d="M13 0C6 0 0 5.4 0 12.6 0 22 13 34 13 34s13-12 13-21.4C26 5.4 20 0 13 0z" fill="#1f6feb" stroke="#0d1117" stroke-width="1.5"/>' +
-            '<circle cx="13" cy="12.5" r="7.3" fill="#0d1117"/>' +
-            '<text x="13" y="16.3" font-size="10" font-weight="700" fill="#7ee787" text-anchor="middle" font-family="system-ui,sans-serif">D</text></svg>';
-  var icon = L.divIcon({ className: "node-pin", html: pin, iconSize: [26, 34], iconAnchor: [13, 34], popupAnchor: [0, -30] });
+  function makeIcon(fill) {
+    var pin = '<svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">' +
+              '<path d="M13 0C6 0 0 5.4 0 12.6 0 22 13 34 13 34s13-12 13-21.4C26 5.4 20 0 13 0z" fill="' + fill + '" stroke="#0d1117" stroke-width="1.5"/>' +
+              '<circle cx="13" cy="12.5" r="7.3" fill="#0d1117"/>' +
+              '<text x="13" y="16.3" font-size="10" font-weight="700" fill="#7ee787" text-anchor="middle" font-family="system-ui,sans-serif">D</text></svg>';
+    return L.divIcon({ className: "node-pin", html: pin, iconSize: [26, 34], iconAnchor: [13, 34], popupAnchor: [0, -30] });
+  }
+  var selfIcon = makeIcon("#1f6feb");   // nodes on THIS pool
+  var peerIcon = makeIcon("#d9a441");   // nodes on other pools in the network
 
   var cluster = window.L.markerClusterGroup ? L.markerClusterGroup({ maxClusterRadius: 40 }) : null;
   if (cluster) cluster.addTo(map);
 
   window._plotNodes = function (nodes) {
     if (cluster) cluster.clearLayers();
-    var n = 0;
+    var n = 0, otherPools = {};
     (nodes || []).forEach(function (x) {
       if (typeof x.lat !== "number" || typeof x.lon !== "number") return;
-      var m = L.marker([x.lat, x.lon], { icon: icon });
+      var m = L.marker([x.lat, x.lon], { icon: x.pool ? peerIcon : selfIcon });
       var label = (x.city ? x.city + ", " : "") + (x.country || "");
+      if (x.pool) { label += (label ? " " : "") + "(pool: " + x.pool + ")"; otherPools[x.pool] = 1; }
       if (label) m.bindPopup(label);
       if (cluster) cluster.addLayer(m); else m.addTo(map);
       n++;
     });
+    var others = Object.keys(otherPools).length;
     var hint = document.getElementById("mapHint");
-    if (hint) hint.textContent = n ? (n + " node" + (n === 1 ? "" : "s") + " on the map. Nearby nodes group into a count; click a pin for its location.")
+    if (hint) hint.textContent = n ? (n + " node" + (n === 1 ? "" : "s") + " on the map" +
+                                      (others ? " across this pool (blue) + " + others + " other pool" + (others === 1 ? "" : "s") + " (amber)" : "") +
+                                      ". Click a pin for its location.")
                                    : "No nodes are being located yet — as operators join, their pins appear here.";
   };
 

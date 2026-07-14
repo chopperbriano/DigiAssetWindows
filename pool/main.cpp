@@ -373,6 +373,16 @@ int main(int /*argc*/, char** /*argv*/) {
                                          : ("seed=" + (seed.empty() ? std::string("none") : seed)
                                             + (publicUrl.empty() ? std::string(" (set poolpublicurl to be listed)") : "")))
                   << "\n";
+
+        // Phase 2: on-chain discovery. poolonchain=1 (default) makes the pool
+        // announce its URL in a DigiByte OP_RETURN (weekly) + scan blocks for
+        // others, so pools find each other with no seed. Announcing needs the
+        // pool wallet (uses poolwalletpassphrase to unlock if encrypted); set
+        // poolonchain=0 to disable (e.g. to avoid the tiny tx fee).
+        bool onchain = readConfigInt(cfg, "poolonchain", 1) != 0;
+        std::string walletPass = cfg.count("poolwalletpassphrase") ? cfg["poolwalletpassphrase"] : "";
+        server->setOnchain(onchain, walletPass);
+        std::cout << "  on-chain discovery: " << (onchain ? "on" : "off") << "\n";
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;

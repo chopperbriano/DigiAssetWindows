@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -125,6 +126,14 @@ public:
     //   seed      : bootstrap seed pool URL (ships defaulted to the flagship pool)
     void setDiscovery(const std::string& publicUrl, const std::string& seed);
 
+    // Phase 2: on-chain discovery. When enabled, the pool ANNOUNCES its public URL
+    // in a DigiByte OP_RETURN (weekly) and SCANS new blocks for other pools'
+    // announcements - so pools find each other with NO seed. Still display-only
+    // (announced URLs are probe-validated before listing). Announcing costs a tiny
+    // tx fee + needs the pool wallet (walletPass unlocks it if encrypted); scanning
+    // is read-only. Set before start(). Uses the same Core RPC as setWalletInfo().
+    void setOnchain(bool enabled, const std::string& walletPass) { _onchain = enabled; _walletPass = walletPass; }
+
     struct DiscoveredPool {
         std::string url;
         int64_t lastSeen = 0;
@@ -212,6 +221,13 @@ private:
     // Fetch <url>/pool/stats.json, confirm it's a real pool, fill a DiscoveredPool
     // (+ its tagged nodes array). Returns false if unreachable / not a pool.
     bool probePool(const std::string& url, DiscoveredPool& out, std::string& outNodesJson);
+
+    // ---- On-chain discovery (phase 2) ----
+    bool _onchain = false;
+    std::string _walletPass;
+    void onchainAnnounce();                        // publish our URL in an OP_RETURN (weekly)
+    void onchainScan(std::set<std::string>& out);  // read new blocks for peer announcements
+    std::string rpcRaw(const std::string& method, const std::string& paramsJson); // Core RPC -> raw JSON
 
     // Blocking accept loop (runs on _acceptThread): accepts sockets and
     // posts each to the io_context thread pool for handling.

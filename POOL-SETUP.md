@@ -305,6 +305,27 @@ The discovery endpoints (`GET /peer/list`, `POST /peer/announce`) are open (no
 token) and ride over the same Caddy HTTPS front end (`/peer/*` is already
 proxied). `verify-peers.ps1` reports the directory it has learned.
 
+#### On-chain discovery (no seed needed)
+
+The seed is a small convenience, not a dependency: pools also find each other
+**directly on the DigiByte blockchain**. With `poolonchain=1` (default), a pool
+**announces its URL in an `OP_RETURN`** transaction (at most weekly, tiny fee)
+and **scans new blocks** for other pools' announcements — so a brand-new pool is
+discovered even if it never talks to the seed. It's still display-only: an
+announced URL is only listed after its `/pool/stats.json` validates.
+
+```ini
+poolonchain=1   # 0 = don't announce/scan on-chain (e.g. to avoid the tx fee)
+```
+
+Announcing spends a tiny fee from the pool wallet (and uses `poolwalletpassphrase`
+to unlock it if encrypted); if the wallet is empty or locked it simply skips and
+retries next cycle — discovery still works via receiving others' announcements
+and the seed. Scanning is read-only and starts from the current tip, so pools
+converge within a week (re-announce cadence) with no chain back-scan. This is the
+fully-decentralized path: even with no seed reachable, the network re-forms from
+the chain.
+
 ## Router / firewall
 
 Your pool server hosts the same way a node does, plus the website:

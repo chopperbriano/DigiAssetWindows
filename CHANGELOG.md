@@ -20,7 +20,21 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.90 through win.95 (current)
+## 0.3.0-win.90 through win.96 (current)
+
+### win.96 — on-chain pool discovery + network map/site
+- **On-chain discovery (phase 2):** pools find each other with NO seed by
+  announcing their URL in a DigiByte `OP_RETURN` (weekly, `DGSP1` magic) and
+  scanning new blocks for others' announcements (forward-only from the tip).
+  Still display-only + probe-validated. Config `poolonchain` (default 1); uses
+  the pool wallet (`poolwalletpassphrase` to unlock) - skips gracefully if it
+  can't fund/sign.
+- **Site + map:** the landing-page world map now shows the WHOLE network - this
+  pool's nodes (blue) plus peer/discovered pools' nodes (amber), with a "part of
+  a network of N pools, M nodes worldwide" banner driven by `stats.json`'s
+  `network.totalPools` / `network.directory`.
+
+
 
 ### win.95 — automatic pool discovery (seed + gossip, display-only)
 - Pools now **auto-discover** each other over the network: a new pool announces
