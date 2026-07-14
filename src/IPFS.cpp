@@ -516,10 +516,11 @@ void IPFS::downloadFile(const string& cid, const string& filePath, bool pinAlso)
  */
 string IPFS::addFile(const string& content, bool pinFile) const {
     if (content.empty()) throw exception("Can not add empty content to IPFS");
-    if (content.length() > 2097152) throw exception("Content too large.  Raw mode has a 2MB limit");
+    if (content.length() > 2096896) throw exception("Content too large.  Raw mode has a 2MB limit");
 
-    //upload as multipart form data(chunker set above the content limit so it is always a single raw block)
-    string url = _nodePrefix + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2097152&pin=" +
+    //upload as multipart form data(chunker set to the maximum ipfs allows so the content is
+    //always a single raw block, which keeps cid == sha256(content))
+    string url = _nodePrefix + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2096896&pin=" +
                  (pinFile ? "true" : "false");
     string response;
     try {

@@ -4,6 +4,9 @@
 #include "PlotManager.h"
 #include "RPC/Server.h"
 #include "RPCLoader.h"
+#include "tabs/BalancesTab.h"
+#include "tabs/CreateAssetTab.h"
+#include "tabs/SendAssetTab.h"
 #include "tabs/SyncTab.h"
 #include <QApplication>
 #include <QDebug>
@@ -152,6 +155,9 @@ void updateLoadingProgress(QTimer *timer, QWidget &splash) {
             tabWidget = new QTabWidget();
             SyncTab *syncTab = new SyncTab();
             tabWidget->addTab(syncTab, "Sync Status");
+            tabWidget->addTab(new BalancesTab(), "Balances");
+            tabWidget->addTab(new SendAssetTab(), "Send Asset");
+            tabWidget->addTab(new CreateAssetTab(), "Create Asset");
             tabWidget->resize(800, 600);
             tabWidget->show();
         }
