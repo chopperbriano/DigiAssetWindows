@@ -14,11 +14,11 @@ uses it). Local IPFS node runs on this Mac.
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | Create assets via CLI + GUI | ❌ not started |
-| 2 | Send assets via CLI + GUI | ❌ not started (does NOT already exist — see findings) |
-| 3 | Balance incl. assets via CLI + GUI | ❌ not started (partially exists — see findings) |
-| 4 | Finish test suite (all code tested) | ❌ not started (see TODO_TESTS.md for carry-over bugs) |
-| 5 | Documentation: web docs + readme (all OS, remove "without wallet" note) | ❌ not started |
+| 1 | Create assets via CLI + GUI | ✅ code complete (issueasset RPC + CreateAssetTab) — NOT live tested |
+| 2 | Send assets via CLI + GUI | ✅ code complete (sendasset RPC + SendAssetTab) — NOT live tested |
+| 3 | Balance incl. assets via CLI + GUI | ✅ code complete (getwalletbalances RPC + BalancesTab) — NOT live tested |
+| 4 | Finish test suite (all code tested) | 🔶 in progress — new code unit tested; gap tests remain (see below) |
+| 5 | Documentation: web docs + readme (all OS, wallet note) | 🔶 in progress — web docs done, readme remains |
 
 ---
 
@@ -91,7 +91,41 @@ uses it). Local IPFS node runs on this Mac.
 ### Session 1 — 2026-07-13
 - Explored codebase, created `last_tasks` branch, wrote this file, created task list
   (harness tasks #1–6 mirror the table above).
-- (update as work proceeds)
+
+### Session 2 — 2026-07-14
+**Read `fable_cheat_sheet/` (repo root) — written by another agent, very useful map.
+Note its corrections: TODO_TESTS.md bugs 5-8 were ALREADY fixed; PermanentStoragePoolTest.cpp
+already exists; testFiles DB is downloaded from IPFS at test time.**
+
+Implemented tasks 1-3 (RPC + CLI + GUI) end to end:
+- `src/DigiByteTransaction`: implemented `addDigiByteOutput`/`addDigiAssetOutput` stubs +
+  new `addInput`/`setIssuance`/`encodeAssetOpReturn` (DigiAsset v3 issuance opcode 0x01/0x05
+  + transfer opcode 0x15 encoding; one instruction per input-chunk/output pair so hybrid
+  assets stay legal; requires explicit change outputs — throws on unbalanced).
+  Rules encoding NOT implemented (issueasset rejects "rules"; encode throws if rules set).
+- `src/DigiAsset`: new-asset constructor, `getIssuanceFlags()`, `calculateAssetId` now public.
+- `src/IPFS`: `addFile()` (raw-leaves CIDv1 sha256 upload → cid == sha256(content), verified
+  against live kubo 0.40.1), `cidToSha256()` (reverse of sha256ToCID).
+- `src/CurlHandler`: `postFile()` multipart upload.
+- `src/AssetWallet.{h,cpp}` (new): getWalletUTXOs (wallet listunspent + DB asset data),
+  selectAssetInputs, parseAssetAmount, satsToDecimal, fundSignSend (createrawtransaction
+  array-form outputs to preserve order → lock asset+unconfirmed UTXOs → fundrawtransaction
+  with changePosition pinned to end → signrawtransactionwithwallet (fallback
+  signrawtransaction) → sendrawtransaction).
+- RPC methods: `sendasset`, `issueasset`, `getwalletbalances` (+ .html docs + index links).
+  CLI gets these for free (generic passthrough).
+- Qt GUI: `BalancesTab`, `SendAssetTab`, `CreateAssetTab` in qt/tabs/, wired into main.cpp
+  + qt/CMakeLists.txt. Made qt build work with Qt5 OR Qt6 (this Mac has Qt6; fixed QtCharts
+  namespace + hardcoded Linux jsoncpp path). **Qt app builds on macOS now.**
+- Tests: `tests/DigiByteTransactionBuilderTest.cpp` (11 tests, incl. encode→decode round
+  trips through the real decoder) + param-validation tests for the 3 new methods and
+  getrandom (closing that gap) in tests/RPC_Methods/.
+- web/index.html: added missing getrandom link, reworded stale wallet-support note.
+- Env fixes: build/ cmake cache had stale OpenSSL 3.6.1 paths (upgraded to 3.6.2) — pass
+  `-DOPENSSL_ROOT_DIR=/usr/local/opt/openssl@3` etc on reconfigure. IPFS repo on
+  /Volumes/external/.ipfs was wiped — re-initialized (fresh peer id) and daemon started.
+- Started `DigiAssetTransaction.existingAssetTransactions` in background (downloads test DB
+  from IPFS, replays 198K txs) to produce rpcTest.db for the RPC/PSP tests.
 
 ---
 
@@ -99,7 +133,23 @@ uses it). Local IPFS node runs on this Mac.
 
 | Item | Tested? |
 |------|---------|
-| Everything so far | nothing new yet |
+| encodeAssetOpReturn (transfer + issuance) | ✅ unit tested incl. round trip through real decoder |
+| parseAssetAmount / satsToDecimal / cidToSha256 | ✅ unit tested |
+| IPFS addFile cid==sha256 behavior | ✅ verified against live kubo (curl); addFile() itself compiled only |
+| sendasset/issueasset/getwalletbalances param validation | ✅ tests written; need rpcTest.db to run |
+| fundSignSend (fund/sign/send pipeline, UTXO locking) | ❌ NOT tested — needs synced wallet with funds |
+| sendasset/issueasset happy path end-to-end | ❌ NOT tested — needs synced wallet with funds + assets |
+| getwalletbalances against real wallet | ❌ NOT tested — needs synced wallet |
+| Qt tabs | 🔶 compile tested on macOS/Qt6 only — no visual/functional test |
+| fundrawtransaction changePosition assumption | ❌ verify on live wallet (assumed bitcoin-style options object) |
+
+**When DigiByte 8.22.2 is synced + wallet funded, live test plan:**
+1. `digiasset_core-cli getwalletbalances` (DGB only at first)
+2. `digiasset_core-cli issueasset '{"name":"Test","amount":10}'` → check txid/assetId/cid,
+   wait confirm, `getwalletbalances` shows it
+3. `digiasset_core-cli sendasset <own address> <assetIndex> 3` → confirm; check change
+4. Same flows in Qt GUI tabs
+5. Verify issued asset decodes correctly: `getassetdata`, digiassetX explorer comparison
 
 ---
 

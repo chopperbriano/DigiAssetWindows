@@ -1,39 +1,50 @@
-## Table of Contents
-1. [Install Ubuntu](#install-ubuntu)
-2. [Increase Swap Size](#increase-swap-size)
-3. [Install DigiByte](#install-digibyte)
-4. [Install Dependencies](#install-dependencies)
-5. [Install VCPKG](#install-vcpkg)
-6. [Install Standard C++ Dependencies](#install-standard-c-dependencies)
-7. [Update CMAKE](#update-cmake)
-8. [Install IPFS](#install-ipfs)
-9. [Set IPFS to Run on Boot](#set-ipfs-to-run-on-boot)
-10. [Build DigiAsset Core](#build-digiasset-core)
-11. [Configure DigiAsset Core](#configure-digiasset-core)
-12. [Set DigiAsset Core to Run at Boot](#set-digiasset-core-to-run-at-boot)
-13. [Upgrading DigiAsset Core](#upgrading-digiasset-core)
-14. [Documentation](#Documentation)
-15. [Other Notes](#other-notes)
-16. [Special Thanks](#special-thanks)
+# DigiAsset Core
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+DigiAsset Core is a DigiAsset processing node for the DigiByte blockchain.  It decodes and
+tracks all DigiAsset transactions, serves asset data over JSON-RPC, and (when connected to a
+wallet enabled DigiByte Core) can create, send and track DigiAssets.
 
-## Install Ubuntu
+Building this project produces up to 4 binaries (all placed in `bin/`):
 
-Ideally this should work on all OS. So far it has only been tested on:
+| Binary | What it is |
+|---|---|
+| `digiasset_core` | The main daemon.  Syncs against DigiByte Core and serves the JSON-RPC api (default port 14024) |
+| `digiasset_core-cli` | Command line interface to the daemon.  Any RPC method (including all DigiByte wallet methods) can be called: `./digiasset_core-cli getwalletbalances` |
+| `digiasset_core-web` | Documentation web server (default port 8090) |
+| `digiasset_core-qt` | Graphical interface (sync status, balances, sending assets, creating assets) |
 
-- Ubuntu 20.04LTS - app works but google tests don't compile
-- Ubuntu 22.04LTS - all functions
+## Table of Contents
+1. [Requirements](#requirements)
+2. [Install on Ubuntu](#install-on-ubuntu)
+3. [Install on macOS](#install-on-macos)
+4. [Install on Windows](#install-on-windows)
+5. [Configure DigiAsset Core](#configure-digiasset-core)
+6. [Set DigiAsset Core to Run at Boot](#set-digiasset-core-to-run-at-boot)
+7. [Upgrading DigiAsset Core](#upgrading-digiasset-core)
+8. [Documentation](#documentation)
+9. [Other Notes](#other-notes)
+10. [Special Thanks](#special-thanks)
 
-The instructions below are specifically writen for Ubuntu 22.04 LTS any other OS may have slightly different
-instructions needed.
+## Requirements
 
-Install ubuntu server using default settings.
+- **DigiByte Core v8.22.2** with `txindex=1`.  Wallet support must be enabled (it is in the
+  official release binaries) if you want to create or send assets — the
+  `issueasset`/`sendasset`/`getwalletbalances` methods and the wallet RPC passthrough need it.
+- **IPFS (kubo)** running on the same machine (asset metadata storage).
+- **cmake 3.24+** and a C++14 capable compiler.
+- Roughly 100GB of disk space for the DigiByte chain plus the DigiAsset database.
 
-## Increase swap size
+## Install on Ubuntu
 
-Default install had a 4GB swap file but DigiByte core kept crashing during sync so I increased it to 8GB
+Tested on Ubuntu 22.04 LTS.  Ubuntu 20.04 works for the main app but the google tests don't
+compile there.
+
+### Increase swap size (low RAM machines only)
+
+DigiByte Core can crash during sync on machines with little RAM.  If your machine has less
+than 8GB, increase swap to 8GB:
 
 ```bash
 sudo swapoff /swap.img
@@ -44,18 +55,18 @@ sudo swapon --show
 sudo nano /etc/fstab
 ```
 
-place the following at the end(if swap.img is already there replace it)
+place the following at the end (if swap.img is already there replace it)
 
 ```
 /swapfile       none    swap    sw      0       0
 ```
 
-## Install DigiByte
+### Install DigiByte
 
 ```bash
-wget wget https://github.com/DigiByte-Core/digibyte/releases/download/v7.17.3/digibyte-7.17.3-x86_64-linux-gnu.tar.gz
-tar -xf digibyte-7.17.3-x86_64-linux-gnu.tar.gz
-rm digibyte-7.17.3-x86_64-linux-gnu.tar.gz
+wget https://github.com/DigiByte-Core/digibyte/releases/download/v8.22.2/digibyte-8.22.2-x86_64-linux-gnu.tar.gz
+tar -xf digibyte-8.22.2-x86_64-linux-gnu.tar.gz
+rm digibyte-8.22.2-x86_64-linux-gnu.tar.gz
 mkdir .digibyte
 nano .digibyte/digibyte.conf
 ```
@@ -96,7 +107,7 @@ Group=<your-username>
 
 Type=forking
 PIDFile=/home/<your-username>/.digibyte/digibyted.pid
-ExecStart=/home/<your-username>/digibyte-7.17.2/bin/digibyted -daemon -pid=/home/<your-username>/.digibyte/digibyted.pid \
+ExecStart=/home/<your-username>/digibyte-8.22.2/bin/digibyted -daemon -pid=/home/<your-username>/.digibyte/digibyted.pid \
 -conf=/home/<your-username>/.digibyte/digibyte.conf -datadir=/home/<your-username>/.digibyte
 
 Restart=always
@@ -112,19 +123,14 @@ WantedBy=multi-user.target
 
 replace <your-username>
 
-Enable the service on boot
+Enable and start the service
 
 ```bash
 sudo systemctl enable digibyted.service
-```
-
-Start the service
-
-```bash
 sudo systemctl start digibyted.service
 ```
 
-## Install Dependencies
+### Install dependencies
 
 ```bash
 sudo apt update
@@ -133,26 +139,16 @@ sudo apt-get install cmake libcurl4-openssl-dev libjsoncpp-dev golang-go libjson
 sudo apt install libboost-all-dev
 ```
 
-## Install VCPKG
+If you want to build the GUI also install Qt:
 
 ```bash
-wget -qO vcpkg.tar.gz https://github.com/microsoft/vcpkg/archive/master.tar.gz
-sudo mkdir /opt/vcpkg
-sudo tar xf vcpkg.tar.gz --strip-components=1 -C /opt/vcpkg
-rm vcpkg.tar.gz
-sudo /opt/vcpkg/bootstrap-vcpkg.sh
-sudo ln -s /opt/vcpkg/vcpkg /usr/local/bin/vcpkg
+sudo apt-get install qtbase5-dev libqt5charts5-dev
 ```
 
-## Install Standard C++ Dependencies
+### Update cmake
 
-Warning: The following steps build a lot of code and can take a long time to complete
-
-```bash
-sudo vcpkg install sqlite3
-```
-
-## Update CMAKE
+DigiAsset Core needs cmake 3.24 or newer.  Ubuntu 22.04 ships 3.22 so a manual install is
+needed:
 
 ```bash
 wget https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh
@@ -168,7 +164,7 @@ at the end of the file add
 export PATH=/usr/local/cmake-3.27.7-linux-x86_64/bin:$PATH
 ```
 
-## Install IPFS
+### Install IPFS
 
 ```bash
 wget https://dist.ipfs.tech/kubo/v0.22.0/kubo_v0.22.0_linux-amd64.tar.gz
@@ -177,7 +173,6 @@ cd kubo
 sudo bash install.sh
 ipfs init
 ipfs daemon
-
 ```
 
 this step will list out a lot of data of importance is the line that says "RPC API server listening on" it is usually
@@ -185,7 +180,7 @@ port 5001 note it down if it is not. You can now see IPFS usage at localhost:500
 headless).
 Press Ctrl+C to stop the daemon
 
-## Set IPFS to run on boot
+To set IPFS to run on boot:
 
 ```bash
 cd ~
@@ -216,7 +211,7 @@ sudo systemctl enable ipfs.service
 sudo systemctl start ipfs.service
 ```
 
-## Build DigiAsset Core
+### Build DigiAsset Core
 
 ```bash
 git clone -b master --recursive https://github.com/DigiAsset-Core/DigiAsset_Core.git
@@ -224,15 +219,67 @@ cd DigiAsset_Core
 git submodule update --init --recursive
 mkdir build
 cd build
-cmake -B . -S .. -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build .
-mv src/digiasset_core ../bin
-mv cli/digiasset_core-cli ../bin
-mv web/digiasset_core-web ../bin
+cmake ..
+cmake --build . -j$(nproc)
 cd ../bin
 ```
 
-* if you wish to build the test scripts add to first cmake -DBUILD_TEST=ON
+Notes:
+* Binaries are placed in `DigiAsset_Core/bin/` automatically.
+* If you don't want the GUI (or don't have Qt installed) add `-DBUILD_QT=OFF` to the first cmake command.
+* To also build the test suite add `-DBUILD_TEST=ON`.
+* Other options: `-DBUILD_CLI=OFF`, `-DBUILD_WEB=OFF`.
+
+## Install on macOS
+
+Tested on macOS (Intel and Apple Silicon) with [Homebrew](https://brew.sh).
+
+### Install DigiByte
+
+Download and install [digibyte-8.22.2-osx.dmg](https://github.com/DigiByte-Core/digibyte/releases/download/v8.22.2/digibyte-8.22.2-osx.dmg),
+then create `~/Library/Application Support/DigiByte/digibyte.conf` with the same settings as
+the Ubuntu section above (rpcuser, rpcpassword, rpcport=14022, txindex=1, server=1).
+
+### Install dependencies
+
+```bash
+brew install cmake jsoncpp libjson-rpc-cpp openssl@3 curl sqlite boost
+```
+
+If you want to build the GUI also install Qt (Qt5 and Qt6 both work):
+
+```bash
+brew install qt
+```
+
+### Install IPFS
+
+```bash
+brew install ipfs
+ipfs init
+brew services start ipfs
+```
+
+### Build DigiAsset Core
+
+```bash
+git clone -b master --recursive https://github.com/DigiAsset-Core/DigiAsset_Core.git
+cd DigiAsset_Core
+git submodule update --init --recursive
+mkdir build
+cd build
+cmake .. -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+cmake --build . -j$(sysctl -n hw.ncpu)
+cd ../bin
+```
+
+The same `-DBUILD_QT=OFF`/`-DBUILD_TEST=ON` options as the Ubuntu section apply.
+
+## Install on Windows
+
+Native Windows build support (vcpkg + MSVC) is in development and not yet merged.  Until
+then, use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with Ubuntu 22.04
+and follow the [Ubuntu instructions](#install-on-ubuntu) inside WSL.
 
 ## Configure DigiAsset Core
 
@@ -249,6 +296,8 @@ Make sure DigiAsset Core is running correctly and then press ctrl+c to stop it a
 ---
 
 ## Set DigiAsset Core to run at boot
+
+(Linux only)
 
 ```bash
 sudo nano /etc/systemd/system/digiasset_core.service
@@ -280,21 +329,17 @@ WantedBy=multi-user.target
 
 replace <your-username>
 
-Enable the service on boot
+Enable and start the service
 
 ```bash
 sudo systemctl enable digiasset_core.service
-```
-
-Start the service
-
-```bash
 sudo systemctl start digiasset_core.service
 ```
 
 ## Upgrading DigiAsset Core
 
 When a new version is available you can upgrade by running the following commands
+
 ```bash
 cd DigiAsset_Core/bin
 ./digiasset_core-cli shutdown
@@ -303,11 +348,8 @@ cd ..
 git pull
 git submodule update --init --recursive
 cd build
-cmake -B . -S .. -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build .
-mv src/digiasset_core ../bin
-mv cli/digiasset_core-cli ../bin
-mv web/digiasset_core-web ../bin
+cmake ..
+cmake --build . -j$(nproc)
 cd ../bin
 sudo systemctl start digiasset_core.service
 ```
@@ -318,10 +360,18 @@ sudo systemctl start digiasset_core.service
 
 To access documentation run the digiasset_core-web application then go to http://127.0.0.1:8090/
 
+Highlights:
+- Every RPC method has its own documentation page, including the DigiAsset specific
+  methods (`issueasset`, `sendasset`, `getwalletbalances`, `getassetdata`, `listassets`, ...).
+- Any method the daemon doesn't recognize is transparently forwarded to the DigiByte Core
+  wallet, so the standard DigiByte/Bitcoin RPC api is available through the same port too.
+
 ## Other Notes
 
 - If submitting pull requests please utilize the .clang-format file to keep things standardized.
-
+- Run the test suite with `cmake .. -DBUILD_TEST=ON`, build target `Google_Tests_run`, then
+  run `./Google_Tests_run` from the `bin/` folder.  See `tests/` for details — some tests
+  need a running IPFS node and a reachable DigiByte Core.
 
 ---
 
