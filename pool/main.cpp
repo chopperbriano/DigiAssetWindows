@@ -337,6 +337,29 @@ int main(int /*argc*/, char** /*argv*/) {
                                         ? cfg["pooladdrapiprefix"]
                                         : "https://digiexplorer.info/api/address/";
         server->setWalletInfo(donationAddr, rpcUser, rpcPass, rpcPort, explorerPrefix, addrApiPrefix);
+
+        // Peer pools: independent pools that are AWARE of each other. `poolpeers`
+        // is a comma-separated list of peer base URLs; `poolpeertoken` is a shared
+        // secret both sides present on /peer/* calls. Unset poolpeers = feature off.
+        std::vector<std::string> peers;
+        if (cfg.count("poolpeers")) {
+            const std::string& raw = cfg["poolpeers"];
+            size_t start = 0;
+            while (start <= raw.size()) {
+                size_t comma = raw.find(',', start);
+                std::string one = raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                // trim spaces
+                while (!one.empty() && (one.front() == ' ' || one.front() == '\t')) one.erase(one.begin());
+                while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
+                if (!one.empty()) peers.push_back(one);
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        }
+        std::string peerToken = cfg.count("poolpeertoken") ? cfg["poolpeertoken"] : "";
+        server->setPeers(peers, peerToken);
+        std::cout << "  peer pools: " << (peers.empty() ? "none" : std::to_string(peers.size()) + " configured")
+                  << (peerToken.empty() ? "" : " (token set)") << "\n";
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;

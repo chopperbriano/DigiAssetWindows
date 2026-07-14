@@ -84,6 +84,36 @@ public:
                        const std::string& explorerTxPrefix,
                        const std::string& addrApiPrefix);
 
+    // Peer pools (independent pools that are AWARE of each other). `peers` is a
+    // list of peer base URLs (e.g. https://pool-b.digistamp.co); `token` is a
+    // shared secret both sides present on /peer/* calls. Set once before start().
+    // When non-empty, start() launches a background sync that polls each peer's
+    // /peer/status (liveness + stats), mirrors its permanent list, and caches its
+    // nodes for the merged world map. Empty peers = feature off.
+    void setPeers(const std::vector<std::string>& peers, const std::string& token);
+
+    // Snapshot of what we last learned from each peer (thread-safe copy). The
+    // dashboard + payout dedup read this.
+    struct PeerState {
+        std::string url;
+        bool up = false;
+        int64_t lastSeen = 0;
+        std::string version;
+        unsigned int nodesActive = 0;
+        double treasuryBalance = 0.0;
+        double paidTotal = 0.0;
+    };
+    std::vector<PeerState> getPeerStates();
+
+    // Recent payouts a peer reports (address -> most-recent paidAt within the
+    // window), for cross-pool payout dedup. Queries the peer live; returns false
+    // if the peer is unreachable (caller then pays without dedup - availability
+    // over strict coordination). windowSeconds bounds "recent".
+    bool fetchPeerPaidAddresses(const std::string& peerUrl, int64_t windowSeconds,
+                                std::map<std::string, int64_t>& outAddrToPaidAt);
+    std::vector<std::string> getPeerUrls() const { return _peers; }
+    std::string getPeerToken() const { return _peerToken; }
+
 private:
     PoolDatabase& _db;
     unsigned int _port;
@@ -128,6 +158,25 @@ private:
     // the assembled [{...}] array rebuilt on the stats refresh cycle.
     std::map<std::string, std::string> _geoCache;
     std::string _cachedNodesJson = "[]";
+
+    // ---- Peer pools (awareness) ----
+    std::vector<std::string> _peers;   // peer base URLs (set before start())
+    std::string _peerToken;            // shared secret for /peer/* calls
+    std::thread _peerThread;
+    std::atomic<bool> _peerRunning{false};
+    std::mutex _peerMutex;             // guards _peerStates + _peerNodesJson
+    std::map<std::string, PeerState> _peerStates;   // url -> last known state
+    std::map<std::string, std::string> _peerNodesJson; // url -> that peer's nodes[] (tagged), for the merged map
+    // Background loop: poll each peer's /peer/status, mirror its permanent list,
+    // and cache its node geo. Runs only when _peers is non-empty.
+    void peerSyncLoop();
+    // GET /peer/status | /peer/ledger | /peer/assets — token-gated peer API.
+    void handlePeerStatus(const std::string& query, int& outStatus, std::string& outBody);
+    void handlePeerLedger(const std::string& query, int& outStatus, std::string& outBody);
+    void handlePeerAssets(const std::string& query, int& outStatus, std::string& outBody);
+    // True if the token in the request query/header matches _peerToken (or the
+    // token is unset, meaning peer API is open). Used to gate /peer/*.
+    bool peerAuthOk(const std::string& query) const;
 
     // Blocking accept loop (runs on _acceptThread): accepts sockets and
     // posts each to the io_context thread pool for handling.

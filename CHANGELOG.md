@@ -20,7 +20,18 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.90 through win.93 (current)
+## 0.3.0-win.90 through win.94 (current)
+
+### win.94 — peer-aware independent pools
+- Two (or more) independent pools (each own wallet + payouts) can now be **aware
+  of each other**. New token-gated pool API — `GET /peer/status`, `/peer/ledger`,
+  `/peer/assets` — and a background sync that: shows the **combined network** on
+  the site/stats, **mirrors the permanent list** so both fleets pin the same
+  content, **merges nodes onto one map** tagged by pool, and **coordinates
+  payouts** so an operator served by both pools isn't paid twice in a period.
+  Config: `poolpeers`, `poolpeertoken`, `poolpeerpayoutdedupe`. See POOL-SETUP.md.
+
+
 
 Recent releases. Binaries are published on the
 [Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page;

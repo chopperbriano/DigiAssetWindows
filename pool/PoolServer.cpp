@@ -19,6 +19,7 @@
 #include "PoolServer.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
+#include "Version.h"
 #include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
@@ -411,6 +412,12 @@ void PoolServer::start() {
 
     // Dedicated accept thread. Same pattern as RPC::Server.
     _acceptThread = std::thread([this]() { this->acceptLoop(); });
+
+    // Peer-sync thread (only if peers are configured).
+    if (!_peers.empty()) {
+        _peerRunning.store(true);
+        _peerThread = std::thread([this]() { this->peerSyncLoop(); });
+    }
 }
 
 // Stop accepting, release the work guard, stop the io_context, and join the
@@ -425,6 +432,9 @@ void PoolServer::stop() {
 
     _workGuard.reset();
     _io.stop();
+
+    _peerRunning.store(false);
+    if (_peerThread.joinable()) _peerThread.join();
 
     if (_acceptThread.joinable()) _acceptThread.join();
     for (auto& t: _threadPool) {
@@ -635,6 +645,21 @@ void PoolServer::handleRequest(const std::string& method,
         return;
     }
 
+    // Peer-pool API (independent pools that are aware of each other). Routed by
+    // prefix because the token rides in the ?token= query. Token-gated.
+    if (method == "GET" && path.rfind("/peer/status", 0) == 0) {
+        handlePeerStatus(path, outStatus, outBody);
+        return;
+    }
+    if (method == "GET" && path.rfind("/peer/ledger", 0) == 0) {
+        handlePeerLedger(path, outStatus, outBody);
+        return;
+    }
+    if (method == "GET" && path.rfind("/peer/assets", 0) == 0) {
+        handlePeerAssets(path, outStatus, outBody);
+        return;
+    }
+
     // --- Fallback ----------------------------------------------------------
     outStatus = 404;
     outBody = "{\"error\":\"not found\"}";
@@ -776,6 +801,43 @@ void PoolServer::handleStats(std::string& outBody) {
     unsigned int totalNodes = _db.countTotalNodes();
     auto recent = _db.getRecentPayouts(15);
 
+    // Peer pools: merge their cached nodes into the map array and build a
+    // "network" summary (this pool + every peer). Peer data is best-effort - a
+    // down peer just contributes up:false and its last-known numbers.
+    std::string peersJson = "[";
+    std::string networkNodes = nodesJson;   // start with our own nodes[]
+    unsigned int netActive = activeNodes;
+    double netTreasury = treasuryBalance, netPaid = paidToHosts;
+    size_t netPools = 1;
+    {
+        std::lock_guard<std::mutex> lk(_peerMutex);
+        netPools = 1 + _peerStates.size();
+        bool firstPeer = true;
+        for (const auto& kv : _peerStates) {
+            const PeerState& p = kv.second;
+            if (!firstPeer) peersJson += ",";
+            firstPeer = false;
+            peersJson += "{\"url\":\"" + jsonEscape(p.url) + "\",\"up\":" + (p.up ? "true" : "false") +
+                         ",\"nodesActive\":" + std::to_string(p.nodesActive) +
+                         ",\"treasuryBalance\":" + std::to_string(p.treasuryBalance) +
+                         ",\"paidTotal\":" + std::to_string(p.paidTotal) +
+                         ",\"version\":\"" + jsonEscape(p.version) + "\"}";
+            netActive += p.nodesActive;
+            netTreasury += p.treasuryBalance;
+            netPaid += p.paidTotal;
+            // Merge this peer's node array (tagged) into the map.
+            auto nj = _peerNodesJson.find(kv.first);
+            if (nj != _peerNodesJson.end() && nj->second.size() > 2) {
+                std::string inner = nj->second.substr(1, nj->second.size() - 2); // strip [ ]
+                if (!inner.empty()) {
+                    if (networkNodes.size() > 2) networkNodes.insert(networkNodes.size() - 1, "," + inner);
+                    else networkNodes = "[" + inner + "]";
+                }
+            }
+        }
+    }
+    peersJson += "]";
+
     std::ostringstream js;
     js.setf(std::ios::fixed);
     js.precision(8);
@@ -790,7 +852,12 @@ void PoolServer::handleStats(std::string& outBody) {
        << "\"verifiedNodes\":" << verifiedNodes << ","
        << "\"activeNodes\":" << activeNodes << ","
        << "\"totalNodes\":" << totalNodes << ","
-       << "\"nodes\":" << nodesJson << ","
+       << "\"nodes\":" << networkNodes << ","
+       << "\"network\":{\"pools\":" << netPools
+       << ",\"nodesActive\":" << netActive
+       << ",\"treasuryBalance\":" << netTreasury
+       << ",\"paidTotal\":" << netPaid
+       << ",\"peers\":" << peersJson << "},"
        << "\"explorerTxPrefix\":\"" << jsonEscape(explorerPrefix) << "\","
        << "\"recentPayouts\":[";
     for (size_t i = 0; i < recent.size(); i++) {
@@ -803,6 +870,242 @@ void PoolServer::handleStats(std::string& outBody) {
     }
     js << "]}";
     outBody = js.str();
+}
+
+// ===========================================================================
+//  Peer pools - independent pools that are AWARE of each other. Each pool stays
+//  self-contained (own wallet, own payouts) but exposes a token-gated /peer/*
+//  API and runs a background sync that learns its peers' liveness + stats,
+//  mirrors their permanent list, and caches their nodes for a merged world map.
+// ===========================================================================
+namespace {
+    // Read a query-string param ("...?token=abc&x=1" -> "abc").
+    std::string queryParam(const std::string& pathWithQuery, const std::string& key) {
+        size_t q = pathWithQuery.find('?');
+        if (q == std::string::npos) return "";
+        std::string qs = pathWithQuery.substr(q + 1);
+        std::string needle = key + "=";
+        size_t p = 0;
+        while (p <= qs.size()) {
+            size_t amp = qs.find('&', p);
+            std::string pair = (amp == std::string::npos) ? qs.substr(p) : qs.substr(p, amp - p);
+            if (pair.rfind(needle, 0) == 0) return pair.substr(needle.size());
+            if (amp == std::string::npos) break;
+            p = amp + 1;
+        }
+        return "";
+    }
+    // Minimal scalar/array extractors for OUR OWN peer wire format (small, trusted).
+    double peerJsonNum(const std::string& s, const std::string& key, double fallback = 0.0) {
+        size_t p = s.find("\"" + key + "\"");
+        if (p == std::string::npos) return fallback;
+        p = s.find(':', p);
+        if (p == std::string::npos) return fallback;
+        try { return std::stod(s.substr(p + 1)); } catch (...) { return fallback; }
+    }
+    std::string peerJsonStr(const std::string& s, const std::string& key) {
+        size_t p = s.find("\"" + key + "\"");
+        if (p == std::string::npos) return "";
+        p = s.find(':', p);
+        if (p == std::string::npos) return "";
+        p = s.find('"', p);
+        if (p == std::string::npos) return "";
+        size_t e = s.find('"', p + 1);
+        if (e == std::string::npos) return "";
+        return s.substr(p + 1, e - p - 1);
+    }
+    std::string peerJsonArray(const std::string& s, const std::string& key) {
+        size_t p = s.find("\"" + key + "\"");
+        if (p == std::string::npos) return "[]";
+        p = s.find('[', p);
+        if (p == std::string::npos) return "[]";
+        int depth = 0;
+        for (size_t i = p; i < s.size(); i++) {
+            if (s[i] == '[') depth++;
+            else if (s[i] == ']') { depth--; if (depth == 0) return s.substr(p, i - p + 1); }
+        }
+        return "[]";
+    }
+    std::string urlHost(const std::string& url) {
+        std::string u = url;
+        size_t s = u.find("://");
+        if (s != std::string::npos) u = u.substr(s + 3);
+        size_t slash = u.find('/');
+        if (slash != std::string::npos) u = u.substr(0, slash);
+        return u;
+    }
+}
+
+void PoolServer::setPeers(const std::vector<std::string>& peers, const std::string& token) {
+    _peers.clear();
+    for (std::string u: peers) {
+        while (!u.empty() && (u.back() == '/' || u.back() == ' ')) u.pop_back();
+        if (!u.empty()) _peers.push_back(u);
+    }
+    _peerToken = token;
+}
+
+bool PoolServer::peerAuthOk(const std::string& query) const {
+    if (_peerToken.empty()) return true;   // no token configured = open peer API
+    return queryParam(query, "token") == _peerToken;
+}
+
+std::vector<PoolServer::PeerState> PoolServer::getPeerStates() {
+    std::vector<PeerState> out;
+    std::lock_guard<std::mutex> lk(_peerMutex);
+    for (const auto& kv: _peerStates) out.push_back(kv.second);
+    return out;
+}
+
+void PoolServer::handlePeerStatus(const std::string& query, int& outStatus, std::string& outBody) {
+    if (!peerAuthOk(query)) { outStatus = 403; outBody = "{\"error\":\"bad peer token\"}"; return; }
+    std::string nodesJson;
+    double treasury, available;
+    {
+        std::lock_guard<std::mutex> lk(_statsMutex);
+        nodesJson = _cachedNodesJson;
+        treasury = _cachedTreasuryBalance;
+        available = _cachedAvailable;
+    }
+    int64_t hourAgo = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count() - 3600;
+    std::ostringstream js;
+    js.setf(std::ios::fixed);
+    js.precision(8);
+    js << "{\"version\":\"" << jsonEscape(VERSION_STRING) << "\","
+       << "\"nodesVerified\":" << _db.countVerifiedSince(hourAgo) << ","
+       << "\"nodesActive\":" << _db.countActiveNodes() << ","
+       << "\"nodesTotal\":" << _db.countTotalNodes() << ","
+       << "\"permanentAssets\":" << _db.countPermanentAssets() << ","
+       << "\"treasuryBalance\":" << treasury << ","
+       << "\"available\":" << available << ","
+       << "\"paidTotal\":" << _db.getPaidTotalDgb() << ","
+       << "\"paidCount\":" << _db.getPaidCount() << ","
+       << "\"lastPayoutAt\":" << _db.getLastPayoutAt() << ","
+       << "\"payoutsEnabled\":" << (_payoutsEnabled.load() ? "true" : "false") << ","
+       << "\"nodes\":" << nodesJson << "}";
+    outBody = js.str();
+}
+
+void PoolServer::handlePeerLedger(const std::string& query, int& outStatus, std::string& outBody) {
+    if (!peerAuthOk(query)) { outStatus = 403; outBody = "{\"error\":\"bad peer token\"}"; return; }
+    auto rows = _db.getRecentPayouts(500);
+    std::ostringstream js;
+    js.setf(std::ios::fixed);
+    js.precision(8);
+    js << "[";
+    for (size_t i = 0; i < rows.size(); i++) {
+        if (i) js << ",";
+        js << "{\"address\":\"" << jsonEscape(rows[i].payoutAddress) << "\","
+           << "\"amount\":" << (rows[i].amountDgbSat / 100000000.0) << ","
+           << "\"paidAt\":" << rows[i].paidAt << "}";
+    }
+    js << "]";
+    outBody = js.str();
+}
+
+void PoolServer::handlePeerAssets(const std::string& query, int& outStatus, std::string& outBody) {
+    if (!peerAuthOk(query)) { outStatus = 403; outBody = "{\"error\":\"bad peer token\"}"; return; }
+    auto assets = _db.getAllPermanentAssets();
+    std::ostringstream js;
+    js << "[";
+    for (size_t i = 0; i < assets.size(); i++) {
+        if (i) js << ",";
+        js << "{\"a\":\"" << jsonEscape(assets[i].assetId) << "\","
+           << "\"t\":\"" << jsonEscape(assets[i].txHash) << "\","
+           << "\"c\":\"" << jsonEscape(assets[i].cid) << "\"}";
+    }
+    js << "]";
+    outBody = js.str();
+}
+
+bool PoolServer::fetchPeerPaidAddresses(const std::string& peerUrl, int64_t windowSeconds,
+                                        std::map<std::string, int64_t>& outAddrToPaidAt) {
+    std::string url = peerUrl + "/peer/ledger";
+    if (!_peerToken.empty()) url += "?token=" + _peerToken;
+    std::string body;
+    try { body = CurlHandler::get(url, 8000); } catch (...) { return false; }
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t cutoff = now - windowSeconds;
+    size_t p = 0;
+    while ((p = body.find('{', p)) != std::string::npos) {
+        size_t end = body.find('}', p);
+        if (end == std::string::npos) break;
+        std::string obj = body.substr(p, end - p + 1);
+        std::string addr = peerJsonStr(obj, "address");
+        int64_t paidAt = (int64_t) peerJsonNum(obj, "paidAt", 0);
+        if (!addr.empty() && paidAt >= cutoff) {
+            auto it = outAddrToPaidAt.find(addr);
+            if (it == outAddrToPaidAt.end() || paidAt > it->second) outAddrToPaidAt[addr] = paidAt;
+        }
+        p = end + 1;
+    }
+    return true;
+}
+
+void PoolServer::peerSyncLoop() {
+    const int cycleSec = 900;   // 15 min between full sync cycles
+    while (_peerRunning.load()) {
+        for (const auto& peer: _peers) {
+            if (!_peerRunning.load()) break;
+            PeerState st;
+            st.url = peer;
+            std::string statusBody;
+            bool ok = false;
+            try {
+                std::string url = peer + "/peer/status";
+                if (!_peerToken.empty()) url += "?token=" + _peerToken;
+                statusBody = CurlHandler::get(url, 8000);
+                ok = statusBody.find("\"nodesActive\"") != std::string::npos;
+            } catch (...) { ok = false; }
+
+            std::string taggedNodes = "[]";
+            if (ok) {
+                st.up = true;
+                st.lastSeen = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::system_clock::now().time_since_epoch()).count();
+                st.version = peerJsonStr(statusBody, "version");
+                st.nodesActive = (unsigned int) peerJsonNum(statusBody, "nodesActive", 0);
+                st.treasuryBalance = peerJsonNum(statusBody, "treasuryBalance", 0);
+                st.paidTotal = peerJsonNum(statusBody, "paidTotal", 0);
+                // Tag this peer's nodes with the peer host for the merged map.
+                std::string nodesArr = peerJsonArray(statusBody, "nodes");
+                std::string tag = "{\"pool\":\"" + jsonEscape(urlHost(peer)) + "\",";
+                std::string tagged;
+                tagged.reserve(nodesArr.size() + 48);
+                for (char ch: nodesArr) { if (ch == '{') tagged += tag; else tagged += ch; }
+                taggedNodes = tagged;
+            }
+            {
+                std::lock_guard<std::mutex> lk(_peerMutex);
+                if (!ok && _peerStates.count(peer)) { st = _peerStates[peer]; st.up = false; }
+                _peerStates[peer] = st;
+                if (ok) _peerNodesJson[peer] = taggedNodes;
+            }
+
+            // Mirror the peer's permanent list (INSERT OR IGNORE - idempotent).
+            if (_peerRunning.load()) {
+                try {
+                    std::string url = peer + "/peer/assets";
+                    if (!_peerToken.empty()) url += "?token=" + _peerToken;
+                    std::string assets = CurlHandler::get(url, 15000);
+                    unsigned int page = _db.getWritablePage();
+                    size_t p = 0;
+                    while ((p = assets.find('{', p)) != std::string::npos) {
+                        size_t end = assets.find('}', p);
+                        if (end == std::string::npos) break;
+                        std::string obj = assets.substr(p, end - p + 1);
+                        std::string c = peerJsonStr(obj, "c");
+                        if (!c.empty()) _db.insertPermanentAsset(peerJsonStr(obj, "a"), peerJsonStr(obj, "t"), c, page);
+                        p = end + 1;
+                    }
+                } catch (...) {}
+            }
+        }
+        for (int i = 0; i < cycleSec && _peerRunning.load(); i++)
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 }
 
 // Parse the page number out of /permanent/<page>.json and serve that page's

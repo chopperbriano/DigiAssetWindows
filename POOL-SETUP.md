@@ -172,6 +172,51 @@ A node is eligible only if it was verified (reachable) in the last 24 h, has
 
 ---
 
+## Running two independent, peer-aware pools
+
+You can run **two (or more) independent pools that are aware of each other**. Each
+pool stays fully self-contained — its **own wallet, own treasury, own payouts** —
+so an operator is paid by their pool for the hosting they provide, whenever that
+pool's treasury has funds. The peer link makes the pools *cooperate* without
+sharing a wallet.
+
+Set these on **each** pool's `pool.cfg` (each pool lists the other):
+
+```ini
+# Comma-separated peer pool base URLs (HTTPS). Unset = peer feature off.
+poolpeers=https://pool-b.digistamp.co
+# Shared secret both pools present on /peer/* calls. Use the SAME value on both.
+poolpeertoken=<a long random shared secret>
+# 1 (default) = don't pay an address a peer already paid this period; 0 = disable.
+poolpeerpayoutdedupe=1
+```
+
+What each pool then does, every ~15 min, over the peers' public HTTPS URLs:
+
+- **Liveness + unified view** — polls each peer's `GET /peer/status`; the landing
+  page / `stats.json` show the **combined** network (`network.pools`, total nodes,
+  treasury, paid) and each peer's up/down.
+- **Shared permanent list** — mirrors each peer's `GET /peer/assets` into its own
+  list (`INSERT OR IGNORE`), so **both fleets pin the identical content** — the
+  real redundancy: if a whole pool goes down, its assets are still pinned by the
+  other pool's nodes.
+- **Nodes on one map** — merges each peer's nodes into the world map, tagged by
+  pool.
+- **Payout coordination** — before `[E]` pays, it checks each peer's
+  `GET /peer/ledger`; an address a peer already paid this period is skipped (so an
+  operator served by both pools isn't double-paid). A peer that's unreachable at
+  payout time is skipped (you still pay) — availability over strict coordination.
+
+The `/peer/*` endpoints are **token-gated** (must match `poolpeertoken`; if unset
+they're open read-only). They ride over the same Caddy HTTPS front end as the rest
+of the API — no extra ports.
+
+**Setup:** stand up pool #2 exactly like pool #1 (its own `pool.cfg` with its own
+`poolport`, wallet RPC, `pooldonationaddress`, `poolpayouts=1`, and its own
+`setup-caddy.ps1 -Domain pool-b.digistamp.co`), then add the `poolpeers` /
+`poolpeertoken` lines above to **both** pools and restart them. Point some nodes'
+`psp1server` at each pool. Fund each pool's own treasury.
+
 ## Router / firewall
 
 Your pool server hosts the same way a node does, plus the website:

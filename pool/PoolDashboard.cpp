@@ -511,21 +511,55 @@ void PoolDashboard::processInput() {
                                 _pendingPayouts[it->second].second += amt;
                             }
                         }
-                        addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
-                        addLog("Budget: " + budgetMode);
-                        char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
-                        addLog("Total " + std::string(totalBuf) + " DGB across " +
-                                std::to_string(targets.size()) + " node(s) -> " +
-                                std::to_string(_pendingPayouts.size()) + " payment(s):");
-                        for (const auto& t: targets) {
-                            double amt = spend * t.weight / totalWeight;
-                            char line[176];
-                            snprintf(line, sizeof(line), "   %s  (cover %.0f%% x uptime %.0f%%)  %.8f DGB",
-                                     t.payoutAddress.c_str(), t.coverage * 100.0, t.reliability * 100.0, amt);
-                            addLog(std::string(line));
+                        // Peer-pool payout coordination: if a peer pool already
+                        // paid an address within this period, skip it here so an
+                        // operator served by both pools isn't paid twice for the
+                        // same period. Opt out with poolpeerpayoutdedupe=0. A peer
+                        // we can't reach is skipped (we still pay) - availability
+                        // over strict coordination.
+                        bool dedup = true;
+                        try { if (cfg.count("poolpeerpayoutdedupe")) dedup = std::stoi(cfg["poolpeerpayoutdedupe"]) != 0; } catch (...) {}
+                        auto peerUrls = _server.getPeerUrls();
+                        if (dedup && !peerUrls.empty()) {
+                            std::map<std::string, int64_t> paidByPeers;
+                            int64_t window = (int64_t) periodHours * 3600;
+                            for (const auto& purl: peerUrls) {
+                                std::map<std::string, int64_t> one;
+                                if (_server.fetchPeerPaidAddresses(purl, window, one)) {
+                                    for (const auto& kv: one) paidByPeers[kv.first] = kv.second;
+                                } else {
+                                    addLog("Peer unreachable (" + purl + ") - paying without its dedup this round.");
+                                }
+                            }
+                            if (!paidByPeers.empty()) {
+                                std::vector<std::pair<std::string, double>> kept;
+                                for (const auto& pp: _pendingPayouts) {
+                                    if (paidByPeers.count(pp.first)) {
+                                        addLog("Skip " + pp.first + " - a peer pool already paid it this period.");
+                                    } else {
+                                        kept.push_back(pp);
+                                    }
+                                }
+                                _pendingPayouts.swap(kept);
+                            }
                         }
-                        addLog("Press Y to confirm, any other key to cancel");
-                        _awaitingPayoutConfirm.store(true);
+
+                        if (_pendingPayouts.empty()) {
+                            addLog("Nothing to pay: every eligible address was already paid by a peer pool this period.");
+                        } else {
+                            addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
+                            addLog("Budget: " + budgetMode);
+                            char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
+                            addLog("Total up to " + std::string(totalBuf) + " DGB -> " +
+                                    std::to_string(_pendingPayouts.size()) + " payment(s):");
+                            for (const auto& pp: _pendingPayouts) {
+                                char line[176];
+                                snprintf(line, sizeof(line), "   %s  %.8f DGB", pp.first.c_str(), pp.second);
+                                addLog(std::string(line));
+                            }
+                            addLog("Press Y to confirm, any other key to cancel");
+                            _awaitingPayoutConfirm.store(true);
+                        }
                     }
                 }
             }

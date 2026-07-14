@@ -493,6 +493,27 @@ void PoolDatabase::insertPermanentAsset(const std::string& assetId,
     sqlite3_finalize(stmt);
 }
 
+std::vector<PoolDatabase::PermanentAssetRow> PoolDatabase::getAllPermanentAssets() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<PermanentAssetRow> out;
+    const char* sql = "SELECT assetId, txHash, cid FROM permanent_assets;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            PermanentAssetRow r;
+            const unsigned char* a = sqlite3_column_text(stmt, 0);
+            if (a) r.assetId = (const char*) a;
+            const unsigned char* t = sqlite3_column_text(stmt, 1);
+            if (t) r.txHash = (const char*) t;
+            const unsigned char* c = sqlite3_column_text(stmt, 2);
+            if (c) r.cid = (const char*) c;
+            out.push_back(r);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
 std::vector<PoolDatabase::PayoutRow> PoolDatabase::getRecentPayouts(unsigned int limit) {
     std::lock_guard<std::mutex> lk(_mutex);
     std::vector<PayoutRow> out;

@@ -84,6 +84,15 @@ public:
     // Has the first-run snapshot already populated the db?
     bool hasPermanentData();
 
+    // Every permanent asset (assetId, txHash, cid). Used to answer a peer pool's
+    // GET /peer/assets so it can mirror our list into its own (INSERT OR IGNORE).
+    struct PermanentAssetRow {
+        std::string assetId;
+        std::string txHash;
+        std::string cid;
+    };
+    std::vector<PermanentAssetRow> getAllPermanentAssets();
+
     // Return up to `limit` random CIDs from the permanent list. Used by the
     // verifier's NAT-tolerant fallback: it runs findprovs on these to see
     // whether a NAT'd node has announced itself as a provider of content it
