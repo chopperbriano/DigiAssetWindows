@@ -91,9 +91,23 @@
   .keypoint { margin-top: 14px; font-size: .88rem; color: #c9d1d9; background: #10261a; border: 1px solid #1f4a30; border-radius: 8px; padding: 12px 14px; }
   .keypoint strong { color: #7ee787; }
 
+  /* ---- animated network map ---- */
+  .mapwrap { position: relative; }
+  svg#netmap { width: 100%; height: auto; display: block; }
+  svg#netmap text { font-family: system-ui, sans-serif; fill: #e6edf3; }
+  svg#netmap .lbl { font-size: 12px; font-weight: 600; }
+  svg#netmap .sub { font-size: 9.5px; fill: #8b949e; font-weight: 400; }
+  svg#netmap .route { fill: none; stroke: #30363d; stroke-width: 1.4; opacity: .55; }
+  svg#netmap .dot { filter: drop-shadow(0 0 3px currentColor); }
+  .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-top: 4px; }
+  .lg { display: flex; gap: 9px; align-items: flex-start; font-size: .85rem; color: #c9d1d9; }
+  .lg .sw { width: 12px; height: 12px; border-radius: 50%; margin-top: 5px; flex: 0 0 12px; box-shadow: 0 0 5px currentColor; }
+  .lg b { color: #e6edf3; }
+  @media (prefers-reduced-motion: reduce) { svg#netmap .dot { display: none; } }
+
   @media (max-width: 560px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
-    .homes, .retrieve { grid-template-columns: 1fr; }
+    .homes, .retrieve, .legend { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -107,6 +121,94 @@
     DigiAssets alive on IPFS, and <strong>pays node operators DigiByte (DGB)</strong> to
     help. Here is how that works &mdash; and where your own asset fits in.
   </p>
+
+  <h2>How your DigiAsset stays alive &mdash; live</h2>
+  <p class="muted" style="margin-top:0">
+    Watch what flows where. Every dot is real activity on the network: your files being
+    stored and pinned, the pool publishing + checking, and DigiByte flowing to the
+    operators who keep it all online.
+  </p>
+  <div class="card mapwrap">
+    <svg id="netmap" viewBox="0 0 760 470" role="img" aria-label="Animated diagram of the DigiStamp network: you, the DigiByte blockchain, IPFS, the pool server, and node operators worldwide.">
+      <!-- static routes -->
+      <path class="route" d="M138,66 Q400,6 622,66"/>
+      <path class="route" d="M138,66 Q225,44 300,60"/>
+      <path class="route" d="M380,86 L380,196"/>
+      <path class="route" d="M672,90 Q720,250 660,392"/>
+      <path class="route" d="M672,90 Q600,250 445,392"/>
+      <path class="route" d="M355,256 Q285,330 210,392"/>
+      <path class="route" d="M405,256 Q490,330 560,392"/>
+      <path class="route" d="M380,256 Q360,330 320,392"/>
+      <path class="route" d="M355,256 Q235,335 110,392"/>
+      <path class="route" d="M210,392 Q95,250 96,90"/>
+      <!-- content (green) -->
+      <circle class="dot" r="4.5" fill="#7ee787" color="#7ee787"><animateMotion dur="4s" repeatCount="indefinite" path="M138,66 Q400,6 622,66"/></circle>
+      <circle class="dot" r="4.5" fill="#7ee787" color="#7ee787"><animateMotion dur="4s" begin="1.6s" repeatCount="indefinite" path="M138,66 Q400,6 622,66"/></circle>
+      <circle class="dot" r="4" fill="#7ee787" color="#7ee787"><animateMotion dur="4.6s" begin="0.7s" repeatCount="indefinite" path="M672,90 Q720,250 660,392"/></circle>
+      <circle class="dot" r="4" fill="#7ee787" color="#7ee787"><animateMotion dur="4.6s" begin="2.3s" repeatCount="indefinite" path="M672,90 Q600,250 445,392"/></circle>
+      <!-- record + CID + list (blue) -->
+      <circle class="dot" r="4" fill="#58a6ff" color="#58a6ff"><animateMotion dur="3.4s" repeatCount="indefinite" path="M138,66 Q225,44 300,60"/></circle>
+      <circle class="dot" r="4" fill="#58a6ff" color="#58a6ff"><animateMotion dur="3s" begin="0.9s" repeatCount="indefinite" path="M380,86 L380,196"/></circle>
+      <circle class="dot" r="4" fill="#58a6ff" color="#58a6ff"><animateMotion dur="4.2s" begin="0.3s" repeatCount="indefinite" path="M355,256 Q285,330 210,392"/></circle>
+      <circle class="dot" r="4" fill="#58a6ff" color="#58a6ff"><animateMotion dur="4.2s" begin="1.9s" repeatCount="indefinite" path="M405,256 Q490,330 560,392"/></circle>
+      <!-- verify (amber): down then back -->
+      <circle class="dot" r="4" fill="#d9a441" color="#d9a441"><animateMotion dur="3.6s" begin="1.1s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1" calcMode="linear" path="M380,256 Q360,330 320,392"/></circle>
+      <!-- pay DGB (gold) -->
+      <circle class="dot" r="5" fill="#e3b341" color="#e3b341"><animateMotion dur="5s" begin="0.5s" repeatCount="indefinite" path="M355,256 Q235,335 110,392"/></circle>
+      <circle class="dot" r="5" fill="#e3b341" color="#e3b341"><animateMotion dur="5s" begin="2.7s" repeatCount="indefinite" path="M405,256 Q490,330 560,392"/></circle>
+      <!-- retrieve (node -> you) -->
+      <circle class="dot" r="4.5" fill="#c9f7d3" color="#7ee787"><animateMotion dur="5.4s" begin="1.4s" repeatCount="indefinite" path="M210,392 Q95,250 96,90"/></circle>
+      <!-- node "pinned" pulses -->
+      <g fill="none" stroke="#7ee787">
+        <circle cx="110" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" repeatCount="indefinite"/></circle>
+        <circle cx="210" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" begin="0.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" begin="0.5s" repeatCount="indefinite"/></circle>
+        <circle cx="320" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" begin="1s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" begin="1s" repeatCount="indefinite"/></circle>
+        <circle cx="445" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" begin="1.5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" begin="1.5s" repeatCount="indefinite"/></circle>
+        <circle cx="560" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" begin="0.8s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="660" cy="392" r="14"><animate attributeName="r" values="14;22" dur="2.4s" begin="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0" dur="2.4s" begin="1.8s" repeatCount="indefinite"/></circle>
+      </g>
+      <!-- actors -->
+      <g>
+        <rect x="30" y="42" width="112" height="48" rx="10" fill="#161b22" stroke="#7ee787"/>
+        <text class="lbl" x="86" y="63" text-anchor="middle">You</text>
+        <text class="sub" x="86" y="78" text-anchor="middle">mint &amp; retrieve</text>
+      </g>
+      <g>
+        <rect x="300" y="34" width="160" height="52" rx="10" fill="#161b22" stroke="#58a6ff"/>
+        <text class="lbl" x="380" y="55" text-anchor="middle">DigiByte blockchain</text>
+        <text class="sub" x="380" y="71" text-anchor="middle">record + CID (permanent)</text>
+      </g>
+      <g>
+        <rect x="618" y="42" width="112" height="48" rx="10" fill="#161b22" stroke="#7ee787"/>
+        <text class="lbl" x="674" y="63" text-anchor="middle">IPFS</text>
+        <text class="sub" x="674" y="78" text-anchor="middle">the files</text>
+      </g>
+      <g>
+        <rect x="288" y="198" width="184" height="60" rx="12" fill="#161b22" stroke="#d9a441" stroke-width="1.6"/>
+        <text class="lbl" x="380" y="222" text-anchor="middle">This pool server</text>
+        <text class="sub" x="380" y="240" text-anchor="middle">publishes &middot; verifies &middot; pays</text>
+      </g>
+      <g>
+        <circle cx="110" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <circle cx="210" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <circle cx="320" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <circle cx="445" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <circle cx="560" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <circle cx="660" cy="392" r="14" fill="#161b22" stroke="#58a6ff" stroke-width="1.6"/>
+        <text class="lbl" x="385" y="440" text-anchor="middle">Node operators worldwide</text>
+        <text class="sub" x="385" y="455" text-anchor="middle">pin your files, prove it, get paid &mdash; the pins on the map below</text>
+      </g>
+    </svg>
+  </div>
+  <div class="card">
+    <div class="legend">
+      <div class="lg"><span class="sw" style="background:#7ee787;color:#7ee787"></span><span><b>Your files</b> &mdash; uploaded to IPFS, then pinned by every node so copies stay online.</span></div>
+      <div class="lg"><span class="sw" style="background:#58a6ff;color:#58a6ff"></span><span><b>Record &amp; list</b> &mdash; the CID goes on-chain; the pool publishes which files to keep alive.</span></div>
+      <div class="lg"><span class="sw" style="background:#d9a441;color:#d9a441"></span><span><b>Verification</b> &mdash; the pool keeps checking each node still holds the content.</span></div>
+      <div class="lg"><span class="sw" style="background:#e3b341;color:#e3b341"></span><span><b>DGB payments</b> &mdash; verified nodes get paid from the treasury, on-chain.</span></div>
+    </div>
+    <div class="keypoint" style="margin-top:14px"><strong>Why it never disappears:</strong> your files live on many paid, checked nodes at once, so even if some go offline there is always another copy to serve them &mdash; and retrieval pulls straight from the network, not through this server.</div>
+  </div>
 
   <h2>How it works &mdash; and where your DigiAsset lives</h2>
   <p class="muted" style="margin-top:0">
@@ -423,6 +525,17 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
     .then(function (r) { return r.json(); })
     .then(function (d) { window._plotNodes(d.nodes); })
     .catch(function () {});
+})();
+</script>
+<!-- Honor reduced-motion for the network map's SMIL animations. -->
+<script>
+(function () {
+  try {
+    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      var m = document.getElementById('netmap');
+      if (m && m.pauseAnimations) m.pauseAnimations();
+    }
+  } catch (e) {}
 })();
 </script>
 </body>
