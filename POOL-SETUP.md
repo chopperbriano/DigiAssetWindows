@@ -274,6 +274,37 @@ Quick manual smoke test from anywhere:
 `curl.exe "https://pool-b.digistamp.co/peer/status?token=<token>"` should return
 JSON; a wrong/missing token returns `403`.
 
+### Automatic discovery (pools finding each other on the network)
+
+You don't have to hand-configure every peer. Pools **auto-discover** each other via
+a seed + gossip, so anyone who downloads and runs a pool on any domain joins the
+network automatically:
+
+```ini
+# THIS pool's own public URL (so it can announce itself). setup-caddy.ps1 writes
+# this for you from -Domain. Without it, this pool still discovers others but
+# isn't listed by them.
+poolpublicurl=https://your-domain.com
+# Bootstrap seed pool (defaults to the flagship). Empty = discovery off.
+poolseed=https://pool.digistamp.co
+```
+
+On startup a pool announces itself to the seed and pulls each known pool's
+`GET /peer/list`, then gossips outward until it has the **whole directory**. The
+combined network shows up in `stats.json` under `network.totalPools` +
+`network.directory`, and every pool's nodes appear on one world map.
+
+**Discovery is DISPLAY-ONLY and deliberately untrusted.** A discovered pool
+appears in the directory/map, but is **never** used to mirror your permanent list
+or to skip your payouts - a malicious pool could otherwise poison your list or
+suppress your operators' pay. Those tight collaborations stay gated to the pools
+you explicitly trust (the `poolpeers` + `poolpeertoken` setup above). So: **open
+discovery for the network view; explicit peers for shared list + payout dedup.**
+
+The discovery endpoints (`GET /peer/list`, `POST /peer/announce`) are open (no
+token) and ride over the same Caddy HTTPS front end (`/peer/*` is already
+proxied). `verify-peers.ps1` reports the directory it has learned.
+
 ## Router / firewall
 
 Your pool server hosts the same way a node does, plus the website:

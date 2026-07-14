@@ -360,6 +360,19 @@ int main(int /*argc*/, char** /*argv*/) {
         server->setPeers(peers, peerToken);
         std::cout << "  peer pools: " << (peers.empty() ? "none" : std::to_string(peers.size()) + " configured")
                   << (peerToken.empty() ? "" : " (token set)") << "\n";
+
+        // Discovery (open, DISPLAY-ONLY directory). poolpublicurl is THIS pool's
+        // own public URL (so it can announce itself); poolseed is the bootstrap
+        // seed pool (defaults to the flagship). Set poolseed= (empty) to disable.
+        std::string publicUrl = cfg.count("poolpublicurl") ? cfg["poolpublicurl"] : "";
+        std::string seed = cfg.count("poolseed") ? cfg["poolseed"] : "https://pool.digistamp.co";
+        // Don't seed off ourselves.
+        if (!publicUrl.empty() && seed == publicUrl) seed = "";
+        server->setDiscovery(publicUrl, seed);
+        std::cout << "  discovery: " << (publicUrl.empty() && seed.empty() ? "off"
+                                         : ("seed=" + (seed.empty() ? std::string("none") : seed)
+                                            + (publicUrl.empty() ? std::string(" (set poolpublicurl to be listed)") : "")))
+                  << "\n";
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;

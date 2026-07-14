@@ -24,7 +24,8 @@
 param(
     [string]$Domain    = "pool.digistamp.co",
     [int]   $PoolPort  = 14028,
-    [string]$InstallDir = "C:\DigiStampPool"
+    [string]$InstallDir = "C:\DigiStampPool",
+    [string]$PoolCfg    = "C:\DigiAssetWindows\pool.cfg"
 )
 
 $ErrorActionPreference = "Stop"
@@ -115,6 +116,16 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigStart, $trigLogon `
     -Principal $principal -Settings $settings -Force | Out-Null
 Write-Host "Scheduled task '$taskName' registered (starts Caddy at boot)." -ForegroundColor Green
+
+# --- 6b. Record this pool's own public URL so it can announce itself to the
+#         discovery network (poolpublicurl). Set only if not already present.
+if (Test-Path $PoolCfg) {
+    $pc = @(Get-Content -Path $PoolCfg)
+    if (-not ($pc | Where-Object { $_ -match '^\s*poolpublicurl\s*=' })) {
+        Add-Content -Path $PoolCfg -Value "poolpublicurl=https://$Domain" -Encoding ASCII
+        Write-Host "  wrote poolpublicurl=https://$Domain to $PoolCfg (so this pool is listed in the discovery directory)." -ForegroundColor Green
+    }
+}
 
 # --- 7. Start it now ------------------------------------------------------
 Start-ScheduledTask -TaskName $taskName

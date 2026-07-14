@@ -20,7 +20,20 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.90 through win.94 (current)
+## 0.3.0-win.90 through win.95 (current)
+
+### win.95 — automatic pool discovery (seed + gossip, display-only)
+- Pools now **auto-discover** each other over the network: a new pool announces
+  its public URL to a seed (`poolseed`, defaults to the flagship) and gossips
+  `GET /peer/list` until it has the whole directory. `stats.json` gains
+  `network.totalPools` + `network.directory`, and all pools' nodes show on one
+  map. **Display-only + untrusted** — discovered pools are NOT used for list
+  mirroring or payout dedup (that stays gated to the explicit `poolpeers` +
+  token). New open endpoints `GET /peer/list`, `POST /peer/announce`; config
+  `poolpublicurl` (written by setup-caddy from -Domain), `poolseed`. See
+  POOL-SETUP.md.
+
+
 
 ### win.94 — peer-aware independent pools
 - Two (or more) independent pools (each own wallet + payouts) can now be **aware

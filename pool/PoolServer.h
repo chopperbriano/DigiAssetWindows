@@ -114,6 +114,25 @@ public:
     std::vector<std::string> getPeerUrls() const { return _peers; }
     std::string getPeerToken() const { return _peerToken; }
 
+    // ---- Discovery (seed + gossip -> DISPLAY-ONLY directory) ----
+    // Open auto-discovery: this pool announces its own public URL to a seed and
+    // gossips GET /peer/list with the pools it learns, converging on a directory
+    // of every pool on the network. DISPLAY-ONLY and UNTRUSTED: discovered pools
+    // show up on the map/network view but are NEVER used for list-mirroring or
+    // payout-dedup - that stays gated to the explicit poolpeers + token. Set
+    // before start(); empty seed AND empty publicUrl = discovery off.
+    //   publicUrl : this pool's OWN public base URL (so it can announce itself)
+    //   seed      : bootstrap seed pool URL (ships defaulted to the flagship pool)
+    void setDiscovery(const std::string& publicUrl, const std::string& seed);
+
+    struct DiscoveredPool {
+        std::string url;
+        int64_t lastSeen = 0;
+        bool up = false;
+        unsigned int nodesActive = 0;
+        double treasuryBalance = 0.0;
+    };
+
 private:
     PoolDatabase& _db;
     unsigned int _port;
@@ -177,6 +196,22 @@ private:
     // True if the token in the request query/header matches _peerToken (or the
     // token is unset, meaning peer API is open). Used to gate /peer/*.
     bool peerAuthOk(const std::string& query) const;
+
+    // ---- Discovery (open, display-only) ----
+    std::string _publicUrl;   // this pool's own public URL (to announce)
+    std::string _seed;        // bootstrap seed URL
+    std::thread _discoveryThread;
+    std::atomic<bool> _discoveryRunning{false};
+    std::map<std::string, DiscoveredPool> _directory;       // guarded by _peerMutex
+    std::map<std::string, std::string> _directoryNodesJson; // url -> tagged nodes[] for the map
+    void discoveryLoop();
+    // GET /peer/list  - the pools this pool knows (open); POST /peer/announce -
+    // a pool announces its URL to join the directory (open, validated).
+    void handlePeerList(const std::string& query, int& outStatus, std::string& outBody);
+    void handlePeerAnnounce(const std::string& body, int& outStatus, std::string& outBody);
+    // Fetch <url>/pool/stats.json, confirm it's a real pool, fill a DiscoveredPool
+    // (+ its tagged nodes array). Returns false if unreachable / not a pool.
+    bool probePool(const std::string& url, DiscoveredPool& out, std::string& outNodesJson);
 
     // Blocking accept loop (runs on _acceptThread): accepts sockets and
     // posts each to the io_context thread pool for handling.

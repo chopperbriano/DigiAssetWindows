@@ -30,6 +30,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -418,6 +419,12 @@ void PoolServer::start() {
         _peerRunning.store(true);
         _peerThread = std::thread([this]() { this->peerSyncLoop(); });
     }
+
+    // Discovery thread (only if a seed or our own public URL is set).
+    if (!_seed.empty() || !_publicUrl.empty()) {
+        _discoveryRunning.store(true);
+        _discoveryThread = std::thread([this]() { this->discoveryLoop(); });
+    }
 }
 
 // Stop accepting, release the work guard, stop the io_context, and join the
@@ -435,6 +442,8 @@ void PoolServer::stop() {
 
     _peerRunning.store(false);
     if (_peerThread.joinable()) _peerThread.join();
+    _discoveryRunning.store(false);
+    if (_discoveryThread.joinable()) _discoveryThread.join();
 
     if (_acceptThread.joinable()) _acceptThread.join();
     for (auto& t: _threadPool) {
@@ -659,6 +668,15 @@ void PoolServer::handleRequest(const std::string& method,
         handlePeerAssets(path, outStatus, outBody);
         return;
     }
+    // Open discovery (display-only directory) - no token.
+    if (method == "GET" && path.rfind("/peer/list", 0) == 0) {
+        handlePeerList(path, outStatus, outBody);
+        return;
+    }
+    if (method == "POST" && path == "/peer/announce") {
+        handlePeerAnnounce(body, outStatus, outBody);
+        return;
+    }
 
     // --- Fallback ----------------------------------------------------------
     outStatus = 404;
@@ -805,10 +823,12 @@ void PoolServer::handleStats(std::string& outBody) {
     // "network" summary (this pool + every peer). Peer data is best-effort - a
     // down peer just contributes up:false and its last-known numbers.
     std::string peersJson = "[";
+    std::string directoryJson = "[";
     std::string networkNodes = nodesJson;   // start with our own nodes[]
     unsigned int netActive = activeNodes;
     double netTreasury = treasuryBalance, netPaid = paidToHosts;
     size_t netPools = 1;
+    size_t dirCount = 0;
     {
         std::lock_guard<std::mutex> lk(_peerMutex);
         netPools = 1 + _peerStates.size();
@@ -835,8 +855,30 @@ void PoolServer::handleStats(std::string& outBody) {
                 }
             }
         }
+        // Discovered (untrusted) pools - DISPLAY ONLY. Listed separately and shown
+        // on the map; never mirrored or used for payout-dedup.
+        bool firstDir = true;
+        for (const auto& kv: _directory) {
+            const DiscoveredPool& d = kv.second;
+            if (_peerStates.count(d.url)) continue;   // already an explicit trusted peer
+            if (!firstDir) directoryJson += ",";
+            firstDir = false;
+            directoryJson += "{\"url\":\"" + jsonEscape(d.url) + "\",\"up\":" + (d.up ? "true" : "false") +
+                             ",\"nodesActive\":" + std::to_string(d.nodesActive) +
+                             ",\"treasuryBalance\":" + std::to_string(d.treasuryBalance) + "}";
+            dirCount++;
+            auto nj = _directoryNodesJson.find(kv.first);
+            if (nj != _directoryNodesJson.end() && nj->second.size() > 2) {
+                std::string inner = nj->second.substr(1, nj->second.size() - 2);
+                if (!inner.empty()) {
+                    if (networkNodes.size() > 2) networkNodes.insert(networkNodes.size() - 1, "," + inner);
+                    else networkNodes = "[" + inner + "]";
+                }
+            }
+        }
     }
     peersJson += "]";
+    directoryJson += "]";
 
     std::ostringstream js;
     js.setf(std::ios::fixed);
@@ -854,10 +896,12 @@ void PoolServer::handleStats(std::string& outBody) {
        << "\"totalNodes\":" << totalNodes << ","
        << "\"nodes\":" << networkNodes << ","
        << "\"network\":{\"pools\":" << netPools
+       << ",\"totalPools\":" << (netPools + dirCount)
        << ",\"nodesActive\":" << netActive
        << ",\"treasuryBalance\":" << netTreasury
        << ",\"paidTotal\":" << netPaid
-       << ",\"peers\":" << peersJson << "},"
+       << ",\"peers\":" << peersJson
+       << ",\"directory\":" << directoryJson << "},"
        << "\"explorerTxPrefix\":\"" << jsonEscape(explorerPrefix) << "\","
        << "\"recentPayouts\":[";
     for (size_t i = 0; i < recent.size(); i++) {
@@ -1106,6 +1150,154 @@ void PoolServer::peerSyncLoop() {
         for (int i = 0; i < cycleSec && _peerRunning.load(); i++)
             std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+}
+
+// ===========================================================================
+//  Discovery - seed + gossip -> a DISPLAY-ONLY directory of pools. Open (no
+//  token). Discovered pools are shown on the map/network view but are NEVER
+//  used for list-mirroring or payout-dedup (that stays gated to poolpeers).
+// ===========================================================================
+void PoolServer::setDiscovery(const std::string& publicUrl, const std::string& seed) {
+    std::string u = publicUrl;
+    while (!u.empty() && (u.back() == '/' || u.back() == ' ')) u.pop_back();
+    _publicUrl = u;
+    std::string s = seed;
+    while (!s.empty() && (s.back() == '/' || s.back() == ' ')) s.pop_back();
+    _seed = s;
+}
+
+// Fetch a pool's PUBLIC /pool/stats.json, confirm it looks like a pool, and fill
+// a directory entry (+ its map nodes, tagged by host). No token - public data.
+bool PoolServer::probePool(const std::string& url, DiscoveredPool& out, std::string& outNodesJson) {
+    std::string body;
+    try { body = CurlHandler::get(url + "/pool/stats.json", 8000); } catch (...) { return false; }
+    if (body.find("\"activeNodes\"") == std::string::npos || body.find("\"donationAddress\"") == std::string::npos)
+        return false;
+    out.url = url;
+    out.up = true;
+    out.lastSeen = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch()).count();
+    out.nodesActive = (unsigned int) peerJsonNum(body, "activeNodes", 0);
+    out.treasuryBalance = peerJsonNum(body, "treasuryBalance", 0);
+    std::string nodesArr = peerJsonArray(body, "nodes");
+    std::string tag = "{\"pool\":\"" + jsonEscape(urlHost(url)) + "\",";
+    std::string tagged;
+    tagged.reserve(nodesArr.size() + 48);
+    for (char ch: nodesArr) { if (ch == '{') tagged += tag; else tagged += ch; }
+    outNodesJson = tagged;
+    return true;
+}
+
+void PoolServer::discoveryLoop() {
+    const int cycleSec = 600;   // 10 min
+    const size_t MAX_DIR = 1000;
+    while (_discoveryRunning.load()) {
+        // Gossip sources: seed + trusted peers + everything already discovered.
+        std::vector<std::string> sources;
+        if (!_seed.empty()) sources.push_back(_seed);
+        for (const auto& p: _peers) sources.push_back(p);
+        {
+            std::lock_guard<std::mutex> lk(_peerMutex);
+            for (const auto& kv: _directory) sources.push_back(kv.first);
+        }
+        // Announce ourselves to the seed (best-effort).
+        if (!_seed.empty() && !_publicUrl.empty()) {
+            try {
+                std::string resp;
+                CurlHandler::postJson(_seed + "/peer/announce", "{\"url\":\"" + _publicUrl + "\"}", resp, 8000);
+            } catch (...) {}
+        }
+        // Pull each source's /peer/list; collect new pool URLs.
+        std::set<std::string> toProbe;
+        for (const auto& src: sources) {
+            if (!_discoveryRunning.load()) break;
+            std::string listBody;
+            try { listBody = CurlHandler::get(src + "/peer/list", 8000); } catch (...) { continue; }
+            std::string arr = peerJsonArray(listBody, "pools");
+            size_t p = 0;
+            while ((p = arr.find('"', p)) != std::string::npos) {
+                size_t e = arr.find('"', p + 1);
+                if (e == std::string::npos) break;
+                std::string u = arr.substr(p + 1, e - p - 1);
+                p = e + 1;
+                if (u.empty() || u == _publicUrl) continue;
+                if (u.rfind("https://", 0) != 0 && u.rfind("http://", 0) != 0) continue;
+                toProbe.insert(u);
+            }
+        }
+        // Probe + refresh the directory.
+        for (const auto& u: toProbe) {
+            if (!_discoveryRunning.load()) break;
+            DiscoveredPool dp;
+            std::string nodes;
+            if (probePool(u, dp, nodes)) {
+                std::lock_guard<std::mutex> lk(_peerMutex);
+                if (_directory.size() < MAX_DIR || _directory.count(u)) {
+                    _directory[u] = dp;
+                    _directoryNodesJson[u] = nodes;
+                }
+            }
+        }
+        // Prune pools not re-validated in 24h.
+        int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+        {
+            std::lock_guard<std::mutex> lk(_peerMutex);
+            for (auto it = _directory.begin(); it != _directory.end();) {
+                if (now - it->second.lastSeen > 24 * 3600) {
+                    _directoryNodesJson.erase(it->first);
+                    it = _directory.erase(it);
+                } else { ++it; }
+            }
+        }
+        for (int i = 0; i < cycleSec && _discoveryRunning.load(); i++)
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+void PoolServer::handlePeerList(const std::string& /*query*/, int& /*outStatus*/, std::string& outBody) {
+    std::vector<std::string> pools;
+    std::set<std::string> seen;
+    auto add = [&](const std::string& u) { if (!u.empty() && !seen.count(u)) { seen.insert(u); pools.push_back(u); } };
+    add(_publicUrl);
+    for (const auto& p: _peers) add(p);
+    {
+        std::lock_guard<std::mutex> lk(_peerMutex);
+        for (const auto& kv: _directory) add(kv.first);
+    }
+    std::ostringstream js;
+    js << "{\"pools\":[";
+    for (size_t i = 0; i < pools.size(); i++) { if (i) js << ","; js << "\"" << jsonEscape(pools[i]) << "\""; }
+    js << "]}";
+    outBody = js.str();
+}
+
+void PoolServer::handlePeerAnnounce(const std::string& body, int& outStatus, std::string& outBody) {
+    std::string url = peerJsonStr(body, "url");
+    while (!url.empty() && url.back() == '/') url.pop_back();
+    if (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0) {
+        outStatus = 400;
+        outBody = "{\"error\":\"url must be http(s)\"}";
+        return;
+    }
+    if (url == _publicUrl) { outBody = "{\"ok\":true}"; return; }
+    // Validate: it must actually serve a pool stats page before we list it.
+    DiscoveredPool dp;
+    std::string nodes;
+    if (!probePool(url, dp, nodes)) {
+        outStatus = 400;
+        outBody = "{\"error\":\"that url did not respond as a pool (/pool/stats.json)\"}";
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(_peerMutex);
+        const size_t MAX_DIR = 1000;
+        if (_directory.size() < MAX_DIR || _directory.count(url)) {
+            _directory[url] = dp;
+            _directoryNodesJson[url] = nodes;
+        }
+    }
+    outBody = "{\"ok\":true}";
 }
 
 // Parse the page number out of /permanent/<page>.json and serve that page's

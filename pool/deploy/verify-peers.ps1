@@ -164,6 +164,23 @@ if ($stats.json -and $stats.json.network) {
     Warn "no 'network' block in stats.json yet - the background sync runs ~15 min after start; re-run later."
 }
 
+# ---- 5. discovery directory ------------------------------------------------
+Section "Discovery (open, display-only directory)"
+$list = Get-Url "$localBase/peer/list"
+if ($list.json -and ($null -ne $list.json.pools)) {
+    Ok "local /peer/list returns $(@($list.json.pools).Count) pool(s)"
+} else {
+    Warn "local /peer/list empty/unavailable (set poolpublicurl + poolseed to join discovery)"
+}
+if ($stats.json -and $stats.json.network -and ($null -ne $stats.json.network.totalPools)) {
+    Ok "network knows $($stats.json.network.totalPools) pool(s) total (trusted + discovered)"
+    foreach ($d in @($stats.json.network.directory)) {
+        if ($d.up) { Ok "  discovered: $($d.url) (nodesActive $($d.nodesActive))" }
+    }
+} else {
+    Warn "no network.totalPools in stats.json yet - discovery gossip runs ~10 min after start."
+}
+
 # ---- summary ---------------------------------------------------------------
 Section "Summary"
 Write-Host ("PASS {0}   WARN {1}   FAIL {2}" -f $script:pass, $script:warn, $script:fail)
