@@ -1,4 +1,9 @@
 # Test TODO — DigiAsset Core
+
+> **⚠️ STALE (verified 2026-07-14):** Bugs 5–8 below are already FIXED and committed
+> (commit `1627a91`), and `tests/PermanentStoragePoolTest.cpp` exists. Do not re-fix.
+> Current status lives in `LAST_TASKS_NOTES.md`. Kept for historical reference only.
+
 *Written for a fresh context session. Contains known bugs and tests to add.*
 
 ---

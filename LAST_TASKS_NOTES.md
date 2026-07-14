@@ -127,6 +127,44 @@ Implemented tasks 1-3 (RPC + CLI + GUI) end to end:
 - Started `DigiAssetTransaction.existingAssetTransactions` in background (downloads test DB
   from IPFS, replays 198K txs) to produce rpcTest.db for the RPC/PSP tests.
 
+Later in session 2 (task 4 & 5 continuation):
+- **3 more bugs found and fixed:**
+  1. `local::localExists()` (pools/local.cpp) returned the INVERSE of its name —
+     serializeMetaProcessor/isAssetBad skipped the local pool whenever its local.db
+     actually existed (local PSP subscriptions dead after restart). Fixed + regression test.
+  2. local pool never closed its sqlite handles — destructor added.
+  3. `DigiByteTransaction::_assetFound` uninitialized in blank constructor — garbage value
+     randomly made setIssuance() reject clean transactions. Fixed (`= false`).
+- New gap tests: `AppMainTest.cpp` (singleton/getters throw/reset),
+  `DigiByteDomainTest.cpp` (isDomain), `LocalPoolTest.cpp` (lifecycle + persistence
+  regression), `PermanentStoragePoolListTest.cpp` (pool access/iteration/getRandomPool).
+- readme.md fully rewritten: v8.22.2 everywhere, macOS section (build verified on this
+  Mac), Windows=WSL note (native support blocked on unmerged `fast` branch commit 47568e1
+  — USER DECISION needed), binary/requirements intro, dropped vcpkg, wget typo fixed.
+- Suite status: **346 pass** (excluding: the 1-2h replay test; RPCMethodsTest.* +
+  PermanentStoragePool.mctrivia_allAddressesRecognized which need rpcTest.db).
+- Known flake: ONE occurrence of "mutex lock failed" crash AFTER all tests passed during
+  process exit (static destruction order). Not reproducible in 4 later runs. If seen
+  again, look at Log/AppMain singletons + background threads at exit.
+
+### Remaining work (next session)
+1. **Test gaps left:** `RPC/Server.cpp` (request routing/auth — needs socket-level
+   integration test, e.g. start Server on a test port and hit it with jsonrpc client);
+   `OldStream.cpp` (874-line legacy shim marked for eventual removal — suggest leaving
+   untested / ask user if it can be deleted instead).
+2. **rpcTest.db-dependent tests:** replay test was left running in background — check
+   `tests/testFiles/rpcTest.db` exists; if yes run `./Google_Tests_run
+   --gtest_filter=RPCMethodsTest.*:PermanentStoragePool.mctrivia_allAddressesRecognized`
+   (needs IPFS daemon: `ipfs daemon` — repo relocated to /Volumes/external/.ipfs, was
+   re-initialized 2026-07-14 with fresh peer id). If no, rerun
+   `./Google_Tests_run --gtest_filter=DigiAssetTransaction.existingAssetTransactions` first.
+3. **Live wallet testing** once DigiByte 8.22.2 sync done (see test plan above).
+4. **Windows readme decision:** merge/cherry-pick `47568e1` from `fast` (vcpkg/MSVC/CI
+   workflow) then write native Windows instructions, or leave WSL note.
+5. **Docs:** possible future items — document rules encoding when implemented (issueasset
+   rejects "rules" for now), PSP enable option for issueasset (add-to-pool), qt tab
+   screenshots in readme.
+
 ---
 
 ## What Is Tested / Not Tested
