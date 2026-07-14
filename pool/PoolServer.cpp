@@ -677,6 +677,10 @@ void PoolServer::handleRequest(const std::string& method,
         handlePeerAnnounce(body, outStatus, outBody);
         return;
     }
+    if (method == "POST" && path.rfind("/peer/testannounce", 0) == 0) {
+        handlePeerTestAnnounce(path, outStatus, outBody);
+        return;
+    }
 
     // --- Fallback ----------------------------------------------------------
     outStatus = 404;
@@ -1347,28 +1351,51 @@ std::string PoolServer::rpcRaw(const std::string& method, const std::string& par
     return resp;
 }
 
-void PoolServer::onchainAnnounce() {
-    if (!_onchain || _publicUrl.empty() || _rpcUser.empty()) return;
+std::string PoolServer::doOnchainAnnounce(bool force) {
+    if (_publicUrl.empty()) return "error: poolpublicurl not set";
+    if (_rpcUser.empty()) return "error: no DigiByte Core RPC configured (rpcuser)";
     int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
                       std::chrono::system_clock::now().time_since_epoch()).count();
-    int64_t last = 0;
-    try { last = std::stoll(_db.getConfig("lastOnchainAnnounce", "0")); } catch (...) {}
-    if (now - last < 7 * 24 * 3600) return;   // re-announce at most weekly
-
+    if (!force) {
+        int64_t last = 0;
+        try { last = std::stoll(_db.getConfig("lastOnchainAnnounce", "0")); } catch (...) {}
+        if (now - last < 7 * 24 * 3600) return "skipped: already announced within the last week";
+    }
     std::string data = "DGSP1" + _publicUrl;
-    if (data.size() > 78) return;             // OP_RETURN standard data limit (~80B)
+    if (data.size() > 78) return "error: url too long for an OP_RETURN (max ~73 chars)";
     std::string dataHex = toHex(data);
 
     std::string rawHex = jsonField(rpcRaw("createrawtransaction", "[[],[{\"data\":\"" + dataHex + "\"}]]"), "result");
-    if (rawHex.empty() || rawHex == "null") return;
+    if (rawHex.empty() || rawHex == "null") return "error: createrawtransaction failed";
     std::string fundedHex = jsonField(rpcRaw("fundrawtransaction", "[\"" + rawHex + "\"]"), "hex");
-    if (fundedHex.empty()) return;            // no funds / RPC error -> skip quietly
+    if (fundedHex.empty()) return "error: fundrawtransaction failed (pool wallet empty, or RPC error)";
     if (!_walletPass.empty()) rpcRaw("walletpassphrase", "[\"" + jsonEscape(_walletPass) + "\",60]");
     std::string signedHex = jsonField(rpcRaw("signrawtransactionwithwallet", "[\"" + fundedHex + "\"]"), "hex");
-    if (signedHex.empty()) { if (!_walletPass.empty()) rpcRaw("walletlock", "[]"); return; }
+    if (signedHex.empty()) { if (!_walletPass.empty()) rpcRaw("walletlock", "[]"); return "error: sign failed (wallet locked? set poolwalletpassphrase)"; }
     std::string txid = jsonField(rpcRaw("sendrawtransaction", "[\"" + signedHex + "\"]"), "result");
     if (!_walletPass.empty()) rpcRaw("walletlock", "[]");
-    if (!txid.empty() && txid != "null") _db.setConfig("lastOnchainAnnounce", std::to_string(now));
+    if (txid.empty() || txid == "null") return "error: sendrawtransaction failed";
+    _db.setConfig("lastOnchainAnnounce", std::to_string(now));
+    return txid;   // success
+}
+
+void PoolServer::onchainAnnounce() {
+    if (!_onchain) return;
+    doOnchainAnnounce(false);   // weekly-gated, best-effort
+}
+
+void PoolServer::handlePeerTestAnnounce(const std::string& query, int& outStatus, std::string& outBody) {
+    // Strict gate - this spends a tiny fee, so require a matching token even if
+    // the peer API is otherwise open.
+    if (_peerToken.empty() || queryParam(query, "token") != _peerToken) {
+        outStatus = 403;
+        outBody = "{\"error\":\"set poolpeertoken and pass ?token=<it> to use this\"}";
+        return;
+    }
+    std::string r = doOnchainAnnounce(true);
+    bool ok = (r.rfind("error:", 0) != 0 && r.rfind("skipped:", 0) != 0);
+    outBody = ok ? ("{\"ok\":true,\"txid\":\"" + jsonEscape(r) + "\"}")
+                 : ("{\"ok\":false,\"result\":\"" + jsonEscape(r) + "\"}");
 }
 
 void PoolServer::onchainScan(std::set<std::string>& out) {

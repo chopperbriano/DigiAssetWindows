@@ -20,7 +20,18 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.90 through win.96 (current)
+## 0.3.0-win.90 through win.97 (current)
+
+### win.97 — on-demand on-chain announce test
+- New token-gated `POST /peer/testannounce` forces one on-chain announcement now
+  (bypassing the weekly gate) and returns the txid, or the exact failing step
+  (createrawtransaction / fundrawtransaction / sign / send). Run it via
+  `verify-peers.ps1 -TestAnnounce` to validate the on-chain path on a live pool
+  without waiting a week. `onchainAnnounce()` refactored to a forceable
+  `doOnchainAnnounce()` returning a result string. Peer/discovery HTTP layer was
+  also runtime-verified with two local instances this cycle.
+
+
 
 ### win.96 — on-chain pool discovery + network map/site
 - **On-chain discovery (phase 2):** pools find each other with NO seed by

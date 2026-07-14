@@ -225,9 +225,16 @@ private:
     // ---- On-chain discovery (phase 2) ----
     bool _onchain = false;
     std::string _walletPass;
-    void onchainAnnounce();                        // publish our URL in an OP_RETURN (weekly)
+    void onchainAnnounce();                        // weekly wrapper (loop) around doOnchainAnnounce(false)
+    // Build + broadcast the OP_RETURN announcement. force=true ignores the weekly
+    // gate (used by the test endpoint). Returns the txid on success, or a string
+    // starting "error:"/"skipped:" describing why not.
+    std::string doOnchainAnnounce(bool force);
     void onchainScan(std::set<std::string>& out);  // read new blocks for peer announcements
     std::string rpcRaw(const std::string& method, const std::string& paramsJson); // Core RPC -> raw JSON
+    // POST /peer/testannounce - force one on-chain announcement now (token-gated;
+    // spends a tiny fee). Lets an operator verify the on-chain path on a live box.
+    void handlePeerTestAnnounce(const std::string& query, int& outStatus, std::string& outBody);
 
     // Blocking accept loop (runs on _acceptThread): accepts sockets and
     // posts each to the io_context thread pool for handling.

@@ -326,6 +326,17 @@ converge within a week (re-announce cadence) with no chain back-scan. This is th
 fully-decentralized path: even with no seed reachable, the network re-forms from
 the chain.
 
+**Verify the on-chain path without the weekly wait** — on the pool box, force one
+announcement now and get the txid back:
+
+```powershell
+C:\DigiAssetWindows\pool\deploy\verify-peers.ps1 -TestAnnounce
+```
+
+It returns the txid on success, or the exact failing step (e.g. "fundrawtransaction
+failed — wallet empty", "sign failed — set poolwalletpassphrase") so you know what
+to fix. Requires `poolpeertoken` set (it gates this fee-spending call).
+
 ## Router / firewall
 
 Your pool server hosts the same way a node does, plus the website:

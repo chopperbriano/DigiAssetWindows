@@ -31,7 +31,10 @@
 param(
     [string]$PoolCfg = 'C:\DigiAssetWindows\pool.cfg',
     [string]$PeerUrl = '',
-    [string]$Token   = ''
+    [string]$Token   = '',
+    # -TestAnnounce: force ONE on-chain announcement now (spends a tiny fee) and
+    # report the txid, so you can verify the on-chain path without the weekly wait.
+    [switch]$TestAnnounce
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -179,6 +182,25 @@ if ($stats.json -and $stats.json.network -and ($null -ne $stats.json.network.tot
     }
 } else {
     Warn "no network.totalPools in stats.json yet - discovery gossip runs ~10 min after start."
+}
+
+# ---- 6. optional on-chain announce test ------------------------------------
+if ($TestAnnounce) {
+    Section "On-chain announce test (-TestAnnounce)"
+    if (-not $token) {
+        Bad "poolpeertoken must be set to use -TestAnnounce (it gates this fee-spending call)"
+    } else {
+        Say "Forcing one on-chain announcement (this spends a tiny tx fee)..."
+        try {
+            $r = Invoke-WebRequest -Uri "$localBase/peer/testannounce?token=$token" -Method Post -UseBasicParsing -TimeoutSec 60
+            $j = $r.Content | ConvertFrom-Json
+            if ($j.ok) { Ok "announced on-chain - txid $($j.txid)" ; Say "  Look for OP_RETURN 'DGSP' in a block, or this txid in the wallet. Peers pick it up on their next scan." 'Gray' }
+            else { Bad "announce did not send: $($j.result)" }
+        } catch {
+            $code = 0; try { $code = [int]$_.Exception.Response.StatusCode.value__ } catch {}
+            if ($code -eq 403) { Bad "testannounce -> 403 (token mismatch)" } else { Bad "testannounce failed: $($_.Exception.Message)" }
+        }
+    }
 }
 
 # ---- summary ---------------------------------------------------------------
