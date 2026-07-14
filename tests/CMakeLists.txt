@@ -43,6 +43,8 @@ set(TESTS
         InstanceLockTest.cpp
         RPC_ResponseTest.cpp
         RPC_CacheTest.cpp
+        RPC_ServerTest.cpp
+        DigiByteExceptionTest.cpp
         Database_StatementTest.cpp
         DatabaseTest.cpp
         ChainAnalyzerTest.cpp

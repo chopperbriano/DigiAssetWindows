@@ -147,6 +147,32 @@ Later in session 2 (task 4 & 5 continuation):
   process exit (static destruction order). Not reproducible in 4 later runs. If seen
   again, look at Log/AppMain singletons + background threads at exit.
 
+### Session 3 — 2026-07-14 (evening)
+- Replay test from session 2 died with the machine going to sleep or similar; restarted
+  16:56 (nohup, log `replay_test.log`). Still running during this session.
+- **RPC/Server.cpp gap closed:** new `tests/RPC_ServerTest.cpp` — 14 socket-level
+  integration tests. Starts two real Servers on test ports (42124 open, 42125 with
+  rpcallow list), talks raw HTTP over TCP. Covers auth (missing/wrong creds), malformed
+  HTTP, bad JSON, missing/non-string method, non-array params, forbidden method,
+  allowlist logic, and a full happy path + cache hit via the `version` method (no wallet
+  needed). Servers are intentionally leaked — accept() is [[noreturn]].
+- **Bug found by those tests and fixed:** `DigiByteException` constructor ran EVERY
+  message through the bitcoin-style JSON error-blob parser (it was written for wrapping
+  jsonrpccpp client errors). Any directly thrown exception — all 34 files, e.g.
+  `DigiByteException(RPC_INVALID_PARAMS, "Invalid params")` — reached RPC clients as
+  code -1 / "Error during parsing of >>…<<". Fixed: parser only runs when the message
+  actually contains an `{"error":{...}}` blob (new `containsErrorBlob()`), otherwise
+  code/message are preserved verbatim. Also guarded `ret[0]` on empty parsed message.
+  Regression tests in `tests/DigiByteExceptionTest.cpp`.
+- Build technique while replay runs: NEVER relink `bin/Google_Tests_run` while the
+  replay process is executing it. Built objects via
+  `make -f tests/CMakeFiles/Google_Tests_run.dir/build.make <obj targets>` (run the
+  `depend` target first or header changes are missed; zsh doesn't word-split — use
+  xargs) and linked to a scratchpad path by sed-ing link.txt's `-o` path.
+- Suite status: **365 pass, 1 skipped** (CurlHandler.post_validUrl_doesNotCrash — needs
+  network), excluding replay + rpcTest.db-dependent tests. Active build dir is `build/`
+  (has OPENSSL_ROOT_DIR fix); cmake-build-release/ is stale (OpenSSL 3.6.1 paths).
+
 ### Remaining work (next session)
 1. **Test gaps left:** `RPC/Server.cpp` (request routing/auth — needs socket-level
    integration test, e.g. start Server on a test port and hit it with jsonrpc client);
