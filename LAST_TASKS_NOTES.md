@@ -172,20 +172,26 @@ Later in session 2 (task 4 & 5 continuation):
 - Suite status: **365 pass, 1 skipped** (CurlHandler.post_validUrl_doesNotCrash — needs
   network), excluding replay + rpcTest.db-dependent tests. Active build dir is `build/`
   (has OPENSSL_ROOT_DIR fix); cmake-build-release/ is stale (OpenSSL 3.6.1 paths).
+- **Replay test FAILED — blocked on DigiByte resync.** It died at tx 1/198557 with
+  "Core Offline": `DigiByteTransaction(txid, height)` fetches raw txs from the node, and
+  the resyncing node (block 1.18M of 23.8M, IBD, ~4.4%) can't serve them.
+  (`DigiByteCore::errorCheckAPI` maps ANY RPC error to exceptionCoreOffline — misleading;
+  possible future cleanup.) The rpcTest.db it left behind was an UNPOPULATED copy of the
+  downloaded assetTest.db (the copy at DigiAssetTransactionTest.cpp:323 runs even on
+  failure) — deleted it so RPCMethodsTest fails with its clear "not found" message.
+  Deleted replay_test.log too. **Do not rerun the replay until the node is synced past
+  the test data's blocks (~height 17.6M; full sync est. ~2026-07-20).**
 
 ### Remaining work (next session)
-1. **Test gaps left:** `RPC/Server.cpp` (request routing/auth — needs socket-level
-   integration test, e.g. start Server on a test port and hit it with jsonrpc client);
-   `OldStream.cpp` (874-line legacy shim marked for eventual removal — suggest leaving
-   untested / ask user if it can be deleted instead).
-2. **rpcTest.db-dependent tests:** replay test left running detached (nohup, started
-   2026-07-14 ~17:00, takes 1-2h; progress log: `replay_test.log` in repo root — delete the
-   log when done, it's untracked). When finished, check `tests/testFiles/rpcTest.db`
-   exists and the log ends in PASSED, then run `./Google_Tests_run
-   --gtest_filter=RPCMethodsTest.*:PermanentStoragePool.mctrivia_allAddressesRecognized`
-   (needs IPFS daemon running: repo at /Volumes/external/.ipfs, re-initialized 2026-07-14
-   with fresh peer id). If rpcTest.db missing, rerun
-   `./Google_Tests_run --gtest_filter=DigiAssetTransaction.existingAssetTransactions` first.
+1. **Test gaps left:** `OldStream.cpp` (874-line legacy shim marked for eventual
+   removal — suggest leaving untested / ask user if it can be deleted instead).
+   (`RPC/Server.cpp` gap closed in session 3.)
+2. **rpcTest.db-dependent tests — BLOCKED on DigiByte resync (est. ~2026-07-20).**
+   Once node is synced: run `./Google_Tests_run
+   --gtest_filter=DigiAssetTransaction.existingAssetTransactions` (1-2h, needs IPFS
+   daemon: repo at /Volumes/external/.ipfs), check it PASSED and
+   `tests/testFiles/rpcTest.db` exists, then run `./Google_Tests_run
+   --gtest_filter=RPCMethodsTest.*:PermanentStoragePool.mctrivia_allAddressesRecognized`.
 3. **Live wallet testing** once DigiByte 8.22.2 sync done (see test plan above).
 4. **Windows readme decision:** merge/cherry-pick `47568e1` from `fast` (vcpkg/MSVC/CI
    workflow) then write native Windows instructions, or leave WSL note.
