@@ -31,7 +31,7 @@ class DigiByteTransaction {
     std::vector<AssetUTXO> _outputs;
     DigiAsset _newAsset;
     unsigned char _txType = STANDARD; //must default to STANDARD since not set in code if STANDARD
-    bool _assetFound;
+    bool _assetFound = false;
     bool _unintentionalBurn = false;
     unsigned int _height;
     std::string _txid; //if set tx is not writable(existing)

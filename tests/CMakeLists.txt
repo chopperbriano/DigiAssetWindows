@@ -17,7 +17,10 @@ find_package(jsoncpp CONFIG QUIET)
 find_package(JSONCPP QUIET)
 
 set(TESTS
+        AppMainTest.cpp
         BitIO.cpp
+        DigiByteDomainTest.cpp
+        LocalPoolTest.cpp
         DatabaseChain.cpp
         DigiByteCore.cpp
         IPFS.cpp
