@@ -81,13 +81,14 @@ $ub = Join-Path $Root 'update-binaries.ps1'
 try { & $ub -Force -IncludePool }
 catch { Say "  update-binaries reported: $($_.Exception.Message)" 'Yellow' }
 
-# 3) Start the stack + restart the website, unless -NoStart. Also inline.
+# 3) Start the stack + restart the website, unless -NoStart. Run start-digistamp
+#    LAST and inline: it launches node/pool/website in their own windows and then
+#    exits, which ends this script too - so nothing sits open when it's done.
 if ($NoStart) {
     Say "`nFiles updated. -NoStart given, so the stack was not started." 'Green'
     Say "Start it with:  $deploy\start-digistamp.ps1   (add -WebsiteOnly to just restart the site)" 'Gray'
-} else {
-    Say "Starting the stack + restarting the website..." 'White'
-    $sd = Join-Path $deploy 'start-digistamp.ps1'
-    try { & $sd } catch { Say "  start-digistamp reported: $($_.Exception.Message)" 'Yellow' }
-    Say "`nPool box updated and started." 'Green'
+    exit 0
 }
+Say "`nBinaries + scripts updated. Starting the stack + website now..." 'Green'
+$sd = Join-Path $deploy 'start-digistamp.ps1'
+& $sd   # starts everything in its own windows, then exits (which ends this script)

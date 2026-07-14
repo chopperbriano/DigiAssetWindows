@@ -164,3 +164,7 @@ Write-Host ""
 Write-Host "DigiStamp stack started." -ForegroundColor Cyan
 Write-Host "  Node + pool dashboards opened in their own windows." -ForegroundColor Gray
 Write-Host "  Website: https://pool.digistamp.co/" -ForegroundColor Gray
+
+# Everything is launched in its OWN window/process, so this launcher's job is
+# done - exit so the window closes instead of sitting here.
+exit 0
