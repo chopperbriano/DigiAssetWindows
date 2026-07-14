@@ -277,9 +277,36 @@ The same `-DBUILD_QT=OFF`/`-DBUILD_TEST=ON` options as the Ubuntu section apply.
 
 ## Install on Windows
 
-Native Windows build support (vcpkg + MSVC) is in development and not yet merged.  Until
-then, use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with Ubuntu 22.04
-and follow the [Ubuntu instructions](#install-on-ubuntu) inside WSL.
+The daemon (`digiasset_core.exe`) builds natively on Windows with Visual Studio and
+vcpkg.  The CLI, web server, and Qt GUI are not yet built natively — if you need those
+on Windows, use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with
+Ubuntu 22.04 and follow the [Ubuntu instructions](#install-on-ubuntu) inside WSL.
+
+Prebuilt Windows binaries are published on the GitHub Releases page for tagged versions.
+
+To build natively you need [Visual Studio 2022](https://visualstudio.microsoft.com/)
+(with the "Desktop development with C++" workload), [git](https://git-scm.com/), and
+[CMake](https://cmake.org/).  Then from a "x64 Native Tools Command Prompt":
+
+```bat
+git clone -b master --recursive https://github.com/DigiAsset-Core/DigiAsset_Core.git
+cd DigiAsset_Core
+
+rem Install dependencies with vcpkg (uses vcpkg.json manifest)
+git clone https://github.com/microsoft/vcpkg.git
+vcpkg\bootstrap-vcpkg.bat
+
+rem Configure and build the daemon
+cmake -B build -DCMAKE_BUILD_TYPE=Release ^
+    -DCMAKE_TOOLCHAIN_FILE=vcpkg\scripts\buildsystems\vcpkg.cmake ^
+    -DVCPKG_TARGET_TRIPLET=x64-windows ^
+    -DBUILD_TEST=OFF -DBUILD_CLI=OFF -DBUILD_WEB=OFF -DBUILD_QT=OFF
+cmake --build build --config Release
+```
+
+The binary is written to `build\Release\digiasset_core.exe`.  You will also need a
+DigiByte Core node (v8.22.2) and an [IPFS (kubo)](https://docs.ipfs.tech/install/) node
+running, the same as on other platforms.
 
 ## Configure DigiAsset Core
 
