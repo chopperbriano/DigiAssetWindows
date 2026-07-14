@@ -74,22 +74,20 @@ Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1'
 Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
 Get-Raw 'pool/deploy/backup-digistamp.ps1'  (Join-Path $deploy 'backup-digistamp.ps1')
 
-# 2) Update the exes (node + pool) from the latest release. Run as a child
-#    process so an 'exit' in that script can't kill this one.
+# 2) Update the exes (node + pool) from the latest release. Run INLINE (& ) so
+#    its progress shows in THIS window - a separate -Wait window looked "hung".
 Say "Updating binaries (node + pool) from the latest release..." 'White'
 $ub = Join-Path $Root 'update-binaries.ps1'
-$p = Start-Process powershell.exe -Wait -PassThru -WindowStyle Normal `
-        -ArgumentList "-ExecutionPolicy Bypass -File `"$ub`" -Force -IncludePool"
-if ($p.ExitCode -ne 0) { Say "  update-binaries exited with $($p.ExitCode) - check its output above." 'Yellow' }
+try { & $ub -Force -IncludePool }
+catch { Say "  update-binaries reported: $($_.Exception.Message)" 'Yellow' }
 
-# 3) Start the stack + heal the website, unless -NoStart.
+# 3) Start the stack + restart the website, unless -NoStart. Also inline.
 if ($NoStart) {
     Say "`nFiles updated. -NoStart given, so the stack was not started." 'Green'
-    Say "Start it with:  $deploy\start-digistamp.ps1   (add -WebsiteOnly to just fix the site)" 'Gray'
+    Say "Start it with:  $deploy\start-digistamp.ps1   (add -WebsiteOnly to just restart the site)" 'Gray'
 } else {
-    Say "Starting the stack + healing the website..." 'White'
+    Say "Starting the stack + restarting the website..." 'White'
     $sd = Join-Path $deploy 'start-digistamp.ps1'
-    Start-Process powershell.exe -Wait -WindowStyle Normal `
-        -ArgumentList "-ExecutionPolicy Bypass -File `"$sd`""
+    try { & $sd } catch { Say "  start-digistamp reported: $($_.Exception.Message)" 'Yellow' }
     Say "`nPool box updated and started." 'Green'
 }
