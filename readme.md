@@ -317,16 +317,30 @@ Run **`DigiAssetPoolServer.exe`**. It is a self-contained server that:
   command, with a spend budget and a per-period guard.
 
 It's a *separate* program from `DigiAssetWindows.exe` on purpose: it links its own
-minimal server/dashboard so it can run independently, and it only exists because
-the upstream pool went dormant. Full setup — `pool.cfg` keys, the DigiByte Core
-RPC credentials it needs, the verification model, and the `[P]`/`[E]` payout
-flow — is documented in **[pool/README.md](pool/README.md)**.
+minimal server/dashboard so it can run independently. Step-by-step setup — the node
+stack, `pool.cfg`, HTTPS via Caddy, funding, and the `[P]`/`[E]` payout flow — is in
+**[POOL-SETUP.md](POOL-SETUP.md)**; the full config/API reference is in
+**[pool/README.md](pool/README.md)**.
+
+**Running more than one pool?** Independent pools (each with its own wallet and
+treasury) can be **peer-aware**: they mirror the permanent list, show one combined
+world map, coordinate payouts, and **auto-discover each other** across the network
+— via a seed + gossip *and* on-chain DigiByte announcements — so anyone who stands
+up a pool on any domain joins the network automatically. Stand up + pair a new pool
+in one command with `pool/deploy/provision-peer-pool.ps1`; see
+**[POOL-SETUP.md](POOL-SETUP.md)**.
 
 ## Documentation
 
-The web UI is built into `DigiAssetWindows.exe`. Once running, open http://localhost:8090/ in your browser.
+- **[NODE-SETUP.md](NODE-SETUP.md)** — run a node and get paid: one-line install, ports, monitoring, updating.
+- **[POOL-SETUP.md](POOL-SETUP.md)** — run a Permanent Storage Pool: setup, payouts, and running multiple **peer-aware, auto-discovering pools** as one network.
+- **[pool/README.md](pool/README.md)** — pool reference: every `pool.cfg` key, the verification model, the payout flow.
+- **[pool/deploy/README.md](pool/deploy/README.md)** — the deploy toolkit: Caddy/HTTPS, `provision-peer-pool.ps1`, `add-peer.ps1`, `verify-peers.ps1`, `diagnose-website.ps1`, `start-digistamp.ps1`, backups, `update-pool.ps1`.
+- **[snapshots/README.md](snapshots/README.md)** — fast-sync snapshots (skip the multi-day DigiByte sync).
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the pieces fit together · **[CHANGELOG.md](CHANGELOG.md)** — release history.
+- **[Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)** — the `.exe`s + scripts for each build.
 
-For running a paying Permanent Storage Pool, see **[pool/README.md](pool/README.md)**.
+The web UI is built into `DigiAssetWindows.exe` — once running, open http://localhost:8090/ in your browser.
 
 ## Credits
 
