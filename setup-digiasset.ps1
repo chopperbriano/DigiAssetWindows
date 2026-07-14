@@ -1431,7 +1431,7 @@ function Invoke-Install {
 
     # Drop the companion tools next to the node so they are always handy. They
     # live in node/ in the repo but are staged FLAT into C:\DigiAssetWindows.
-    foreach ($tool in 'monitor-node.ps1','stop-node.ps1') {
+    foreach ($tool in 'monitor-node.ps1','stop-node.ps1','update-node.ps1','memwatch.ps1') {
         try { Get-File "https://raw.githubusercontent.com/$Repo/master/node/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
     }
     # Node logon task. If the script is staged, use the dependency-aware launcher

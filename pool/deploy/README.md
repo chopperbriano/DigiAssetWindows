@@ -53,14 +53,24 @@ Options:
 The script will:
 
 1. Download Caddy (windows/amd64) into `-InstallDir` (default `C:\DigiStampPool`).
-2. Copy `site/` and generate a resolved `Caddyfile` (fills in domain, port, path).
+2. Copy `site/`, create a **fixed cert store** (`<InstallDir>\caddydata`), and
+   generate a resolved `Caddyfile` (fills in domain, port, path, storage).
 3. `caddy validate` the config.
 4. Open firewall rules for TCP 80 and 443.
-5. Register a **scheduled task** (`DigiStampCaddy`) that runs Caddy at boot, and
-   start it immediately.
+5. Register a **scheduled task** (`DigiStampCaddy`) that runs Caddy **at boot and
+   at logon**, with **no execution time limit** and auto-restart on failure, then
+   starts it immediately.
 
 Give it 10-30 seconds on first run to obtain the certificate, then visit
 `https://<domain>/`.
+
+> **Why the fixed cert store matters.** Caddy keeps its TLS cert + ACME account
+> key in a *per-user* folder by default. The task runs as **SYSTEM**, so without
+> a pinned store it uses the (empty) system profile and re-requests a cert every
+> boot — the classic "works when I run `caddy` by hand, dies as a task". Pinning
+> storage to `<InstallDir>\caddydata` means the SAME cert is reused by both. If
+> you set this pool up before this change, **re-run `setup-caddy.ps1` once** to
+> regenerate the Caddyfile + re-register the task.
 
 ## Managing it
 
@@ -73,6 +83,33 @@ Unregister-ScheduledTask -TaskName DigiStampCaddy -Confirm:$false  # remove
 Logs: Caddy writes to stdout; when run as a scheduled task, check Event Viewer or
 run it manually once (`caddy run --config C:\DigiStampPool\Caddyfile`) to watch
 certificate issuance live.
+
+### `diagnose-website.ps1` — why is the site down?
+
+If `https://<domain>/` times out or won't come up, run this on the pool box:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\diagnose-website.ps1
+```
+
+It validates the Caddyfile, shows the task's last result, checks for a port
+80/443 conflict, checks the inbound firewall, compares this box's public IP to
+the domain's DNS A-record, and **runs Caddy in the foreground for ~10 s to
+capture the real startup error** the scheduled task hides (usually an ACME/cert
+failure because 80/443 aren't reachable from the internet, a bad Caddyfile, or a
+port conflict). Fix the cause, then bring the site up with
+`start-digistamp.ps1 -WebsiteOnly`.
+
+### `verify-pool-stack.ps1` — full-stack health check
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify-pool-stack.ps1
+```
+
+Cross-checks that `digibyte.conf`, `config.cfg`, and `pool.cfg` agree on the RPC
+handshake, confirms DigiByte Core is reachable + synced, that `txindex` (and any
+optional service indexes) are enabled + current, and flags the **reindex trap**
+(a persistent `reindex=1`). See the node docs for the full index discussion.
 
 ## Editing the landing page
 
@@ -87,6 +124,21 @@ next to your data, or run them in place with a `-Root` pointing at the data fold
 (default `C:\DigiAssetWindows`, auto-falling-back to `C:\DigiAssetWindows` if that is where
 this box's data already lives).
 
+### `update-pool.ps1` — update the whole pool box in one step
+
+Run on the pool box to bring everything current:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/pool/deploy/update-pool.ps1 -OutFile "$env:TEMP\update-pool.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-pool.ps1"
+```
+
+Self-elevates, then: refreshes the deploy scripts + `Caddyfile` from `master`,
+refreshes the **live landing page** into `<CaddyDir>\site\index.html` (default
+`C:\DigiStampPool`; Caddy serves it on the next request — no restart), runs
+`update-binaries.ps1 -Force -IncludePool` for the latest node + pool exes, and
+runs `start-digistamp.ps1`. `-NoStart` updates files only; `-CaddyDir` points at
+a non-default Caddy folder.
+
 ### `start-digistamp.ps1` — start everything after a reboot
 
 You start the **DigiByte Core Windows client (wallet) yourself**. Then run:
@@ -95,11 +147,13 @@ You start the **DigiByte Core Windows client (wallet) yourself**. Then run:
 powershell -ExecutionPolicy Bypass -File .\start-digistamp.ps1
 ```
 
-It waits for DigiByte Core's RPC to respond, checks the IPFS API is up, launches
-`DigiAssetWindows.exe` and `DigiAssetPoolServer.exe` (each in its own window, from
-the data folder so they read their configs), and makes sure the `DigiStampCaddy`
-website task is running. It skips anything already running, so it's safe to
-re-run.
+Self-elevates, waits for DigiByte Core's RPC, checks the IPFS API, launches
+`DigiAssetWindows.exe` and `DigiAssetPoolServer.exe` (each in its own window),
+and **always restarts the Caddy website** — it stops the task + any stray
+`caddy.exe`, starts the task, and waits for 443 (a task can show "Running" while
+`caddy.exe` has actually died, so a plain "is it running?" check isn't enough).
+It then **exits**, since everything runs in its own window. Use **`-WebsiteOnly`**
+to skip Core/node/pool and just restart the site fast.
 
 ### `backup-digistamp.ps1` — rotated data backup
 

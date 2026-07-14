@@ -20,6 +20,56 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## 0.3.0-win.90 through win.93 (current)
+
+Recent releases. Binaries are published on the
+[Releases](https://github.com/chopperbriano/DigiAssetWindows/releases) page;
+update with `update-node.ps1` (node), `update-binaries.ps1 -Force -IncludePool`
+(pool), or `update-pool.ps1` (whole pool box).
+
+### win.93 — clearer errors
+- `CurlHandler::exceptionTimeout::what()` had the wrong signature so it never
+  overrode `std::exception::what()`; a connection timeout logged the useless
+  "Unknown exception" (MSVC default). Now reports "request timed out", so an
+  unreachable pool reads clearly in the log.
+
+### win.92 — timestamped + colorized logs
+- Node + pool dashboards prefix each on-screen log line with the time
+  (`MM-DD HH:MM:SS`); the node **log file** now carries a full
+  `YYYY-MM-DD HH:MM:SS` timestamp (it had none).
+- The pool log is now colorized by severity (red = FAIL/ERROR/CRITICAL,
+  yellow = WARNING/TIMEOUT/locked, green = SENT), matching the node.
+
+### win.91 — memory audit
+- `_geoCache` in the pool no longer grows without bound (rebuilt each refresh to
+  the active-node set).
+- RPC cache size accounting now adjusts on overwrite so the 100 MB cap holds.
+
+### win.90 — chain.db self-heal
+- A torn/half-built `chain.db` (e.g. after a power loss during the relaxed-
+  durability sync) no longer FATALs with `table "assets" already exists`.
+  Idempotent schema build (`CREATE TABLE IF NOT EXISTS` / `INSERT OR IGNORE`), a
+  `PRAGMA quick_check` + defensive version read that rebuilds an incoherent DB in
+  place, and a `main.cpp` fallback that renames a corrupt file aside and rebuilds
+  from scratch (chain.db is re-derivable) instead of dying.
+
+### Tooling + docs (ship from `master`, not the binaries)
+- **Node:** `update-node.ps1` (simple node-only updater), `memwatch.ps1` (leak
+  detector). Installer (`setup-digiasset.ps1` v2.18.0) now offers wallet
+  encryption, attempts UPnP port-forward, and asks full-vs-lean service node.
+- **Pool/deploy:** `update-pool.ps1` (one-command pool-box update + live-site
+  refresh), `diagnose-website.ps1` (why is Caddy down), `verify-pool-stack.ps1`
+  (RPC/index/reindex-trap health check). `setup-caddy.ps1` now pins Caddy's cert
+  store (fixes the SYSTEM-task "works by hand, dies as a task" bug) and removes
+  the default 3-day task time limit; `start-digistamp.ps1` always restarts the
+  website and exits cleanly.
+- **Fleet:** `snapshots/snapshot-digibyte-datadir.ps1` provisions nodes from a
+  built, indexed datadir over the LAN — no reindex, no re-sync.
+- The pool landing page gained a visual "how it works" journey + an **animated
+  network map**.
+
+---
+
 ## 0.3.0-win.4
 
 ### Executable renamed

@@ -124,6 +124,24 @@ Other quick checks:
 - **From anywhere:** visit https://pool.digistamp.co — your node shows up in the
   count once it's registered and verified.
 
+## Keeping it updated (+ a memory check)
+
+The installer drops these helpers into `C:\DigiAssetWindows` too:
+
+```powershell
+# Update the node binaries to the latest release (node only - no pool, no build):
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\update-node.ps1
+
+# Confirm memory is stable (only if you suspect a leak). Run once fully SYNCED:
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\memwatch.ps1
+```
+
+`update-node.ps1` stops the node cleanly, swaps `DigiAssetWindows.exe` + `-cli.exe`,
+and restarts it. `memwatch.ps1` logs Private Bytes over time — leave it ~1 hr at
+the tip; a flat "stable" verdict means no leak (growth *during* the initial sync
+is normal, just caches filling). The auto-update maintenance task also keeps the
+node current on its own, so you usually don't need `update-node.ps1` by hand.
+
 ## What "working" looks like
 
 - The **DigiByte wallet** window is open and synced.
