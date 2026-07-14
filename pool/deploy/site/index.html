@@ -109,9 +109,29 @@
     .stats { grid-template-columns: repeat(2, 1fr); }
     .homes, .retrieve, .legend { grid-template-columns: 1fr; }
   }
+
+  /* ---- animated "network constellation" background (behind everything) ---- */
+  #bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+  body::before {
+    content: ""; position: fixed; inset: -20%; z-index: -2; pointer-events: none;
+    background:
+      radial-gradient(38% 42% at 20% 26%, rgba(31,111,235,0.20), transparent 60%),
+      radial-gradient(34% 38% at 82% 20%, rgba(46,160,67,0.15), transparent 60%),
+      radial-gradient(46% 46% at 62% 90%, rgba(88,166,255,0.13), transparent 62%);
+    filter: blur(8px);
+    animation: bgdrift 28s ease-in-out infinite alternate;
+  }
+  @keyframes bgdrift {
+    0%   { transform: translate3d(-3%, -2%, 0) scale(1.05); }
+    50%  { transform: translate3d(3%, 2%, 0) scale(1.12); }
+    100% { transform: translate3d(-2%, 3%, 0) scale(1.06); }
+  }
+  .wrap { position: relative; z-index: 1; }   /* keep content above the background */
+  @media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
 </style>
 </head>
 <body>
+<canvas id="bg"></canvas>
 <div class="wrap">
   <h1>DigiStamp <span class="tag">Permanent Storage Pool</span></h1>
   <p class="muted">A Permanent Storage Pool (PSP) for the DigiByte / DigiAsset network.</p>
@@ -556,6 +576,65 @@ psp1payout=YOUR_DGB_ADDRESS</pre>
       if (m && m.pauseAnimations) m.pauseAnimations();
     }
   } catch (e) {}
+})();
+</script>
+<!-- Animated network-constellation background. Self-contained canvas; pauses when
+     hidden or when the viewer prefers reduced motion. Degrades to nothing on old
+     browsers (the page still renders on its solid dark background). -->
+<script>
+(function () {
+  var c = document.getElementById('bg');
+  if (!c || !c.getContext) return;
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var ctx = c.getContext('2d');
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var W, H, ps, maxD, raf = null;
+  function resize() {
+    W = c.width = Math.floor(innerWidth * DPR); H = c.height = Math.floor(innerHeight * DPR);
+    c.style.width = innerWidth + 'px'; c.style.height = innerHeight + 'px';
+    maxD = Math.min(150, innerWidth * 0.16) * DPR;
+  }
+  function init() {
+    resize();
+    var n = Math.max(24, Math.min(85, Math.floor(innerWidth * innerHeight / 17000)));
+    ps = [];
+    for (var i = 0; i < n; i++) ps.push({
+      x: Math.random() * W, y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.22 * DPR, vy: (Math.random() - 0.5) * 0.22 * DPR,
+      g: Math.random() < 0.34
+    });
+  }
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    var i, j, p, q, dx, dy, d, a;
+    for (i = 0; i < ps.length; i++) {
+      p = ps[i]; p.x += p.vx; p.y += p.vy;
+      if (p.x < 0 || p.x > W) p.vx *= -1;
+      if (p.y < 0 || p.y > H) p.vy *= -1;
+      for (j = i + 1; j < ps.length; j++) {
+        q = ps[j]; dx = p.x - q.x; dy = p.y - q.y; d = Math.sqrt(dx * dx + dy * dy);
+        if (d < maxD) {
+          a = (1 - d / maxD) * 0.22;
+          ctx.strokeStyle = 'rgba(88,166,255,' + a.toFixed(3) + ')';
+          ctx.lineWidth = DPR;
+          ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+        }
+      }
+    }
+    for (i = 0; i < ps.length; i++) {
+      p = ps[i];
+      ctx.beginPath(); ctx.arc(p.x, p.y, 1.7 * DPR, 0, 6.2832);
+      ctx.fillStyle = p.g ? 'rgba(126,231,135,0.85)' : 'rgba(88,166,255,0.75)';
+      ctx.fill();
+    }
+    raf = requestAnimationFrame(draw);
+  }
+  function stop() { if (raf) { cancelAnimationFrame(raf); raf = null; } }
+  function start() { if (!raf && !reduce && !document.hidden) draw(); }
+  init();
+  if (reduce) { draw(); } else { start(); }
+  window.addEventListener('resize', function () { init(); });
+  document.addEventListener('visibilitychange', function () { document.hidden ? stop() : start(); });
 })();
 </script>
 </body>
