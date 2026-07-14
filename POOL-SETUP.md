@@ -211,6 +211,22 @@ The `/peer/*` endpoints are **token-gated** (must match `poolpeertoken`; if unse
 they're open read-only). They ride over the same Caddy HTTPS front end as the rest
 of the API — no extra ports.
 
+### One command: stand up a NEW peer pool
+
+On a box that already has the base installed (`setup-digiasset.ps1`, DigiByte
+synced), `provision-peer-pool.ps1` does everything else - installs the pool exe,
+writes `pool.cfg`, sets up Caddy + HTTPS for your domain, turns on payouts +
+discovery, pairs with an existing pool, starts it, and verifies:
+
+```powershell
+# get the script, then run it (it prompts for anything you omit):
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/pool/deploy/provision-peer-pool.ps1 -OutFile "$env:TEMP\prov.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\prov.ps1" -Domain yourpool.com -PeerUrl https://pool.digistamp.co
+```
+
+It prints the **shared token** and the exact `add-peer.ps1` line to run on the
+OTHER pool so both are aware of each other. Then fund the wallet (the treasury)
+and forward the router ports. Everything below is what it does under the hood.
+
 ### Pair with an already-deployed pool — the easy way
 
 If pool #2 is already deployed and running, wire your pool to it in one command

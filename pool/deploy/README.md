@@ -111,6 +111,19 @@ handshake, confirms DigiByte Core is reachable + synced, that `txindex` (and any
 optional service indexes) are enabled + current, and flags the **reindex trap**
 (a persistent `reindex=1`). See the node docs for the full index discussion.
 
+### `provision-peer-pool.ps1` — all-in-one new peer pool
+
+```powershell
+.\provision-peer-pool.ps1 -Domain yourpool.com -PeerUrl https://pool.digistamp.co
+```
+
+On a box that already has the base (`setup-digiasset.ps1`, DigiByte synced), this
+does the rest in one shot: downloads the pool exe + scripts, writes a complete
+`pool.cfg` (RPC creds from `digibyte.conf`, a treasury address from the wallet,
+payouts on, discovery + peer wired), runs `setup-caddy.ps1` for your domain,
+starts the stack, and runs `verify-peers.ps1`. Prompts for anything omitted and
+prints the shared token + the exact `add-peer.ps1` line to run on the other pool.
+
 ### `add-peer.ps1` — wire this pool to an already-deployed peer
 
 ```powershell

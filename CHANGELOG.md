@@ -22,6 +22,11 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ## 0.3.0-win.90 through win.97 (current)
 
+### Tooling (ships from master)
+- `pool/deploy/provision-peer-pool.ps1` — all-in-one: turn a based box into a
+  public pool + pair it with an existing pool in one command. Plus `add-peer.ps1`
+  (wire to a peer), `verify-peers.ps1` (test the link, `-TestAnnounce`, self-test).
+
 ### win.97 — on-demand on-chain announce test
 - New token-gated `POST /peer/testannounce` forces one on-chain announcement now
   (bypassing the weekly gate) and returns the txid, or the exact failing step

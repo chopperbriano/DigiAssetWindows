@@ -72,6 +72,7 @@ Get-Raw 'pool/deploy/start-digistamp.ps1'   (Join-Path $deploy 'start-digistamp.
 Get-Raw 'pool/deploy/verify-pool-stack.ps1' (Join-Path $deploy 'verify-pool-stack.ps1')
 Get-Raw 'pool/deploy/verify-peers.ps1'      (Join-Path $deploy 'verify-peers.ps1')
 Get-Raw 'pool/deploy/add-peer.ps1'          (Join-Path $deploy 'add-peer.ps1')
+Get-Raw 'pool/deploy/provision-peer-pool.ps1' (Join-Path $deploy 'provision-peer-pool.ps1')
 Get-Raw 'pool/deploy/diagnose-website.ps1'  (Join-Path $deploy 'diagnose-website.ps1')
 Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1')
 Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
