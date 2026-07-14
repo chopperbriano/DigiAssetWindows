@@ -152,11 +152,13 @@ Later in session 2 (task 4 & 5 continuation):
    integration test, e.g. start Server on a test port and hit it with jsonrpc client);
    `OldStream.cpp` (874-line legacy shim marked for eventual removal — suggest leaving
    untested / ask user if it can be deleted instead).
-2. **rpcTest.db-dependent tests:** replay test was left running in background — check
-   `tests/testFiles/rpcTest.db` exists; if yes run `./Google_Tests_run
+2. **rpcTest.db-dependent tests:** replay test left running detached (nohup, started
+   2026-07-14 ~17:00, takes 1-2h; progress log: `replay_test.log` in repo root — delete the
+   log when done, it's untracked). When finished, check `tests/testFiles/rpcTest.db`
+   exists and the log ends in PASSED, then run `./Google_Tests_run
    --gtest_filter=RPCMethodsTest.*:PermanentStoragePool.mctrivia_allAddressesRecognized`
-   (needs IPFS daemon: `ipfs daemon` — repo relocated to /Volumes/external/.ipfs, was
-   re-initialized 2026-07-14 with fresh peer id). If no, rerun
+   (needs IPFS daemon running: repo at /Volumes/external/.ipfs, re-initialized 2026-07-14
+   with fresh peer id). If rpcTest.db missing, rerun
    `./Google_Tests_run --gtest_filter=DigiAssetTransaction.existingAssetTransactions` first.
 3. **Live wallet testing** once DigiByte 8.22.2 sync done (see test plan above).
 4. **Windows readme decision:** merge/cherry-pick `47568e1` from `fast` (vcpkg/MSVC/CI
