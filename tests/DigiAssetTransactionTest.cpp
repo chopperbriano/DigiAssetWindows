@@ -315,6 +315,9 @@ TEST(DigiAssetTransaction, existingAssetTransactions) {
         this_thread::sleep_for(dura);
     }
 
+    //flush WAL to main DB file so the plain-file copy is complete
+    db.walCheckpoint();
+
     //copy processed database if all good so rpc tests can run on it
     if (errorList.empty()) {
         utils::copyFile("../tests/testFiles/assetTest.db", "../tests/testFiles/rpcTest.db");

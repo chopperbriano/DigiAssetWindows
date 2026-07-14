@@ -13,3 +13,4 @@ debug.log
 tests/testFiles/assetTest.*
 tests/testFiles/rpcTest.*
 !*/.gitkeep
+.DS_Store
