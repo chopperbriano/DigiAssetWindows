@@ -28,6 +28,7 @@
 [CmdletBinding()]
 param(
     [string]$Root = 'C:\DigiAssetWindows',
+    [string]$CaddyDir = 'C:\DigiStampPool',   # where Caddy serves the site from
     [switch]$NoStart
 )
 $ErrorActionPreference = 'Stop'
@@ -73,6 +74,16 @@ Get-Raw 'pool/deploy/diagnose-website.ps1'  (Join-Path $deploy 'diagnose-website
 Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1')
 Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
 Get-Raw 'pool/deploy/backup-digistamp.ps1'  (Join-Path $deploy 'backup-digistamp.ps1')
+
+# Refresh the LIVE website page (Caddy serves it straight from disk, so the new
+# page is live on the next request - no restart needed).
+$liveSite = Join-Path $CaddyDir 'site'
+if (Test-Path $liveSite) {
+    Get-Raw 'pool/deploy/site/index.html' (Join-Path $liveSite 'index.html')
+    Say "  live website page refreshed at $liveSite" 'Green'
+} else {
+    Say "  ($liveSite not found - skipping live site refresh; pass -CaddyDir if it's elsewhere)" 'Yellow'
+}
 
 # 2) Update the exes (node + pool) from the latest release. Run INLINE (& ) so
 #    its progress shows in THIS window - a separate -Wait window looked "hung".
