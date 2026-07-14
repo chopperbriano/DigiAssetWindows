@@ -111,6 +111,19 @@ handshake, confirms DigiByte Core is reachable + synced, that `txindex` (and any
 optional service indexes) are enabled + current, and flags the **reindex trap**
 (a persistent `reindex=1`). See the node docs for the full index discussion.
 
+### `verify-peers.ps1` — test the link between peer-aware pools
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\verify-peers.ps1
+```
+
+For a **two-independent-pools** setup (see POOL-SETUP.md). Reads `pool.cfg` and
+checks: this pool serves `/peer/*` locally, the `poolpeertoken` gates it (wrong
+token -> 403), each peer is reachable over its public HTTPS URL **and its Caddy
+proxies `/peer/*`** and the token matches, this pool's merged `network` view in
+`stats.json`, and that the permanent lists are converging. Exit 1 on any hard
+failure. Run it on each pool box after wiring the peers.
+
 ## Editing the landing page
 
 Edit `site/index.html` here, re-run `setup-caddy.ps1` (it re-copies `site/`), or

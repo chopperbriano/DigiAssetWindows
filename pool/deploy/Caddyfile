@@ -28,9 +28,10 @@
 {$DOMAIN} {
 	encode gzip
 
-	# Pool wire-protocol + stats endpoints -> the pool server exe.
+	# Pool wire-protocol + stats + peer endpoints -> the pool server exe.
 	# Keep this list in sync with the routes in pool/PoolServer.cpp.
-	@api path /permanent/* /list/* /keepalive /nodes.json /map.json /bad.json /pool/stats.json
+	# /peer/* is how peer pools reach each other over HTTPS (token-gated).
+	@api path /permanent/* /list/* /keepalive /nodes.json /map.json /bad.json /pool/stats.json /peer/*
 	handle @api {
 		reverse_proxy 127.0.0.1:{$POOLPORT}
 	}

@@ -211,11 +211,44 @@ The `/peer/*` endpoints are **token-gated** (must match `poolpeertoken`; if unse
 they're open read-only). They ride over the same Caddy HTTPS front end as the rest
 of the API — no extra ports.
 
-**Setup:** stand up pool #2 exactly like pool #1 (its own `pool.cfg` with its own
-`poolport`, wallet RPC, `pooldonationaddress`, `poolpayouts=1`, and its own
-`setup-caddy.ps1 -Domain pool-b.digistamp.co`), then add the `poolpeers` /
-`poolpeertoken` lines above to **both** pools and restart them. Point some nodes'
-`psp1server` at each pool. Fund each pool's own treasury.
+### Deployment runbook
+
+Do this once you have pool #1 already running (sections 1-6 above).
+
+1. **Stand up pool #2** on its own box, exactly like pool #1: its own `pool.cfg`
+   with its own `poolport`, DigiByte Core RPC creds, **its own** `pooldonationaddress`
+   (own treasury) and `poolpayouts=1`, then `setup-caddy.ps1 -Domain pool-b.digistamp.co`.
+2. **Generate one shared token** (any long random string), e.g. in PowerShell:
+   `[Convert]::ToBase64String((1..32|%{Get-Random -Max 256}))`.
+3. **Add the peer lines to BOTH pools' `pool.cfg`** (each lists the *other*):
+   - on pool A: `poolpeers=https://pool-b.digistamp.co`
+   - on pool B: `poolpeers=https://pool-a.digistamp.co`
+   - on both: `poolpeertoken=<the shared token>` and `poolpeerpayoutdedupe=1`.
+4. **Update Caddy on BOTH boxes so it proxies `/peer/*`.** The peer API is served
+   by the pool exe and reached over the public HTTPS URL, so Caddy must forward it.
+   Re-run `setup-caddy.ps1 -Domain <that box's domain>` (regenerates the Caddyfile
+   with the `/peer/*` route and reloads), or edit the Caddyfile's `@api` line to add
+   `/peer/*` and restart the `DigiStampCaddy` task. **A pool on an older Caddyfile
+   will answer `/peer/*` with a 404/HTML page and the link won't work** - the test
+   below catches this.
+5. **Restart both pool exes** (`start-digistamp.ps1`) so they pick up `poolpeers`.
+6. **Test the link** on each box (`update-pool.ps1` drops this script next to the
+   others):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\pool\deploy\verify-peers.ps1
+   ```
+   It checks the local `/peer/*` API, token gating, each peer's public HTTPS
+   endpoint (incl. that its Caddy proxies `/peer/*` and the token matches), the
+   merged `network` view, and permanent-list convergence. Green = the pools are
+   aware of each other. A fresh pair may show "still converging" until the first
+   ~15-min sync completes.
+7. **Point nodes + fund each treasury.** Point some nodes' `psp1server` at pool A,
+   some at pool B, and fund each pool's own `pooldonationaddress`. Each pool pays
+   its own nodes; the dedup stops an operator served by both from being paid twice.
+
+Quick manual smoke test from anywhere:
+`curl.exe "https://pool-b.digistamp.co/peer/status?token=<token>"` should return
+JSON; a wrong/missing token returns `403`.
 
 ## Router / firewall
 
