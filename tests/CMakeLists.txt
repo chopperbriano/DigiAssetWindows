@@ -30,6 +30,7 @@ set(TESTS
         DigiAssetTransactionTest.cpp
         DigiByteTransactionBuilderTest.cpp
         PermanentStoragePoolTest.cpp
+        PermanentStoragePoolListTest.cpp
         ConfigTest.cpp
         KYCTest.cpp
         BlobTest.cpp
