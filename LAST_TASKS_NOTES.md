@@ -182,10 +182,18 @@ Later in session 2 (task 4 & 5 continuation):
   Deleted replay_test.log too. **Do not rerun the replay until the node is synced past
   the test data's blocks (~height 17.6M; full sync est. ~2026-07-20).**
 
+### Session 3 decisions (user, 2026-07-14)
+- **OldStream.cpp:** user is inquiring whether anyone still uses it — leave untested
+  for now; delete (or test) once they hear back.
+- **Windows:** user said "do what you think is best" → cherry-picked `47568e1` from
+  `fast` (vcpkg manifest, MSVC/InstanceLock platform code, GitHub Actions release
+  workflow for Linux/macOS/Windows binaries on v* tags). macOS build + full suite
+  re-verified after the pick. readme now has native Windows (daemon-only, VS2022+vcpkg)
+  instructions with WSL as the path for CLI/web/GUI. Task 5 (docs) is now COMPLETE.
+
 ### Remaining work (next session)
-1. **Test gaps left:** `OldStream.cpp` (874-line legacy shim marked for eventual
-   removal — suggest leaving untested / ask user if it can be deleted instead).
-   (`RPC/Server.cpp` gap closed in session 3.)
+1. **Test gaps left:** `OldStream.cpp` — waiting on user's inquiry about whether it can
+   be deleted. (`RPC/Server.cpp` gap closed in session 3.)
 2. **rpcTest.db-dependent tests — BLOCKED on DigiByte resync (est. ~2026-07-20).**
    Once node is synced: run `./Google_Tests_run
    --gtest_filter=DigiAssetTransaction.existingAssetTransactions` (1-2h, needs IPFS
