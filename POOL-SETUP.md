@@ -211,7 +211,31 @@ The `/peer/*` endpoints are **token-gated** (must match `poolpeertoken`; if unse
 they're open read-only). They ride over the same Caddy HTTPS front end as the rest
 of the API — no extra ports.
 
-### Deployment runbook
+### Pair with an already-deployed pool — the easy way
+
+If pool #2 is already deployed and running, wire your pool to it in one command
+(run on your pool box; get the scripts first with `update-pool.ps1`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\pool\deploy\add-peer.ps1 `
+  -PeerUrl https://pool-b.digistamp.co -Token "<the shared secret>"
+```
+
+`add-peer.ps1` edits `pool.cfg` (adds the peer + token + dedup, clean whole-line
+values), makes sure Caddy proxies `/peer/*` (patches + reloads it if needed),
+restarts the pool exe, and runs `verify-peers.ps1`. **Run it on the OTHER pool too**
+(with *your* URL and the *same* token) so both are aware of each other. Both pools
+must share the identical `poolpeertoken`.
+
+**Self-test before you even have a second pool:** point the checker at your OWN
+public URL to prove the `/peer/*` API, the Caddy route, and the token all work end
+to end:
+
+```powershell
+C:\DigiAssetWindows\pool\deploy\verify-peers.ps1 -PeerUrl https://pool-a.digistamp.co -Token "<token>"
+```
+
+### Deployment runbook (what add-peer.ps1 does, step by step)
 
 Do this once you have pool #1 already running (sections 1-6 above).
 

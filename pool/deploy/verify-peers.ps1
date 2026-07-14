@@ -16,13 +16,22 @@
     Exit 1 if any hard check fails.
 
 .PARAMETER PoolCfg  Path to pool.cfg (default C:\DigiAssetWindows\pool.cfg).
+.PARAMETER PeerUrl  Test THIS url instead of the peers in pool.cfg. Point it at your
+                    OWN pool's public URL to self-test the /peer/* API + Caddy route
+                    + token end-to-end BEFORE a second pool exists.
+.PARAMETER Token    Override the token (else read poolpeertoken from pool.cfg).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\verify-peers.ps1
+.EXAMPLE
+    # self-test against your own public URL before you have a second pool:
+    .\verify-peers.ps1 -PeerUrl https://pool-a.digistamp.co -Token "shared-secret"
 #>
 [CmdletBinding()]
 param(
-    [string]$PoolCfg = 'C:\DigiAssetWindows\pool.cfg'
+    [string]$PoolCfg = 'C:\DigiAssetWindows\pool.cfg',
+    [string]$PeerUrl = '',
+    [string]$Token   = ''
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -66,9 +75,17 @@ if (-not (Test-Path $PoolCfg)) { Bad "pool.cfg not found: $PoolCfg (pass -PoolCf
 $cfg = Read-Cfg $PoolCfg
 $poolPort = 14028; if ($cfg['poolport']) { try { $poolPort = [int]$cfg['poolport'].Trim() } catch {} }
 $token = if ($cfg['poolpeertoken']) { $cfg['poolpeertoken'].Trim() } else { '' }
-$peersRaw = if ($cfg['poolpeers']) { $cfg['poolpeers'] } else { '' }
+if ($Token) { $token = $Token.Trim() }   # override
 $peers = @()
-foreach ($p in ($peersRaw -split ',')) { $u = $p.Trim().TrimEnd('/'); if ($u) { $peers += $u } }
+if ($PeerUrl) {
+    # Ad-hoc / self-test: test just this URL, ignore pool.cfg's peer list.
+    $u = $PeerUrl.Trim(); if ($u -notmatch '^[A-Za-z]+://') { $u = "https://$u" }
+    $peers = @($u.TrimEnd('/'))
+    Write-Host "(testing -PeerUrl override; ignoring poolpeers in pool.cfg)" -ForegroundColor DarkGray
+} else {
+    $peersRaw = if ($cfg['poolpeers']) { $cfg['poolpeers'] } else { '' }
+    foreach ($p in ($peersRaw -split ',')) { $u = $p.Trim().TrimEnd('/'); if ($u) { $peers += $u } }
+}
 
 Write-Host "=== Verify peer pools ===" -ForegroundColor White
 Write-Host "pool.cfg : $PoolCfg"

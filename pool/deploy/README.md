@@ -111,6 +111,18 @@ handshake, confirms DigiByte Core is reachable + synced, that `txindex` (and any
 optional service indexes) are enabled + current, and flags the **reindex trap**
 (a persistent `reindex=1`). See the node docs for the full index discussion.
 
+### `add-peer.ps1` — wire this pool to an already-deployed peer
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\add-peer.ps1 -PeerUrl https://pool-b.digistamp.co -Token "<shared secret>"
+```
+
+One-step pairing: edits `pool.cfg` (`poolpeers` + `poolpeertoken` +
+`poolpeerpayoutdedupe`, as clean whole-line values), ensures Caddy proxies
+`/peer/*` (patches + reloads if needed), restarts the pool exe, and runs
+`verify-peers.ps1`. Run it on **both** pools (each with the other's URL, the same
+token). Prompts for anything not passed.
+
 ### `verify-peers.ps1` — test the link between peer-aware pools
 
 ```powershell
