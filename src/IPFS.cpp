@@ -199,6 +199,33 @@ string IPFS::sha256ToCID(const string& hash) {
     return sha256ToCID(data);
 }
 
+/**
+ * Converts an IPFS cid back to the SHA256 hash of the file's content.
+ * This is the reverse of sha256ToCID and only works for base32 CIDv1 raw mode cids
+ * (the kind created by sha256ToCID and addFile).
+ * @param cid - base32 CIDv1 raw cid("b" followed by 58 base32 characters)
+ * @return - 64 character hex sha256 of the content
+ */
+string IPFS::cidToSha256(const string& cid) {
+    const string chars = "abcdefghijklmnopqrstuvwxyz234567";
+    if ((cid.length() != 59) || (cid[0] != 'b')) throw exceptionInvalidCID(cid);
+
+    //decode base 32
+    BitIO data;
+    for (size_t i = 1; i < cid.length(); i++) {
+        size_t pos = chars.find(cid[i]);
+        if (pos == string::npos) throw exceptionInvalidCID(cid);
+        data.appendBits(pos, 5);
+    }
+
+    //check header is CIDv1, raw codec, sha2-256, 32 byte digest
+    data.movePositionToBeginning();
+    if (data.getBits(32) != 0x01551220) throw exceptionInvalidCID(cid);
+
+    //return the 32 byte digest
+    return data.getHexString(64);
+}
+
 
 /**
  * Sends a command to the IPFS node and return result
@@ -476,6 +503,41 @@ void IPFS::downloadFile(const string& cid, const string& filePath, bool pinAlso)
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
     if (pinAlso) _command("pin/add/" + cid);
     _command("cat?arg=" + cid, {}, 0, filePath);
+}
+
+/**
+ * Synchronously adds content to the IPFS node and returns its cid.
+ * The file is stored in raw mode with a sha2-256 hash so the returned cid is always a
+ * base32 CIDv1 that can be converted to/from the content's sha256 with cidToSha256/sha256ToCID.
+ * This is the storage mode DigiAsset issuance metadata must use(the sha256 gets encoded on chain).
+ * @param content - the file content to add(2MB max, raw mode limit)
+ * @param pinFile - defaults true.  Pin so the content is not garbage collected
+ * @return - cid of the added content
+ */
+string IPFS::addFile(const string& content, bool pinFile) const {
+    if (content.empty()) throw exception("Can not add empty content to IPFS");
+    if (content.length() > 2097152) throw exception("Content too large.  Raw mode has a 2MB limit");
+
+    //upload as multipart form data(chunker set above the content limit so it is always a single raw block)
+    string url = _nodePrefix + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2097152&pin=" +
+                 (pinFile ? "true" : "false");
+    string response;
+    try {
+        response = CurlHandler::postFile(url, "file", "file", content, _timeoutPin * 1000);
+    } catch (const CurlHandler::exceptionTimeout& e) {
+        throw exceptionTimeout();
+    } catch (const std::exception& e) {
+        if (string(e.what()) == "Couldn't connect to server") throw exceptionNoConnection();
+        throw;
+    }
+
+    //parse response({"Name":"file","Hash":"b...","Size":"..."})
+    Json::Value root;
+    Json::Reader reader;
+    if (!reader.parse(response, root) || !root.isObject() || !root.isMember("Hash")) {
+        throw exception("Unexpected response from IPFS add: " + response);
+    }
+    return root["Hash"].asString();
 }
 
 /**

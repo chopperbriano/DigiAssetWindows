@@ -172,6 +172,44 @@ DigiAsset::DigiAsset(const getrawtransaction_t& txData, unsigned int height, uns
 }
 
 
+/**
+ * Creates a brand new asset that has not yet been written to chain.
+ * The assetId can not be known until the issuance transaction's first input has been chosen
+ * (see calculateAssetId) so it is left blank.
+ * @param cid - IPFS cid of the metadata(raw mode, sha256 based - see IPFS::addFile).  "" for no metadata
+ * @param count - number of assets to create in smallest divisible units
+ * @param divisibility - number of decimals(0-8)
+ * @param locked - true if no more can ever be issued
+ * @param aggregation - one of AGGREGABLE, HYBRID, DISPERSED
+ */
+DigiAsset::DigiAsset(const string& cid, uint64_t count, unsigned char divisibility, bool locked,
+                     unsigned char aggregation) {
+    if (divisibility > 8) throw out_of_range("divisibility must be 0 to 8");
+    if (aggregation > DISPERSED) throw out_of_range("invalid aggregation type");
+    if (count == 0) throw out_of_range("count must be at least 1");
+    if (count > (uint64_t) 18014398509481983) throw out_of_range("count too large");
+    _cid = cid;
+    _count = count;
+    _divisibility = divisibility;
+    _locked = locked;
+    _aggregation = aggregation;
+    _heightCreated = 0;
+    _heightUpdated = 0;
+    _existingAsset = false;
+    _enableWrite = true;
+    if (locked) _rules.lock();
+}
+
+/**
+ * Returns the issuance flags byte that gets encoded as the last byte of an issuance transaction
+ *      bit 7,6,5: divisibility
+ *      bit 4: locked
+ *      bit 3,2: aggregation
+ */
+unsigned char DigiAsset::getIssuanceFlags() const {
+    return (_divisibility << 5) | (_locked ? 0x10 : 0x00) | (_aggregation << 2);
+}
+
 DigiAsset::DigiAsset(uint64_t assetIndex, const string& assetId, const string& cid, const KYC& issuer,
                      const DigiAssetRules& rules,
                      unsigned int heightCreated, unsigned int heightUpdated, uint64_t amount) {

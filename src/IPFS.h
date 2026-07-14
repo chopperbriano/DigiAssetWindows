@@ -51,6 +51,7 @@ public:
     //helpers
     static std::string sha256ToCID(BitIO& hash);
     static std::string sha256ToCID(const std::string& hash);
+    static std::string cidToSha256(const std::string& cid);
     static bool isIPFSurl(const std::string& url);
     static std::string getCID(const std::string& url);
     static bool isLostCID(const std::string& cid);
@@ -72,6 +73,7 @@ public:
     bool isPinned(const std::string& cid) const;
     unsigned int getSize(const std::string& cid) const;
     void downloadFile(const std::string& cid, const std::string& filePath, bool pinAlso = false);
+    std::string addFile(const std::string& content, bool pinFile = true) const;
     std::string getPeerId() const;
 
 

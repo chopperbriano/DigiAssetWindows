@@ -13,6 +13,7 @@
 #define RPC_PARSE_ERROR (-32700)
 #define RPC_FORBIDDEN_BY_SAFE_MODE  (-2)
 #define RPC_MISC_ERROR (-1)
+#define RPC_WALLET_INSUFFICIENT_FUNDS (-6) //same value DigiByte core uses
 
 // Macro definition in a common header or the RPC server file
 #define REGISTER_RPC_METHOD(methodName) registerMethod(#methodName, &std::methodName)

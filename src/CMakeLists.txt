@@ -100,6 +100,7 @@ set(HEADER_FILES
         PermanentStoragePool/pools/mctrivia.h
         PermanentStoragePool/pools/local.h
         AppMain.h
+        AssetWallet.h
         CurlHandler.h
         Version.h
         OldStream.h
@@ -139,6 +140,7 @@ set(SOURCE_FILES
         PermanentStoragePool/pools/mctrivia.cpp
         PermanentStoragePool/pools/local.cpp
         AppMain.cpp
+        AssetWallet.cpp
         CurlHandler.cpp
         OldStream.cpp
         UniqueTaskQueue.cpp

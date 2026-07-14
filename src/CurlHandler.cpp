@@ -97,6 +97,46 @@ namespace CurlHandler {
         return readBuffer;
     }
 
+    /**
+     * Makes a multipart/form-data post request with content uploaded as a file attachment.
+     * Needed for the IPFS "add" api endpoint.
+     */
+    string postFile(const string& url, const string& fieldName, const string& fileName,
+                    const string& content, unsigned int timeout) {
+        //check CURL is installed and get a thread safe instance of it
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            throw runtime_error("Failed to initialize CURL");
+        }
+
+        //build multipart form with the content as an in memory file
+        curl_mime* mime = curl_mime_init(curl);
+        curl_mimepart* part = curl_mime_addpart(mime);
+        curl_mime_name(part, fieldName.c_str());
+        curl_mime_filename(part, fileName.c_str());
+        curl_mime_data(part, content.data(), content.size());
+
+        //make post request
+        string readBuffer;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+        curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        CURLcode res = curl_easy_perform(curl);
+        curl_mime_free(mime);
+        if (res == CURLE_OPERATION_TIMEDOUT) {
+            curl_easy_cleanup(curl);
+            throw exceptionTimeout();
+        }
+        if (res != CURLE_OK) {
+            curl_easy_cleanup(curl);
+            throw runtime_error(curl_easy_strerror(res));
+        }
+        curl_easy_cleanup(curl);
+        return readBuffer;
+    }
+
     void getDownload(const string& url, const string& fileName, unsigned int timeout) {
         //check CURL is installed and get a thread safe instance of it
         CURL* curl = curl_easy_init();

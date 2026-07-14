@@ -31,6 +31,8 @@ namespace RPC {
         extern const Response getrandom(const Json::Value& params);
         extern const Response getrawtransaction(const Json::Value& params);
         extern const Response gettxout(const Json::Value& params);
+        extern const Response getwalletbalances(const Json::Value& params);
+        extern const Response issueasset(const Json::Value& params);
         extern const Response listaddresshistory(const Json::Value& params);
         extern const Response listassetissuances(const Json::Value& params);
         extern const Response listassets(const Json::Value& params);
@@ -40,6 +42,7 @@ namespace RPC {
         extern const Response listunspent(const Json::Value& params);
         extern const Response resyncmetadata(const Json::Value& params);
         extern const Response send(const Json::Value& params);
+        extern const Response sendasset(const Json::Value& params);
         extern const Response sendmany(const Json::Value& params);
         extern const Response sendtoaddress(const Json::Value& params);
         extern const Response shutdown(const Json::Value& params);

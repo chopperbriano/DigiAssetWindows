@@ -16,6 +16,8 @@ namespace CurlHandler {
 
     std::string get(const std::string& url, unsigned int timeout = 0);
     std::string post(const std::string& url, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
+    std::string postFile(const std::string& url, const std::string& fieldName, const std::string& fileName,
+                         const std::string& content, unsigned int timeout = 0);
     void getDownload(const std::string& url, const std::string& fileName, unsigned int timeout = 0);
     void postDownload(const std::string& url, const std::string& fileName, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
 

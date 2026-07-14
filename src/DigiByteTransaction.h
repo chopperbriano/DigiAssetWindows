@@ -63,6 +63,14 @@ class DigiByteTransaction {
     void checkRulesPass() const;
     void addAssetToOutput(size_t output, const DigiAsset& asset);
 
+    //new transaction building helpers
+    void checkWritable() const;
+    void buildTransferInstructions(BitIO& data) const;
+
+    friend class DigiByteTransactionBuilder_transferRoundTrip_Test;
+    friend class DigiByteTransactionBuilder_transferMultiAssetRoundTrip_Test;
+    friend class DigiByteTransactionBuilder_issuanceEncoding_Test;
+
 public:
     explicit DigiByteTransaction();
     DigiByteTransaction(const std::string& txid, unsigned int height = 0, bool dontBotherIfNotSpecial = false);
@@ -96,8 +104,21 @@ public:
     unsigned int getOutputCount() const;
     unsigned int getHeight() const;
 
+    /*
+     * Functions for building a NEW transaction(not one already on chain).
+     * Typical usage(see RPC/Methods/sendasset.cpp and issueasset.cpp):
+     *   1) addInput() all asset bearing UTXOs being spent
+     *   2) addDigiAssetOutput()/addDigiByteOutput() for all desired outputs(asset outputs must be in first 32)
+     *   3) setIssuance() if creating a new asset
+     *   4) encodeAssetOpReturn() to get the OP_RETURN payload
+     *   5) fund/sign/send via the wallet(see AssetWallet helper)
+     */
+    bool isWritable() const;
+    void addInput(const AssetUTXO& utxo);
+    void setIssuance(const DigiAsset& asset);
     void addDigiByteOutput(const std::string& address, uint64_t amount);
     void addDigiAssetOutput(const std::string& address, const std::vector<DigiAsset>& assets);
+    std::string encodeAssetOpReturn() const;
 
     // Test helpers — not for production use
     void setHeightForTesting(unsigned int h) { _height = h; }

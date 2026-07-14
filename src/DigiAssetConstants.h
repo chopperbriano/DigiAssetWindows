@@ -9,6 +9,12 @@
 #include "DigiAssetTypes.h"
 namespace DigiAssetConstants {
 
+    /**
+     * Number of sats placed on outputs that carry assets when building new asset transactions.
+     * This is the DigiAsset protocol convention(bigger than dust limit but as small as practical).
+     */
+    const uint64_t DIGIBYTE_DUST = 600;
+
 
         /**
      * List of addresses that can be used for voting without hard encoding the addresses you wish to use in to the asset issuance.
