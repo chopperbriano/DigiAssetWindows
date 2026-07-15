@@ -234,6 +234,33 @@ std::string WebServer::statusJson() {
     services["web"] = web;
     root["services"] = services;
 
+    // ---- DigiByte Core: chain / network / wallet (throttled cache) --------
+    // Core RPCs are synchronous; cache the result for a few seconds so a 3s
+    // browser poll (or several open tabs) doesn't hammer Core.
+    {
+        Json::Value coreInfo;
+        bool doFetch = false;
+        {
+            std::lock_guard<std::mutex> lk(_coreMutex);
+            auto since = std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - _lastCoreFetch).count();
+            if (dgb && (!_coreCached || since >= 6.0)) {
+                doFetch = true;
+                _lastCoreFetch = std::chrono::steady_clock::now(); // claim before fetch (race guard)
+            } else {
+                coreInfo = _coreCache;
+            }
+        }
+        if (doFetch) {
+            Json::Value fresh = buildCoreInfo(dgb);
+            std::lock_guard<std::mutex> lk(_coreMutex);
+            _coreCache = fresh;
+            _coreCached = true;
+            coreInfo = fresh;
+        }
+        root["digibyte"] = coreInfo;
+    }
+
     // ---- Pool + payouts (mirrored from the dashboard via NodeStats) -------
     Json::Value pool;
     pool["probed"] = snap.poolProbed;
@@ -260,6 +287,63 @@ std::string WebServer::statusJson() {
     Json::StreamWriterBuilder wb;
     wb["indentation"] = ""; // compact single-line JSON
     return Json::writeString(wb, root);
+}
+
+// Builds the "digibyte" object from DigiByte Core: chain + network + wallet.
+// Every RPC is individually guarded so a locked/absent wallet or a Core that
+// went down mid-poll yields partial data instead of failing the whole status.
+Json::Value WebServer::buildCoreInfo(DigiByteCore* dgb) {
+    Json::Value o;
+    if (!dgb) return o;
+    const Json::Value emptyParams(Json::arrayValue);
+
+    try {
+        Json::Value bi = dgb->sendcommand("getblockchaininfo", emptyParams);
+        if (bi.isObject()) {
+            if (bi.isMember("chain")) o["chain"] = bi["chain"];
+            if (bi.isMember("blocks")) o["blocks"] = bi["blocks"];
+            if (bi.isMember("headers")) o["headers"] = bi["headers"];
+            if (bi.isMember("difficulty")) o["difficulty"] = bi["difficulty"];
+            if (bi.isMember("verificationprogress")) o["verificationProgress"] = bi["verificationprogress"];
+            if (bi.isMember("size_on_disk")) o["sizeOnDiskBytes"] = bi["size_on_disk"];
+            if (bi.isMember("pruned")) o["pruned"] = bi["pruned"];
+        }
+    } catch (...) {}
+
+    try {
+        Json::Value ni = dgb->sendcommand("getnetworkinfo", emptyParams);
+        if (ni.isObject()) {
+            if (ni.isMember("connections")) o["connections"] = ni["connections"];
+            if (ni.isMember("subversion")) o["subversion"] = ni["subversion"];
+            if (ni.isMember("protocolversion")) o["protocolVersion"] = ni["protocolversion"];
+            if (ni.isMember("version")) o["coreVersion"] = ni["version"];
+        }
+    } catch (...) {}
+
+    // Wallet is optional (Core may run with no wallet, or a locked/encrypted one).
+    Json::Value wallet;
+    try {
+        Json::Value wi = dgb->sendcommand("getwalletinfo", emptyParams);
+        if (wi.isObject() && wi.isMember("balance")) {
+            wallet["loaded"] = true;
+            wallet["name"] = wi.get("walletname", "");
+            wallet["balance"] = wi["balance"];
+            wallet["unconfirmed"] = wi.get("unconfirmed_balance", 0);
+            wallet["immature"] = wi.get("immature_balance", 0);
+            wallet["txCount"] = wi.get("txcount", 0);
+            bool encrypted = wi.isMember("unlocked_until");
+            wallet["encrypted"] = encrypted;
+            // unlocked_until == 0 => encrypted + currently locked; >0 => unlocked.
+            wallet["locked"] = encrypted && wi["unlocked_until"].asInt64() == 0;
+        } else {
+            wallet["loaded"] = false;
+        }
+    } catch (...) {
+        wallet["loaded"] = false;
+    }
+    o["wallet"] = wallet;
+
+    return o;
 }
 
 // Background-thread body. Binds a TCP acceptor on 0.0.0.0:_port and serves

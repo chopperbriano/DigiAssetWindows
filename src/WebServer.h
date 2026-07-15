@@ -14,8 +14,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <jsoncpp/json/value.h>
+
+class DigiByteCore;
 
 // Owns a background thread that accepts HTTP GET requests and returns static
 // files from the resolved web/ and src/ roots. Lifetime-safe: the destructor
@@ -50,6 +54,11 @@ private:
     // wired up. Never throws for a missing subsystem; reports zero/false instead.
     std::string statusJson();
 
+    // Builds the DigiByte Core "digibyte" sub-object (chain/network/wallet) via
+    // getblockchaininfo / getnetworkinfo / getwalletinfo. Each call is guarded;
+    // a missing/locked wallet or a down Core degrades gracefully to partial data.
+    Json::Value buildCoreInfo(DigiByteCore* dgb);
+
     unsigned short _port = 8090;
     std::string _webRoot;
     std::string _srcRoot;
@@ -63,6 +72,13 @@ private:
 
     // Process start, captured at construction, for the dashboard uptime figure.
     std::chrono::steady_clock::time_point _startTime = std::chrono::steady_clock::now();
+
+    // Throttled cache of DigiByte Core info so a fast browser poll doesn't hit
+    // Core RPC (getblockchaininfo/getnetworkinfo/getwalletinfo) on every request.
+    std::mutex _coreMutex;
+    std::chrono::steady_clock::time_point _lastCoreFetch{};
+    Json::Value _coreCache;
+    bool _coreCached = false;
 };
 
 #endif // DIGIASSET_CORE_WEBSERVER_H

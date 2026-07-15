@@ -47,6 +47,11 @@ it's a live **Node Console**, loopback-only.
 - **Same look as pool.digistamp.co** — animated constellation + drifting aurora
   background, translucent cards, matching dark palette. Pauses when hidden and
   respects `prefers-reduced-motion`.
+- **Full DigiByte node + wallet stats** — new **DigiByte Network** card (chain,
+  peers connected, verification progress, difficulty, on-disk size, Core
+  version) and **DigiByte Wallet** card (balance, unconfirmed, immature, tx
+  count, encrypted/locked state) via a throttled Core RPC cache
+  (`getblockchaininfo`/`getnetworkinfo`/`getwalletinfo`) in `/api/status.json`.
 - **Web assets now ship to nodes** — `web.zip` is a release asset;
   `update-node.ps1` and `setup-digiasset.ps1` download + extract it beside the
   exe (the `web/` folder was never deployed before, so :8090 served nothing on a

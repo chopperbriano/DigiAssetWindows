@@ -266,6 +266,28 @@
         </div>
       </div>
 
+      <!-- DigiByte network -->
+      <div class="card span6">
+        <h2>DigiByte Network</h2>
+        <div class="row"><span class="k">Chain</span><span class="v" id="dgbChain">—</span></div>
+        <div class="row"><span class="k">Peers connected</span><span class="v" id="dgbPeers">—</span></div>
+        <div class="row"><span class="k">Verify progress</span><span class="v" id="dgbVerify">—</span></div>
+        <div class="row"><span class="k">Difficulty</span><span class="v" id="dgbDiff">—</span></div>
+        <div class="row"><span class="k">Chain size on disk</span><span class="v" id="dgbSize">—</span></div>
+        <div class="row"><span class="k">Core version</span><span class="v" id="dgbVer">—</span></div>
+      </div>
+
+      <!-- Wallet -->
+      <div class="card span6">
+        <h2>DigiByte Wallet</h2>
+        <div class="row"><span class="k">Status</span><span class="v"><span class="pill gray" id="walletPill"><span class="pd"></span><span>—</span></span></span></div>
+        <div class="row"><span class="k">Balance</span><span class="v" id="walBal">—</span></div>
+        <div class="row"><span class="k">Unconfirmed</span><span class="v" id="walUnconf">—</span></div>
+        <div class="row"><span class="k">Immature</span><span class="v" id="walImmature">—</span></div>
+        <div class="row"><span class="k">Transactions</span><span class="v" id="walTx">—</span></div>
+        <div class="row"><span class="k">Wallet name</span><span class="v" id="walName">—</span></div>
+      </div>
+
       <!-- Pool & Payouts -->
       <div class="card span12">
         <h2>Pool &amp; Payouts</h2>
@@ -356,6 +378,8 @@ function showView(v){
 function fmt(n){ if(n===null||n===undefined||isNaN(n))return '—'; return Number(n).toLocaleString('en-US'); }
 function bytes(b){ if(!b)return '0 B'; var u=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(1024));
   return (b/Math.pow(1024,i)).toFixed(i?1:0)+' '+u[i]; }
+function dgb(v){ if(v===null||v===undefined||isNaN(v))return '—';
+  return Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:8})+' DGB'; }
 function dur(s){ s=Math.floor(s||0); var d=Math.floor(s/86400);s%=86400;var h=Math.floor(s/3600);s%=3600;var m=Math.floor(s/60);
   if(d)return d+'d '+h+'h'; if(h)return h+'h '+m+'m'; if(m)return m+'m '+(s%60)+'s'; return (s%60)+'s'; }
 function setPill(id,cls,txt){ var e=document.getElementById(id); if(!e)return;
@@ -463,6 +487,32 @@ function applyStatus(d){
   else { setPill('payPill','gray',pmt); }
   document.getElementById('payAddr').textContent = pay.address || '—';
   document.getElementById('payBal').textContent = pay.balance || '—';
+
+  // DigiByte network + wallet
+  var db2=d.digibyte||{};
+  document.getElementById('dgbChain').textContent = db2.chain ? String(db2.chain) : '—';
+  document.getElementById('dgbPeers').textContent = (db2.connections!=null) ? fmt(db2.connections) : '—';
+  document.getElementById('dgbVerify').textContent = (db2.verificationProgress!=null)
+      ? Math.min(100,db2.verificationProgress*100).toFixed(2)+'%' : '—';
+  document.getElementById('dgbDiff').textContent = (db2.difficulty!=null)
+      ? Number(db2.difficulty).toLocaleString('en-US',{maximumFractionDigits:0}) : '—';
+  document.getElementById('dgbSize').textContent = db2.sizeOnDiskBytes ? bytes(db2.sizeOnDiskBytes) : '—';
+  document.getElementById('dgbVer').textContent = db2.subversion
+      ? String(db2.subversion).replace(/\//g,'') : (db2.coreVersion || '—');
+
+  var w=db2.wallet||{};
+  if(!w.loaded){
+    setPill('walletPill','gray','no wallet');
+    ['walBal','walUnconf','walImmature','walTx','walName'].forEach(function(id){document.getElementById(id).textContent='—';});
+  } else {
+    if(w.encrypted){ setPill('walletPill', w.locked?'amber':'green', w.locked?'encrypted · locked':'encrypted · unlocked'); }
+    else { setPill('walletPill','amber','unencrypted'); }
+    document.getElementById('walBal').textContent = dgb(w.balance);
+    document.getElementById('walUnconf').textContent = dgb(w.unconfirmed);
+    document.getElementById('walImmature').textContent = dgb(w.immature);
+    document.getElementById('walTx').textContent = fmt(w.txCount);
+    document.getElementById('walName').textContent = (w.name!==undefined && w.name!=='') ? w.name : 'default';
+  }
 }
 function markOffline(){
   document.getElementById('offline').classList.add('show');
