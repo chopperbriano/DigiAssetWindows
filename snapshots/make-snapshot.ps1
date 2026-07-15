@@ -139,6 +139,12 @@ function New-ChainDbArchive {
     if (-not (Test-Path $chainDb)) { throw "chain.db not found at $chainDb" }
     $height=0
     if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $height=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
+    if ($height -le 0) {
+        Say "  WARNING: chain.db sync height read as 0 - the node's CLI (syncstate) did not return a height here." 'Red'
+        Say "  The archive would be labelled 'digiasset-chaindb-0.tar.gz'. Build this on the FULLY-SYNCED node box" 'Red'
+        Say "  (where DigiAssetWindows-cli.exe can reach the running node) so the real height is recorded." 'Red'
+        if (-not (Confirm-OrAbort "  Snapshot chain.db anyway with height 0? (y/N)" "chain.db height read as 0")) { return }
+    }
     Say "`nStopping the DigiAsset node (clean shutdown)..." 'Cyan'
     if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
         if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; & $CliExe shutdown 2>$null | Out-Null; Pop-Location } catch { try{Pop-Location}catch{} } }
@@ -174,9 +180,25 @@ function New-Manifest {
     }
     $base = $BaseUrl.TrimEnd('/')
     function Load-Part($name){
+        # Always return a PARSED object (or $null) - never a raw string. R2 serves
+        # .json as octet-stream (with a UTF-8 BOM), which made Invoke-RestMethod
+        # hand back a STRING that then got embedded into snapshot.json as a
+        # stringified blob (with a mangled BOM) instead of a nested object. Fetch
+        # the text ourselves, strip any BOM, and ConvertFrom-Json.
+        $txt = $null
         $local = Join-Path $OutDir $name
-        if (Test-Path $local) { return (Get-Content $local -Raw | ConvertFrom-Json) }
-        try { Say "  fetching $name from R2..."; return (Invoke-RestMethod -Uri "$base/$name" -TimeoutSec 20) } catch { return $null }
+        if (Test-Path $local) {
+            $txt = Get-Content $local -Raw
+        } else {
+            try {
+                Say "  fetching $name from R2..."
+                $r = Invoke-WebRequest -Uri "$base/$name" -UseBasicParsing -TimeoutSec 20
+                $txt = $r.Content
+                if ($txt -is [byte[]]) { $txt = [Text.Encoding]::UTF8.GetString($txt) }
+            } catch { return $null }
+        }
+        if (-not $txt) { return $null }
+        try { return (($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json) } catch { return $null }
     }
     $d = Load-Part 'digibyte-part.json'
     $c = Load-Part 'chaindb-part.json'
