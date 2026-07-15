@@ -61,7 +61,7 @@ function Confirm-OrAbort($question, $reason){
 # elapsed), so a multi-GB compress doesn't look frozen. Compressing ~30 GB with
 # single-threaded gzip is inherently slow (often 20-60 min) - this just shows it's
 # still working. Returns $true on success.
-function Invoke-TarWithProgress($archive, $srcDir, $items, $label) {
+function Invoke-TarWithProgress($archive, $srcDir, $items, $label, $sayEverySec = 300) {
     $argList = @('-czf', "$archive", '-C', "$srcDir") + $items
     $p = Start-Process -FilePath 'tar.exe' -ArgumentList $argList -PassThru -WindowStyle Hidden
     $t0 = Get-Date; $lastSay = $t0
@@ -73,7 +73,7 @@ function Invoke-TarWithProgress($archive, $srcDir, $items, $label) {
         # line is much less frequent (every 5 min) so long archives don't flood the
         # console - the banner is the live "still working" signal.
         Write-Progress -Activity "Archiving $label" -Status ("{0:N2} GB written   elapsed {1}   (compressing, please wait...)" -f $gb, $elStr)
-        if (((Get-Date) - $lastSay).TotalSeconds -ge 300) {
+        if (((Get-Date) - $lastSay).TotalSeconds -ge $sayEverySec) {
             Say ("  ...still archiving $label - {0:N2} GB written, elapsed {1}" -f $gb, $elStr) 'DarkGray'
             $lastSay = Get-Date
         }
@@ -185,7 +185,7 @@ function New-ChainDbArchive {
     $chainFiles = @('chain.db','chain.db-wal','chain.db-shm') | Where-Object { Test-Path (Join-Path $DigiAssetDir $_) }
     $archive = Join-Path $OutDir "digiasset-chaindb-$height.tar.gz"
     Say "Archiving chain.db..." 'Cyan'
-    if (-not (Invoke-TarWithProgress $archive $DigiAssetDir $chainFiles 'chain.db')) { throw "tar failed." }
+    if (-not (Invoke-TarWithProgress $archive $DigiAssetDir $chainFiles 'chain.db' 15)) { throw "tar failed." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
     Say "Computing SHA256 (reads the whole file)..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
