@@ -175,6 +175,22 @@ if ($NoManifest) {
         $cur = $txt | ConvertFrom-Json
         Say ("  live: DigiByte height {0:N0} ({1}), chain.db height {2:N0}" -f [int]$cur.digibyte.height, $cur.digibyte.file, [int]$cur.chaindb.height) 'Green'
     } catch { Say "  WARNING: could not verify snapshot.json: $($_.Exception.Message)" 'Yellow' }
+
+    # Confirm the EXACT path installers use: baseUrl + filename (the public URL,
+    # not the rclone remote). Catches a public-URL/bucket mismatch or a wrong name.
+    if ($cur) {
+        foreach ($fn in @($cur.digibyte.file, $cur.chaindb.file)) {
+            if (-not $fn) { continue }
+            $furl = "$($BaseUrl.TrimEnd('/'))/$fn"
+            try {
+                $hr = Invoke-WebRequest $furl -Method Head -UseBasicParsing -TimeoutSec 30
+                Say ("  reachable: $fn  (HTTP $([int]$hr.StatusCode))") 'Green'
+            } catch {
+                Say ("  WARNING: $fn is NOT reachable at $furl") 'Red'
+                Say ("  Installers download from the public URL - check it maps to bucket '$Bucket'.") 'Red'
+            }
+        }
+    }
 }
 
 # --- 5. Prune old local archives ---------------------------------------------
