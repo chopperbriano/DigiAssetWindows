@@ -1,0 +1,35 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="syncstate">
+<h1 class="title">syncstate</h1>
+<p><tt class="docutils literal">syncstate</tt></p>
+<p>Reports how far the node has synced: the block height DigiByte Core has reached together with the DigiAsset chain analyzer's processing state. Use it to tell whether the node is fully synced and safe to query.</p>
+<div class="section" id="result">
+<h1>Result</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>count</td><td>numeric</td><td>Block height DigiByte Core is currently synced to.</td></tr>
+<tr><td>sync</td><td>numeric</td><td>DigiAsset processing state. Negative numbers indicate how many blocks behind DigiAsset processing is (anything more than 120 behind is unsafe to use). 0 = fully synced; 1 = stopped; 2 = initializing; 3 = rewinding; 4 = optimizing (only occurs on first wallet sync, processed in sections so the node can enter and leave this state several times).</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe syncstate
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "syncstate", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

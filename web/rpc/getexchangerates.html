@@ -1,0 +1,47 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="getexchangerates">
+<h1 class="title">getexchangerates</h1>
+<p><tt class="docutils literal">getexchangerates (height)</tt></p>
+<p>Returns the list of on-chain DigiAsset exchange rates published by oracle addresses. With no argument it returns the current rates; with a block height it returns the rates as they were at that height. Throws if the height is above the current sync height, or if no height is given and sync is more than 120 blocks behind.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>height</td><td>numeric</td><td>optional</td><td>Block height to report the exchange rates as of. If omitted, the current sync height is used.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>Returns an array of objects, each with the following fields. DGB has an implied value of 100000000 and is never included. To convert use <tt class="docutils literal">inputAmount*inputRate/outputRate</tt>.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>height</td><td>numeric</td><td>The block height this exchange rate was recorded at.</td></tr>
+<tr><td>address</td><td>string</td><td>The oracle address this exchange rate was recorded at.</td></tr>
+<tr><td>index</td><td>numeric</td><td>Which index the recorded value was at (0 to 9).</td></tr>
+<tr><td>value</td><td>numeric</td><td>The exchange rate value.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe getexchangerates
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getexchangerates", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

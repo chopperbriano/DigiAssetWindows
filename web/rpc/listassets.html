@@ -1,0 +1,51 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="listassets">
+<h1 class="title">listassets</h1>
+<p><tt class="docutils literal">listassets ( count startIndex basic filter )</tt></p>
+<p>Lists DigiAssets issued on chain in ascending issuance order, starting from a given asset index. Optionally filters by Permanent Storage Pool (PSP) membership and returns either a basic summary or the full asset record.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>count</td><td>numeric</td><td>optional</td><td>Maximum number of records to return. Defaults to unlimited.</td></tr>
+<tr><td>2</td><td>startIndex</td><td>numeric</td><td>optional</td><td>Asset index to start listing from. Defaults to 1.</td></tr>
+<tr><td>3</td><td>basic</td><td>boolean</td><td>optional</td><td>If true (default) returns a basic summary per asset; if false returns the full DigiAsset JSON.</td></tr>
+<tr><td>4</td><td>filter</td><td>object</td><td>optional</td><td>Filter object. Supports a <tt class="docutils literal">psp</tt> member: a boolean (true = only assets in a PSP, false = only assets not in a PSP) or an integer (only assets in that specific PSP). Filtering may make the returned count differ from the requested count and can yield empty pages.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>An array. In basic mode each element is an object with the fields below; when basic is false each element is the full DigiAsset JSON (see getassetdata).</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>assetIndex</td><td>numeric</td><td>Node-specific index of the asset (only valid on this node).</td></tr>
+<tr><td>assetId</td><td>string</td><td>The asset ID.</td></tr>
+<tr><td>cid</td><td>string</td><td>The CID associated with the asset.</td></tr>
+<tr><td>height</td><td>numeric</td><td>The block height at which the asset was issued.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe listassets 10 1
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "listassets", "params": [10, 1]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

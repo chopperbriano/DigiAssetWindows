@@ -1,0 +1,47 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="listlastassetspageindexes">
+<h1 class="title">listlastassetspageindexes</h1>
+<p><tt class="docutils literal">listlastassetspageindexes count ( filter )</tt></p>
+<p>Returns a paginated map of the most recently issued DigiAssets. Instead of the asset data itself, it emits compact {start, skips} index groups so a UI can page through assets by assetIndex.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>count</td><td>numeric</td><td>required</td><td>Number of records per page.</td></tr>
+<tr><td>2</td><td>filter</td><td>object</td><td>optional</td><td>Filter object. Supports a <tt class="docutils literal">psp</tt> member: a boolean (true = only assets in a PSP, false = only assets not in a PSP) or an integer (only assets in that specific PSP). Filtering may make the returned count differ from the requested count.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>An array of page objects, each of the form below.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>start</td><td>numeric</td><td>Highest assetIndex in this page group.</td></tr>
+<tr><td>skips</td><td>array</td><td>Array of assetIndex values that were skipped within this group.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe listlastassetspageindexes 25
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "listlastassetspageindexes", "params": [25]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

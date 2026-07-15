@@ -1,0 +1,43 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="getencryptedkey">
+<h1 class="title">getencryptedkey</h1>
+<p><tt class="docutils literal">getencryptedkey address</tt></p>
+<p>Returns the hex-encoded encrypted key blob(s) the node has stored for an address or list of addresses. Processing stops at the first address that has no stored value, so the returned array may be shorter than the input list.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>address</td><td>string or array</td><td>required</td><td>A single address, or an array of address strings, to look up encrypted keys for.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>result</td><td>array</td><td>Array of hex-encoded encrypted key strings, one per address, in input order, up to the first address with no stored value.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe getencryptedkey dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getencryptedkey", "params": ["dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh"]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

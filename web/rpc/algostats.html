@@ -1,0 +1,52 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="algostats">
+<h1 class="title">algostats</h1>
+<p><tt class="docutils literal">algostats (start end timeFrame)</tt></p>
+<p>Returns per-algorithm mining difficulty statistics grouped into time frames over a given period. Warning: the last time frame in the result is likely not a full period.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>start</td><td>integer</td><td>optional</td><td>Start time (Unix epoch seconds). Default is 0 (the beginning).</td></tr>
+<tr><td>2</td><td>end</td><td>integer</td><td>optional</td><td>End time (Unix epoch seconds). Default is the maximum value (the end).</td></tr>
+<tr><td>3</td><td>timeFrame</td><td>integer</td><td>optional</td><td>Length of each time frame in seconds. Default is 86400 (one day).</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>A JSON array of objects, one per time frame. Each object has the following fields:</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>time</td><td>integer</td><td>The end time of the time frame (Unix epoch seconds).</td></tr>
+<tr><td>algo</td><td>array</td><td>An array with one entry per algorithm index. Each entry is either an object with the stats below, or <tt class="docutils literal">null</tt> if that algorithm had no blocks in the time frame.</td></tr>
+<tr><td>algo[].min</td><td>float</td><td>Minimum block difficulty for the algorithm in the time frame.</td></tr>
+<tr><td>algo[].max</td><td>float</td><td>Maximum block difficulty for the algorithm in the time frame.</td></tr>
+<tr><td>algo[].avg</td><td>float</td><td>Average block difficulty for the algorithm in the time frame.</td></tr>
+<tr><td>algo[].count</td><td>integer</td><td>Number of blocks mined by the algorithm in the time frame.</td></tr>
+</tbody>
+</table>
+<p>If the requested data has been pruned, an empty array is returned.</p>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe algostats 1620000000 1620086400 86400
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "algostats", "params": [1620000000, 1620086400, 86400]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

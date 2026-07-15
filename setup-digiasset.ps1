@@ -785,6 +785,24 @@ function Install-DigiAsset {
         }
         Log "  + $f" 'OK'
     }
+    Install-WebAssets
+}
+# The node serves a local web console on http://localhost:8090 (live node
+# dashboard + searchable RPC reference). Its static files live in a web/ folder
+# next to the exe; they ship as web.zip in the release. Non-fatal: an older
+# release without web.zip simply leaves the previous web/ (or none) in place.
+function Install-WebAssets {
+    $zip = Join-Path $env:TEMP 'digiasset-web.zip'
+    if (-not (Get-File "https://github.com/$Repo/releases/latest/download/web.zip" $zip)) {
+        Log '  (web console assets not in this release - skipping)' 'WARN'; return
+    }
+    try {
+        $dest = Join-Path $DigiAssetDir 'web'
+        if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+        Expand-Archive -Path $zip -DestinationPath $DigiAssetDir -Force   # zip has a top-level web\ folder
+        Log '  + web console (dashboard + RPC reference)' 'OK'
+    } catch { Log "  web console extract failed: $($_.Exception.Message)" 'WARN' }
+    finally { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
 }
 # Keep the pool server binary in sync on a POOL box. Only touches things if
 # DigiAssetPoolServer.exe is already deployed (i.e. this is a pool host). The

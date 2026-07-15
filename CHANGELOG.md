@@ -20,7 +20,31 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.90 through win.97 (current)
+## 0.3.0-win.98 (current) — Node Console on :8090
+
+The built-in web UI (http://localhost:8090) is no longer a static RPC doc dump —
+it's a live **Node Console**, loopback-only.
+
+- **New live endpoint** `GET /api/status.json` (`src/WebServer.cpp`) — reads the
+  same null-safe subsystems the terminal dashboard uses: sync height + chain tip
+  + progress, DigiAssets indexed + latest issuances, IPFS/bitswap serving stats,
+  permanent-storage coverage, service health (Core/DB/IPFS/RPC/Web), external IP,
+  uptime. Never cached; safe to poll.
+- **New dashboard** (`web/index.html`) — a polished dark console with a live
+  **Dashboard** tab (polls every 3s, client-side blocks/sec, offline banner) and
+  an elegant, searchable **RPC Reference** tab with a "how to call these" primer
+  (DigiAsset CLI @14024 vs Core CLI @14022), per-method interface hints, and
+  copy-paste examples.
+- **27 new method docs** — every DigiAssets RPC method
+  (`listassets`, `getassetdata`, `syncstate`, `getexchangerates`, the `async*`
+  trio, …) now has an accurate reference page generated from the actual source.
+  Previously these were broken links upstream.
+- **Web assets now ship to nodes** — `web.zip` is a release asset;
+  `update-node.ps1` and `setup-digiasset.ps1` download + extract it beside the
+  exe (the `web/` folder was never deployed before, so :8090 served nothing on a
+  real node box).
+
+## 0.3.0-win.90 through win.97
 
 ### Tooling (ships from master)
 - `pool/deploy/provision-peer-pool.ps1` — all-in-one: turn a based box into a

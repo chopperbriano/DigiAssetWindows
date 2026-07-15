@@ -34,6 +34,25 @@ $Files       = @('DigiAssetWindows.exe', 'DigiAssetWindows-cli.exe')
 
 function Say($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
 
+# Refresh the local web console (dashboard + RPC reference served on :8090).
+# The static files live in a web\ folder next to the exe and ship as web.zip in
+# the release. Non-fatal: a release without web.zip just leaves the existing
+# web\ in place, and the swapped exe still runs fine.
+function Update-WebAssets($dir, $repo) {
+    $url = "https://github.com/$repo/releases/latest/download/web.zip"
+    $zip = Join-Path $env:TEMP 'dgb-web.zip'
+    try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 120 }
+    catch { Say '  (web.zip not in this release - keeping existing web console)' 'DarkGray'; return }
+    if (-not (Test-Path $zip) -or (Get-Item $zip).Length -lt 1KB) { return }
+    try {
+        $dest = Join-Path $dir 'web'
+        if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+        Expand-Archive -Path $zip -DestinationPath $dir -Force   # zip has a top-level web\ folder
+        Say '  updated web console (dashboard + RPC reference)' 'Green'
+    } catch { Say "  (could not extract web.zip: $($_.Exception.Message))" 'Yellow' }
+    finally { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+}
+
 # A real Windows .exe starts with 'MZ' and is not tiny - reject a truncated
 # download or an HTML/error page before it overwrites the working binary.
 function Test-Exe($p) {
@@ -107,6 +126,7 @@ try {
         Copy-Item -Path $downloaded[$f] -Destination (Join-Path $DigiAssetDir $f) -Force
         Say "  updated $f" 'Green'
     }
+    Update-WebAssets $DigiAssetDir $Repo
     if ($tag) { try { Set-Content -Path $tagFile -Value $tag -Encoding ASCII } catch {} }
 } finally {
     foreach ($t in $disabled) { try { Enable-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue | Out-Null } catch {} }

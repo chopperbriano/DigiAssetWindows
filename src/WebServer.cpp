@@ -10,9 +10,15 @@
 //
 
 #include "WebServer.h"
+#include "AppMain.h"
 #include "Config.h"
 #include "CurlHandler.h"
+#include "DigiByteCore.h"
 #include "Log.h"
+#include "NodeStats.h"
+#include "Version.h"
+#include <jsoncpp/json/value.h>
+#include <jsoncpp/json/writer.h>
 
 // Use real Boost Beast headers (not the stub in src/boost/)
 // The NuGet Boost include path must come before src/ in CMakeLists
@@ -116,6 +122,131 @@ std::string WebServer::getExternalIP() {
     return _externalIP;
 }
 
+// Assembles the live node-status snapshot served at /api/status.json. Pulls from
+// the same null-safe AppMain singletons the console dashboard reads, so the
+// browser dashboard and the terminal dashboard always agree. Every subsystem is
+// optional: a not-yet-wired analyzer/db/core reports zero/false rather than
+// erroring, so this is safe to call at any point in the process lifetime.
+std::string WebServer::statusJson() {
+    AppMain* app = AppMain::GetInstance();
+    Json::Value root;
+
+    root["product"] = getProductVersionString();
+    root["buildVersion"] = getVersionString();
+    root["upstream"] = getUpstreamVersionString();
+
+    // ---- Sync -------------------------------------------------------------
+    ChainAnalyzer* analyzer = app->getChainAnalyzerIfSet();
+    int syncState = analyzer ? analyzer->getSync() : ChainAnalyzer::STOPPED;
+    unsigned int syncHeight = analyzer ? analyzer->getSyncHeight() : 0;
+
+    // Chain tip via DigiByte Core is a synchronous RPC; tolerate it being down.
+    unsigned int chainTip = 0;
+    DigiByteCore* dgb = app->getDigiByteCoreIfSet();
+    if (dgb) {
+        try { chainTip = static_cast<unsigned int>(dgb->getBlockCount()); } catch (...) {}
+    }
+    if (chainTip == 0) chainTip = syncHeight; // fallback so progress isn't NaN
+
+    std::string statusText;
+    int blocksBehind = 0;
+    bool synced = false;
+    if (syncState == ChainAnalyzer::SYNCED) { statusText = "Fully Synced"; synced = true; }
+    else if (syncState == ChainAnalyzer::STOPPED) { statusText = "Stopped"; }
+    else if (syncState == ChainAnalyzer::INITIALIZING) { statusText = "Initializing"; }
+    else if (syncState == ChainAnalyzer::REWINDING) { statusText = "Rewinding (fork detected)"; }
+    else if (syncState == ChainAnalyzer::BUSY) { statusText = "Optimizing indexes"; }
+    else { blocksBehind = -syncState; statusText = "Syncing"; }
+
+    double progress = 0.0;
+    if (chainTip > 0 && syncHeight > 0) {
+        progress = static_cast<double>(syncHeight) / static_cast<double>(chainTip);
+        if (progress > 1.0) progress = 1.0;
+    }
+
+    Json::Value sync;
+    sync["state"] = syncState;
+    sync["status"] = statusText;
+    sync["synced"] = synced;
+    sync["height"] = static_cast<Json::UInt>(syncHeight);
+    sync["chainTip"] = static_cast<Json::UInt>(chainTip);
+    sync["blocksBehind"] = blocksBehind;
+    sync["progress"] = progress;
+    root["sync"] = sync;
+
+    // ---- Assets -----------------------------------------------------------
+    Database* db = app->getDatabaseIfSet();
+    Json::Value assets;
+    assets["count"] = db ? static_cast<Json::UInt64>(db->getAssetCountOnChain()) : 0;
+    assets["topIndex"] = db ? static_cast<Json::UInt64>(db->getMaxAssetIndex()) : 0;
+    Json::Value recent(Json::arrayValue);
+    if (db) {
+        try {
+            auto last = db->getLastAssetsIssued(8);
+            for (const auto& a : last) {
+                Json::Value item;
+                item["assetIndex"] = static_cast<Json::UInt64>(a.assetIndex);
+                item["assetId"] = a.assetId;
+                item["height"] = static_cast<Json::UInt>(a.height);
+                recent.append(item);
+            }
+        } catch (...) {}
+    }
+    assets["recent"] = recent;
+    root["assets"] = assets;
+
+    // ---- IPFS / bitswap + coverage (cached in NodeStats by the dashboard) --
+    auto snap = NodeStats::instance().snapshot();
+    Json::Value ipfs;
+    ipfs["connected"] = (app->getIPFSIfSet() != nullptr);
+    Json::Value bitswap;
+    bitswap["probed"] = snap.bitswapProbed;
+    bitswap["available"] = snap.bitswapAvailable;
+    bitswap["blocksSent"] = static_cast<Json::UInt64>(snap.blocksSent);
+    bitswap["dataSent"] = static_cast<Json::UInt64>(snap.dataSent);
+    bitswap["blocksPerMin"] = snap.blocksPerMin;
+    ipfs["bitswap"] = bitswap;
+    root["ipfs"] = ipfs;
+
+    Json::Value coverage;
+    coverage["checked"] = snap.coverageChecked;
+    coverage["tracked"] = static_cast<Json::UInt>(snap.coverageTracked);
+    coverage["have"] = static_cast<Json::UInt>(snap.coverageHave);
+    coverage["missing"] = static_cast<Json::UInt>(
+            snap.coverageTracked > snap.coverageHave ? snap.coverageTracked - snap.coverageHave : 0);
+    root["coverage"] = coverage;
+
+    // ---- Services ---------------------------------------------------------
+    Json::Value services;
+    services["digibyteCore"] = (dgb != nullptr);
+    services["database"] = (db != nullptr);
+
+    Json::Value rpc;
+    rpc["online"] = (app->getRpcServerIfSet() != nullptr);
+    unsigned int rpcPort = 14024;
+    try { Config cfg("config.cfg"); rpcPort = static_cast<unsigned int>(cfg.getInteger("rpcassetport", 14024)); } catch (...) {}
+    rpc["port"] = static_cast<Json::UInt>(rpcPort);
+    services["rpc"] = rpc;
+
+    Json::Value web;
+    web["port"] = static_cast<Json::UInt>(_port);
+    web["running"] = _running.load();
+    services["web"] = web;
+    root["services"] = services;
+
+    // ---- Node identity ----------------------------------------------------
+    Json::Value node;
+    node["externalIP"] = getExternalIP();
+    auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::steady_clock::now() - _startTime).count();
+    node["uptimeSeconds"] = static_cast<Json::UInt64>(uptime);
+    root["node"] = node;
+
+    Json::StreamWriterBuilder wb;
+    wb["indentation"] = ""; // compact single-line JSON
+    return Json::writeString(wb, root);
+}
+
 // Background-thread body. Binds a TCP acceptor on 0.0.0.0:_port and serves
 // requests synchronously, one at a time: reject non-GET methods and targets that
 // are empty, non-absolute, or contain ".." (path-traversal guard); otherwise map
@@ -169,6 +300,30 @@ void WebServer::serverLoop() {
                     res.body() = "Illegal request-target";
                     res.prepare_payload();
                     http::write(socket, res, ec);
+                    continue;
+                }
+
+                // Live node-status API. Loopback-only (the acceptor binds
+                // 127.0.0.1), read-only, and never cached so the dashboard can
+                // poll it. Matches a leading prefix so a cache-busting query
+                // string (/api/status.json?t=123) still resolves here.
+                if (target.rfind("/api/status.json", 0) == 0) {
+                    std::string json;
+                    try {
+                        json = statusJson();
+                    } catch (const std::exception& e) {
+                        json = std::string("{\"error\":\"") + e.what() + "\"}";
+                    } catch (...) {
+                        json = "{\"error\":\"unknown\"}";
+                    }
+                    res.result(http::status::ok);
+                    res.set(http::field::content_type, "application/json");
+                    res.set(http::field::cache_control, "no-store");
+                    res.body() = json;
+                    res.keep_alive(req.keep_alive());
+                    res.prepare_payload();
+                    http::write(socket, res, ec);
+                    socket.shutdown(tcp::socket::shutdown_send, ec);
                     continue;
                 }
 

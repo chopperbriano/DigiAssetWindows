@@ -13,6 +13,7 @@
 #define DIGIASSET_CORE_WEBSERVER_H
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
 
@@ -43,6 +44,12 @@ private:
     // Thread body: binds the acceptor and serves requests until stop requested.
     void serverLoop();
 
+    // Builds the live node-status JSON served at /api/status.json. Reads the
+    // node's subsystems through AppMain's null-safe getters (same sources the
+    // console dashboard uses), so it is safe to call before every subsystem is
+    // wired up. Never throws for a missing subsystem; reports zero/false instead.
+    std::string statusJson();
+
     unsigned short _port = 8090;
     std::string _webRoot;
     std::string _srcRoot;
@@ -53,6 +60,9 @@ private:
     // Cached external IP
     std::string _externalIP;
     bool _externalIPFetched = false;
+
+    // Process start, captured at construction, for the dashboard uptime figure.
+    std::chrono::steady_clock::time_point _startTime = std::chrono::steady_clock::now();
 };
 
 #endif // DIGIASSET_CORE_WEBSERVER_H
