@@ -31,6 +31,17 @@ class NodeStats {
     unsigned int _coverageTracked = 0;
     unsigned int _coverageHave = 0;
 
+    // Pool + payout, populated by the dashboard's background checks so the web
+    // console and getnodestats can report them without doing their own fetches.
+    bool _poolProbed = false;
+    bool _poolReachable = false;
+    unsigned int _poolNodesOnline = 0;
+    std::string _poolServer;
+    std::string _poolStatus;     // human text, e.g. "Hosting pool files"
+    std::string _paymentStatus;  // human text, e.g. "active" / "registered (no payouts yet)"
+    std::string _payoutAddress;
+    std::string _payoutBalance;
+
     NodeStats() = default;
 
 public:
@@ -45,6 +56,13 @@ public:
     // Record how many tracked assets the node has content for; marks coverage as checked.
     void setCoverage(unsigned int tracked, unsigned int have);
 
+    // Record the configured pool's reachability + online node count; marks pool probed.
+    void setPool(bool reachable, unsigned int nodesOnline, const std::string& server);
+    // Record the human-readable pool hosting + payment status strings.
+    void setPoolStatus(const std::string& poolStatus, const std::string& paymentStatus);
+    // Record the payout address + last-known balance string.
+    void setPayout(const std::string& address, const std::string& balance);
+
     // Plain-data copy of all cached fields, returned atomically by snapshot().
     struct Snapshot {
         bool bitswapProbed;
@@ -55,6 +73,14 @@ public:
         bool coverageChecked;
         unsigned int coverageTracked;
         unsigned int coverageHave;
+        bool poolProbed;
+        bool poolReachable;
+        unsigned int poolNodesOnline;
+        std::string poolServer;
+        std::string poolStatus;
+        std::string paymentStatus;
+        std::string payoutAddress;
+        std::string payoutBalance;
     };
     // Return a lock-guarded consistent copy of all current stats.
     Snapshot snapshot();

@@ -803,17 +803,21 @@ void ConsoleDashboard::render() {
         //                                         that doesn't send the field)
         //   red    unavailable                  - /list registration probe didn't respond
         //   dim    checking...                  - not probed yet
+        std::string paymentPlain = "checking...";
         if (pool) {
             std::string lp2 = std::string("Payment:") + std::string(COL1_LABEL_W - 8, ' ');
             out << ERASE_LINE << "  " << lp2;
             if (regHealth == mctrivia::Health::Ok) {
                 if (payoutsEnabled) {
+                    paymentPlain = "active";
                     out << FG_GREEN << "active" << RESET;
                 } else {
+                    paymentPlain = "registered (no payouts yet)";
                     out << FG_YELLOW << "registered (no payouts yet)" << RESET
                         << DIM << " - pool operator has not enabled payouts" << RESET;
                 }
             } else if (regHealth == mctrivia::Health::Broken) {
+                paymentPlain = "unavailable";
                 out << FG_RED << "unavailable" << RESET
                     << DIM << " - pool payment service offline" << RESET;
             } else {
@@ -821,6 +825,10 @@ void ConsoleDashboard::render() {
             }
             out << "\n"; totalRows++;
         }
+
+        // Mirror the plain hosting + payment status into NodeStats for the web
+        // console (statusText was computed above from the same pool health).
+        NodeStats::instance().setPoolStatus(statusText, paymentPlain);
     }
 
     // Row: Serving. Proves to the operator that blocks are actively flowing
@@ -1348,14 +1356,22 @@ void ConsoleDashboard::checkPspRegistration() {
             nodeCount++;
             pos += 4;
         }
-        std::lock_guard<std::mutex> lock(_pspStatusMutex);
-        _pspNodeCount = nodeCount;
-        _pspStatus = "Pool reachable";
-        _lastPspCheck = now; // cache for 10 min
+        {
+            std::lock_guard<std::mutex> lock(_pspStatusMutex);
+            _pspNodeCount = nodeCount;
+            _pspStatus = "Pool reachable";
+            _lastPspCheck = now; // cache for 10 min
+        }
+        // Mirror to NodeStats so the web console can show pool reachability + node
+        // count without doing its own /nodes.json fetch on the request thread.
+        NodeStats::instance().setPool(true, (unsigned int)nodeCount, getConfiguredPoolBase());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(_pspStatusMutex);
-        _pspStatus = "Pool unreachable";
-        // don't cache failure — retry next refresh
+        {
+            std::lock_guard<std::mutex> lock(_pspStatusMutex);
+            _pspStatus = "Pool unreachable";
+            // don't cache failure — retry next refresh
+        }
+        NodeStats::instance().setPool(false, 0, getConfiguredPoolBase());
     }
 }
 
@@ -1492,6 +1508,10 @@ void ConsoleDashboard::loadPayoutInfo() {
     }
 
     if (_payoutAddress.empty()) return;
+
+    // Mirror to NodeStats every frame so the web console shows the payout address
+    // immediately and picks up the balance one frame after the periodic fetch below.
+    NodeStats::instance().setPayout(_payoutAddress, _payoutBalance);
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration<double>(now - _lastBalanceTime).count();

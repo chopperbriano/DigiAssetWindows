@@ -19,11 +19,23 @@
   body{
     font-family:var(--sans);background:var(--bg);color:var(--tx);line-height:1.55;
     min-height:100vh;
-    background-image:
-      radial-gradient(60% 50% at 15% -5%, rgba(31,111,235,0.10), transparent 60%),
-      radial-gradient(50% 40% at 100% 0%, rgba(63,185,80,0.06), transparent 60%);
-    background-attachment:fixed;
+    background-color:var(--bg);
   }
+  /* animated network background — same constellation + aurora vibe as pool.digistamp.co */
+  body::before{
+    content:"";position:fixed;inset:-20%;z-index:-2;pointer-events:none;
+    background:
+      radial-gradient(38% 42% at 22% 28%, rgba(31,111,235,0.22), transparent 60%),
+      radial-gradient(34% 38% at 82% 22%, rgba(63,185,80,0.15), transparent 60%),
+      radial-gradient(45% 45% at 60% 88%, rgba(88,166,255,0.14), transparent 62%);
+    filter:blur(8px);animation:bgdrift 26s ease-in-out infinite alternate;
+  }
+  @keyframes bgdrift{
+    0%{transform:translate3d(-3%,-2%,0) scale(1.05)}
+    50%{transform:translate3d(3%,2%,0) scale(1.12)}
+    100%{transform:translate3d(-2%,3%,0) scale(1.06)}
+  }
+  #bg{position:fixed;inset:0;z-index:-1;pointer-events:none}
   a{color:var(--accent);text-decoration:none}
   a:hover{text-decoration:underline}
 
@@ -51,7 +63,7 @@
   nav.tabs button.active{background:var(--accent2);color:#fff}
   nav.tabs button:not(.active):hover{color:var(--tx);background:var(--panel)}
 
-  main{max-width:1200px;margin:0 auto;padding:22px 20px 80px}
+  main{max-width:1200px;margin:0 auto;padding:22px 20px 80px;position:relative;z-index:1}
   .view{display:none}
   .view.active{display:block}
 
@@ -62,7 +74,8 @@
 
   /* ---- Dashboard grid ---- */
   .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
-  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);
+  .card{background:linear-gradient(180deg,rgba(20,26,36,0.80),rgba(15,20,29,0.80));
+        backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);border:1px solid var(--border);
         border-radius:13px;padding:18px 19px;position:relative;overflow:hidden}
   .card h2{font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--tx-dim);
            margin-bottom:13px;display:flex;align-items:center;gap:8px}
@@ -176,6 +189,7 @@
 </style>
 </head>
 <body>
+<canvas id="bg"></canvas>
 <header>
   <div class="brand">
     <svg class="logo" viewBox="0 0 90 90" aria-hidden="true"><circle cx="45" cy="45" r="45" fill="#0f62c4"/><path fill="#fff" d="M53.5 24C64.2 24 73.5 33.3 73.5 44.2c0 8.7-5.6 14.9-12 20.1-1.6 1.2-5.8 4.3-8.6 6.4-1.2.9-2.9 0-2.9-1.5v-1c0-1.8-1.5-3.3-3.3-3.3H35.6c-1.2 0-2.1-1-2-2.2.1-1 1-1.8 2-1.8h4.6c1.5-.1 2.6-1.4 2.5-2.9-.1-1.5-1.4-2.6-2.8-2.6h-11.3c-1.2 0-2.1-1-2-2.2.1-1 1-1.8 2-1.8h5.4c1.5 0 2.7-1.2 2.7-2.7s-1.2-2.7-2.7-2.7h-4.9c-1.1 0-2-.9-2-2s.9-2 2-2h4.9c1.8 0 3.2-1.7 2.6-3.6-.4-1.1-1.4-1.8-2.6-1.8h-4.5c-1.2 0-2.1-1-2-2.2.1-1 1-1.8 2-1.8H53.5zM61 44.2c0-4.4-3.3-7.6-7.9-7.6h-4.4c-1 0-1.8.8-1.8 1.8V50c0 1 .8 1.8 1.8 1.8h4.4c4.6 0 7.9-3.2 7.9-7.6z"/></svg>
@@ -204,6 +218,7 @@
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
           <span class="pill gray" id="syncPill"><span class="pd"></span><span id="syncPillTxt">—</span></span>
           <span class="sub" id="syncSpeed"></span>
+          <span class="sub" id="syncEta"></span>
         </div>
         <div class="bar" id="syncBarWrap"><i id="syncBar"></i></div>
         <div style="display:flex;justify-content:space-between;font-size:.82rem;color:var(--tx-dim)">
@@ -248,6 +263,23 @@
         <div class="qlinks">
           <a href="#" onclick="showView('rpc');return false">RPC Reference →</a>
           <a href="/api/status.json" target="_blank">Raw JSON</a>
+        </div>
+      </div>
+
+      <!-- Pool & Payouts -->
+      <div class="card span12">
+        <h2>Pool &amp; Payouts</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+          <div>
+            <div style="margin-bottom:9px"><span class="pill gray" id="poolPill"><span class="pd"></span><span>—</span></span></div>
+            <div class="row"><span class="k">Nodes online</span><span class="v" id="poolNodes">—</span></div>
+            <div class="row"><span class="k">Pool server</span><span class="v" id="poolServer" style="font-size:.78rem">—</span></div>
+          </div>
+          <div>
+            <div style="margin-bottom:9px"><span class="pill gray" id="payPill"><span class="pd"></span><span>—</span></span></div>
+            <div class="row"><span class="k">Payout address</span><span class="v" id="payAddr">—</span></div>
+            <div class="row"><span class="k">Balance</span><span class="v" id="payBal">—</span></div>
+          </div>
         </div>
       </div>
 
@@ -356,10 +388,12 @@ function applyStatus(d){
     speedEMA = speedEMA===null?bps:(speedEMA*0.6+bps*0.4);
   } else if(s.height<=lastH){ speedEMA=speedEMA===null?null:speedEMA*0.5; }
   lastH=s.height; lastT=now;
-  var sp=document.getElementById('syncSpeed');
+  var sp=document.getElementById('syncSpeed'), eta=document.getElementById('syncEta');
   if(!s.synced && speedEMA && speedEMA>0.05){
     sp.textContent = speedEMA>=1 ? (speedEMA.toFixed(1)+' blk/s') : (Math.round(1/speedEMA)+' s/blk');
-  } else sp.textContent = s.synced?'':'';
+    var behind = s.blocksBehind || (s.chainTip>s.height ? s.chainTip-s.height : 0);
+    eta.textContent = behind>0 ? ('ETA ~'+dur(behind/speedEMA)) : '';
+  } else { sp.textContent=''; eta.textContent = s.synced?'up to date':''; }
 
   // Assets
   var a=d.assets||{};
@@ -408,6 +442,27 @@ function applyStatus(d){
   setPill('svcRpc', (sv.rpc&&sv.rpc.online)?'green':'red', (sv.rpc&&sv.rpc.online)?('Port '+sv.rpc.port):'Off');
   setPill('svcWeb', (sv.web&&sv.web.running)?'green':'gray', (sv.web&&sv.web.running)?('Port '+sv.web.port):'—');
   if(sv.rpc&&sv.rpc.port) document.getElementById('assetPort').textContent=sv.rpc.port;
+
+  // Pool & payouts
+  var pl=d.pool||{};
+  if(!pl.probed){ setPill('poolPill','gray','checking…'); }
+  else if(!pl.reachable){ setPill('poolPill','red','Pool unreachable'); }
+  else {
+    var st=pl.status||'Pool reachable';
+    var pcls = /unreachable|degraded/i.test(st) ? 'amber'
+             : (/unpaid/i.test(st) ? 'amber' : 'green');
+    setPill('poolPill', pcls, st);
+  }
+  document.getElementById('poolNodes').textContent = pl.probed ? fmt(pl.nodesOnline) : '—';
+  document.getElementById('poolServer').textContent = pl.server || '—';
+  var pay=d.payout||{}, pmt=pl.payment||'';
+  if(!pmt){ setPill('payPill','gray','—'); }
+  else if(pmt==='active'){ setPill('payPill','green','active'); }
+  else if(/registered/i.test(pmt)){ setPill('payPill','amber','registered'); }
+  else if(/unavailable/i.test(pmt)){ setPill('payPill','red','unavailable'); }
+  else { setPill('payPill','gray',pmt); }
+  document.getElementById('payAddr').textContent = pay.address || '—';
+  document.getElementById('payBal').textContent = pay.balance || '—';
 }
 function markOffline(){
   document.getElementById('offline').classList.add('show');
@@ -422,6 +477,32 @@ function poll(){
     .catch(markOffline);
 }
 poll(); setInterval(poll, 3000);
+
+/* ---------- Animated network background (constellation + aurora) ---------- */
+(function(){
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var c=document.getElementById('bg'); if(!c) return; var ctx=c.getContext('2d');
+  var DPR=Math.min(window.devicePixelRatio||1,2), W,H,ps,maxD,raf;
+  function resize(){ W=c.width=Math.floor(innerWidth*DPR); H=c.height=Math.floor(innerHeight*DPR);
+    c.style.width=innerWidth+'px'; c.style.height=innerHeight+'px'; maxD=Math.min(150,innerWidth*0.16)*DPR; }
+  function init(){ resize(); var n=Math.max(22,Math.min(78,Math.floor(innerWidth*innerHeight/19000))); ps=[];
+    for(var i=0;i<n;i++) ps.push({x:Math.random()*W,y:Math.random()*H,
+      vx:(Math.random()-.5)*0.22*DPR, vy:(Math.random()-.5)*0.22*DPR, g:Math.random()<0.34}); }
+  function draw(){ ctx.clearRect(0,0,W,H);
+    for(var i=0;i<ps.length;i++){ var p=ps[i]; p.x+=p.vx; p.y+=p.vy;
+      if(p.x<0||p.x>W)p.vx*=-1; if(p.y<0||p.y>H)p.vy*=-1;
+      for(var j=i+1;j<ps.length;j++){ var q=ps[j],dx=p.x-q.x,dy=p.y-q.y,d=Math.sqrt(dx*dx+dy*dy);
+        if(d<maxD){ var a=(1-d/maxD)*0.20; ctx.strokeStyle='rgba(88,166,255,'+a.toFixed(3)+')';
+          ctx.lineWidth=DPR; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke(); } } }
+    for(var k=0;k<ps.length;k++){ var pp=ps[k]; ctx.beginPath(); ctx.arc(pp.x,pp.y,1.6*DPR,0,6.2832);
+      ctx.fillStyle=pp.g?'rgba(126,231,135,0.85)':'rgba(88,166,255,0.75)'; ctx.fill(); }
+    raf=requestAnimationFrame(draw); }
+  function stop(){ if(raf){cancelAnimationFrame(raf);raf=null;} }
+  function start(){ if(!raf && !reduce && !document.hidden) draw(); }
+  init(); if(reduce) draw(); else start();
+  addEventListener('resize', init);
+  document.addEventListener('visibilitychange', function(){ document.hidden?stop():start(); });
+})();
 
 /* ---------- RPC method catalog ---------- */
 /* iface: 'asset' = DigiAssetWindows-cli (port 14024) · 'core' = digibyte-cli (14022) */

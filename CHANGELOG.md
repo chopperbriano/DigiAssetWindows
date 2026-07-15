@@ -39,6 +39,14 @@ it's a live **Node Console**, loopback-only.
   (`listassets`, `getassetdata`, `syncstate`, `getexchangerates`, the `async*`
   trio, …) now has an accurate reference page generated from the actual source.
   Previously these were broken links upstream.
+- **Full parity with the terminal dashboard** — pool reachability + online node
+  count, hosting/payment status, payout address and balance now flow through the
+  shared `NodeStats` singleton (written by the console's existing background
+  checks) so the web console shows them too, plus a live ETA. New **Pool &
+  Payouts** card.
+- **Same look as pool.digistamp.co** — animated constellation + drifting aurora
+  background, translucent cards, matching dark palette. Pauses when hidden and
+  respects `prefers-reduced-motion`.
 - **Web assets now ship to nodes** — `web.zip` is a release asset;
   `update-node.ps1` and `setup-digiasset.ps1` download + extract it beside the
   exe (the `web/` folder was never deployed before, so :8090 served nothing on a

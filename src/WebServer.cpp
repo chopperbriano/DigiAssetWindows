@@ -234,6 +234,21 @@ std::string WebServer::statusJson() {
     services["web"] = web;
     root["services"] = services;
 
+    // ---- Pool + payouts (mirrored from the dashboard via NodeStats) -------
+    Json::Value pool;
+    pool["probed"] = snap.poolProbed;
+    pool["reachable"] = snap.poolReachable;
+    pool["nodesOnline"] = static_cast<Json::UInt>(snap.poolNodesOnline);
+    pool["server"] = snap.poolServer;
+    pool["status"] = snap.poolStatus;      // e.g. "Hosting pool files"
+    pool["payment"] = snap.paymentStatus;  // e.g. "active" / "registered (no payouts yet)"
+    root["pool"] = pool;
+
+    Json::Value payout;
+    payout["address"] = snap.payoutAddress;
+    payout["balance"] = snap.payoutBalance;
+    root["payout"] = payout;
+
     // ---- Node identity ----------------------------------------------------
     Json::Value node;
     node["externalIP"] = getExternalIP();
