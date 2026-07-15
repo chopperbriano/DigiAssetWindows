@@ -70,7 +70,7 @@ function Invoke-TarWithProgress($archive, $srcDir, $items, $label) {
         $gb = 0.0; if (Test-Path $archive) { try { $gb = (Get-Item $archive).Length / 1GB } catch {} }
         $elStr = ((Get-Date) - $t0).ToString('hh\:mm\:ss')
         Write-Progress -Activity "Archiving $label" -Status ("{0:N2} GB written   elapsed {1}   (compressing, please wait...)" -f $gb, $elStr)
-        if (((Get-Date) - $lastSay).TotalSeconds -ge 30) {
+        if (((Get-Date) - $lastSay).TotalSeconds -ge 15) {
             Say ("  ...still archiving $label - {0:N2} GB written, elapsed {1}" -f $gb, $elStr) 'DarkGray'
             $lastSay = Get-Date
         }
