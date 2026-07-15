@@ -171,14 +171,15 @@ if ($NoManifest) {
     try {
         $resp = Invoke-WebRequest ("$($BaseUrl.TrimEnd('/'))/snapshot.json") -UseBasicParsing -TimeoutSec 30
         $txt = $resp.Content; if ($txt -is [byte[]]) { $txt = [Text.Encoding]::UTF8.GetString($txt) }
-        $cur = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+        $txt = $txt.TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF)   # strip BOM (U+FEFF or mojibake)
+        $cur = $txt | ConvertFrom-Json
         Say ("  live: DigiByte height {0:N0} ({1}), chain.db height {2:N0}" -f [int]$cur.digibyte.height, $cur.digibyte.file, [int]$cur.chaindb.height) 'Green'
     } catch { Say "  WARNING: could not verify snapshot.json: $($_.Exception.Message)" 'Yellow' }
 }
 
 # --- 5. Prune old local archives ---------------------------------------------
 Step 5 "Pruning old local archives (keeping newest $KeepLocal of each kind)"
-foreach ($pat in 'digibyte-*.tar.gz','digiasset-chaindb-*.tar.gz') {
+foreach ($pat in 'digibyte*.tar.gz','digiasset-chaindb*.tar.gz') {
     Get-ChildItem (Join-Path $OutDir $pat) -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
         Select-Object -Skip $KeepLocal | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; Say "  - removed $($_.Name)" 'Gray' }
 }

@@ -57,6 +57,14 @@ function Confirm-OrAbort($question, $reason){
     return ((Read-Host $question) -match '^[Yy]')
 }
 
+# Write UTF-8 WITHOUT a BOM. PowerShell 5.1's `Set-Content -Encoding UTF8` prepends
+# a BOM (EF BB BF); when R2 serves the file back as octet-stream, the BOM arrives as
+# "ï»¿" and ConvertFrom-Json rejects it ("Invalid JSON primitive: ï"). BOM-free
+# output keeps snapshot.json + the part files parseable everywhere.
+function Write-Utf8NoBom($path, $text) {
+    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # Run `tar -czf` as a background process with a live heartbeat (archive size +
 # elapsed), so a multi-GB compress doesn't look frozen. Compressing ~30 GB with
 # single-threaded gzip is inherently slow (often 20-60 min) - this just shows it's
@@ -146,14 +154,18 @@ function New-DigiByteArchive {
     Start-Sleep -Seconds 2
     $dgbDirs = @('blocks','chainstate','indexes') | Where-Object { Test-Path (Join-Path $DgbData $_) }
     if ($dgbDirs -notcontains 'blocks' -or $dgbDirs -notcontains 'chainstate') { throw "blocks\ or chainstate\ missing under $DgbData." }
-    $archive = Join-Path $OutDir "digibyte-$h.tar.gz"
+    # FIXED filename (no height suffix) so the URL in snapshot.json is stable and R2
+    # just overwrites. Remove any old digibyte archives first so we never upload
+    # stale copies (rclone copy would otherwise push every *.tar.gz in the folder).
+    $archive = Join-Path $OutDir 'digibyte.tar.gz'
+    Get-ChildItem $OutDir -Filter 'digibyte*.tar.gz' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Say "Archiving the DigiByte blockchain (big - compressing ~30 GB can take 20-60 min)..." 'Cyan'
     if (-not (Invoke-TarWithProgress $archive $DgbData $dgbDirs 'DigiByte blockchain')) { throw "tar failed." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
     Say "Computing SHA256 (reads the whole file, ~a minute for a large archive)..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
     $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$h; version=$ver; sizeBytes=(Get-Item $archive).Length }
-    ($part|ConvertTo-Json) | Set-Content -Path (Join-Path $OutDir 'digibyte-part.json') -Encoding UTF8
+    Write-Utf8NoBom (Join-Path $OutDir 'digibyte-part.json') ($part|ConvertTo-Json)
     Say "  + digibyte-part.json" 'Green'
     if ($running -and $qtPath) { Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`"" }
 }
@@ -162,10 +174,14 @@ function New-DigiByteArchive {
 function New-ChainDbArchive {
     $chainDb = Join-Path $DigiAssetDir 'chain.db'
     if (-not (Test-Path $chainDb)) { throw "chain.db not found at $chainDb" }
-    $height=0
-    if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $height=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
-    if ($height -le 0 -and $Height -gt 0) { $height = $Height }   # allow a manual stamp
-    if ($height -le 0) {
+    # Use $cdbHeight, NOT $height: PowerShell variable names are case-INSENSITIVE,
+    # so a local $height would BE the $Height parameter - and `$height=0` here would
+    # clobber the caller's -Height to 0 (that bug made chain.db always publish as
+    # height 0 even when -Height was passed).
+    $cdbHeight = 0
+    if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $cdbHeight=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
+    if ($cdbHeight -le 0 -and $Height -gt 0) { $cdbHeight = $Height }   # allow a manual stamp
+    if ($cdbHeight -le 0) {
         Say "  NOTE: chain.db height unknown (no running node here to read syncstate) - labelling it 0." 'Yellow'
         Say "  Cosmetic only; fast-sync still works. Pass -Height <N> to record the real height." 'Yellow'
     }
@@ -183,15 +199,19 @@ function New-ChainDbArchive {
     }
     Start-Sleep -Seconds 2
     $chainFiles = @('chain.db','chain.db-wal','chain.db-shm') | Where-Object { Test-Path (Join-Path $DigiAssetDir $_) }
-    $archive = Join-Path $OutDir "digiasset-chaindb-$height.tar.gz"
+    # FIXED filename (no height suffix) so the URL in snapshot.json is stable and R2
+    # just overwrites. Remove any old chaindb archives first so we never upload stale
+    # copies (rclone copy would otherwise push every *.tar.gz in the folder).
+    $archive = Join-Path $OutDir 'digiasset-chaindb.tar.gz'
+    Get-ChildItem $OutDir -Filter 'digiasset-chaindb*.tar.gz' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Say "Archiving chain.db..." 'Cyan'
     if (-not (Invoke-TarWithProgress $archive $DigiAssetDir $chainFiles 'chain.db' 15)) { throw "tar failed." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
     Say "Computing SHA256 (reads the whole file)..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-    $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$height; sizeBytes=(Get-Item $archive).Length }
-    ($part|ConvertTo-Json) | Set-Content -Path (Join-Path $OutDir 'chaindb-part.json') -Encoding UTF8
-    Say "  + chaindb-part.json  (chain.db height: $height)" 'Green'
+    $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$cdbHeight; sizeBytes=(Get-Item $archive).Length }
+    Write-Utf8NoBom (Join-Path $OutDir 'chaindb-part.json') ($part|ConvertTo-Json)
+    Say "  + chaindb-part.json  (chain.db height: $cdbHeight)" 'Green'
     if (Test-Path $NodeExe) { Say "Restarting the node..." 'Cyan'; Start-Process -FilePath $NodeExe -WorkingDirectory $DigiAssetDir }
 }
 
@@ -234,7 +254,7 @@ function New-Manifest {
         if (-not (Confirm-OrAbort "  Write the manifest anyway? (y/N)" "chain.db height ahead of DigiByte snapshot")) { return }
     }
     $man=[ordered]@{ baseUrl=$base; created=(Get-Date).ToString('s'); digibyte=$d; chaindb=$c }
-    ($man|ConvertTo-Json -Depth 6) | Set-Content -Path (Join-Path $OutDir 'snapshot.json') -Encoding UTF8
+    Write-Utf8NoBom (Join-Path $OutDir 'snapshot.json') ($man|ConvertTo-Json -Depth 6)
     Say "`n  + snapshot.json  (digibyte height $($d.height), chain.db height $($c.height))" 'Green'
 }
 

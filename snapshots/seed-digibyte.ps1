@@ -81,8 +81,14 @@ try {
     $resp = Invoke-WebRequest -Uri $SnapshotUrl -UseBasicParsing -TimeoutSec 30
     $txt = $resp.Content
     if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
-    $m = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+    # Strip a UTF-8 BOM whether it decoded as U+FEFF or as mojibake bytes (ï»¿).
+    $txt = $txt.TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF)
+    $m = $txt | ConvertFrom-Json
 } catch { throw "Could not fetch/parse manifest ($SnapshotUrl): $($_.Exception.Message)" }
+# Defensive: re-parse digibyte if an old/corrupt manifest carried it as a string.
+if ($m -and $m.digibyte -is [string]) {
+    try { $m.digibyte = (($m.digibyte).TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF) | ConvertFrom-Json) } catch {}
+}
 if (-not $m -or -not $m.digibyte -or -not $m.baseUrl) { throw 'Manifest is missing digibyte / baseUrl.' }
 $base = ("$($m.baseUrl)").TrimEnd('/')
 $url  = "$base/$($m.digibyte.file)"

@@ -1191,9 +1191,19 @@ function Restore-Snapshot {
         $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
         $txt = $resp.Content
         if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
-        $m = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+        # Strip a UTF-8 BOM whether it decoded as U+FEFF or as mojibake bytes (ï»¿).
+        $txt = $txt.TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF)
+        $m = $txt | ConvertFrom-Json
     } catch { Log '  snapshot manifest unreachable/invalid - syncing normally.' 'WARN'; return }
     if (-not $m -or -not $m.baseUrl) { Log '  snapshot manifest has no baseUrl - syncing normally.' 'WARN'; return }
+    # Defensive: an older/corrupt manifest could carry digibyte/chaindb as a STRING
+    # (a stringified JSON blob, sometimes BOM-prefixed) instead of a nested object -
+    # re-parse so a bad manifest doesn't break fast-sync.
+    foreach ($k in 'digibyte','chaindb') {
+        if ($m.$k -is [string]) {
+            try { $m.$k = (($m.$k).TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF) | ConvertFrom-Json) } catch {}
+        }
+    }
     $base = ("$($m.baseUrl)").TrimEnd('/')
     if ($m.digibyte -and -not (Test-Path (Join-Path $DgbData 'blocks'))) {
         Ensure-Dir $DgbData
