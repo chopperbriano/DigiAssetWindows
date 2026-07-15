@@ -85,6 +85,7 @@ function New-DigiByteArchive {
     if (-not (Test-Path (Join-Path $DgbData 'blocks'))) { throw "No DigiByte blockchain at $DgbData (no blocks\ folder). Pass -DataDir <folder with blocks\ + chainstate\>." }
     Say "`nDigiByte data: $DgbData" 'White'
     $h = if ($Height -gt 0) { $Height } else { 0 }
+    $h = $Height   # base height (0 unless -Height was passed); RPC below overrides it when reachable
     $ver = 'unknown'
     # Capture whichever is running (GUI wallet OR headless daemon) so we restart
     # the SAME one afterwards - previously a running digibyted was left stopped.
@@ -139,11 +140,10 @@ function New-ChainDbArchive {
     if (-not (Test-Path $chainDb)) { throw "chain.db not found at $chainDb" }
     $height=0
     if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $height=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
+    if ($height -le 0 -and $Height -gt 0) { $height = $Height }   # allow a manual stamp
     if ($height -le 0) {
-        Say "  WARNING: chain.db sync height read as 0 - the node's CLI (syncstate) did not return a height here." 'Red'
-        Say "  The archive would be labelled 'digiasset-chaindb-0.tar.gz'. Build this on the FULLY-SYNCED node box" 'Red'
-        Say "  (where DigiAssetWindows-cli.exe can reach the running node) so the real height is recorded." 'Red'
-        if (-not (Confirm-OrAbort "  Snapshot chain.db anyway with height 0? (y/N)" "chain.db height read as 0")) { return }
+        Say "  NOTE: chain.db height unknown (no running node here to read syncstate) - labelling it 0." 'Yellow'
+        Say "  Cosmetic only; fast-sync still works. Pass -Height <N> to record the real height." 'Yellow'
     }
     Say "`nStopping the DigiAsset node (clean shutdown)..." 'Cyan'
     if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {

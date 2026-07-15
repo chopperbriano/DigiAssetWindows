@@ -33,6 +33,7 @@ param(
     [string]$DigiByteDir  = 'C:\DigiByte',
     [string]$DigiAssetDir = 'C:\DigiAssetWindows',
     [string]$DataDir      = '',
+    [int]   $Height       = 0,        # stamp both archives with this height (for a data-copy box with nothing running)
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
     [int]   $KeepLocal    = 1,        # keep newest N local .tar.gz of each kind
     [switch]$PruneRemote,             # delete superseded archives from R2 too
@@ -68,7 +69,7 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not $admin) {
     if ($PSCommandPath) {
         Say 'Snapshot publish needs Administrator - approve the UAC prompt...' 'Yellow'
-        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
+        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
         if ($NoManifest)  { $fwd += ' -NoManifest' }
         if ($Schedule)    { $fwd += " -Schedule -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
@@ -119,6 +120,7 @@ $snapArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$makeSnap,
               '-Component',$step1Component,'-NonInteractive',
               '-DigiByteDir',$DigiByteDir,'-DigiAssetDir',$DigiAssetDir,'-OutDir',$OutDir)
 if ($DataDir) { $snapArgs += @('-DataDir',$DataDir) }
+if ($Height -gt 0) { $snapArgs += @('-Height', "$Height") }
 & powershell.exe @snapArgs
 if ($LASTEXITCODE -ne 0) { throw "make-snapshot failed (exit $LASTEXITCODE)." }
 
