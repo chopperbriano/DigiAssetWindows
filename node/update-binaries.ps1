@@ -30,7 +30,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.3.0'
+$ScriptVersion = '2.4.0'
 # A real Windows .exe starts with 'MZ'. Reject a truncated download or an HTML
 # error body before we overwrite a working binary with garbage.
 function Test-ValidExe($path) {
@@ -122,6 +122,30 @@ function Get-SourceExe($item) {
     return $null
 }
 
+# Refresh the :8090 web console (the web\ folder next to the exe). From a local
+# build we copy the repo's web\; from a release we download web.zip. Must run
+# BEFORE the node restarts, since the server picks its web root at startup.
+function Update-WebConsole {
+    $dest = Join-Path $DigiAssetDir 'web'
+    try {
+        if ($FromBuild) {
+            $srcWeb = Join-Path $RepoRoot 'web'
+            if (-not (Test-Path (Join-Path $srcWeb 'index.html'))) { return }
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+            Copy-Item -LiteralPath $srcWeb -Destination $DigiAssetDir -Recurse -Force
+            Write-Host "  + web console (from build)" -ForegroundColor Green
+        } else {
+            $zip = Join-Path $Tmp 'web.zip'
+            try { Invoke-WebRequest "https://github.com/$Repo/releases/latest/download/web.zip" -OutFile $zip -UseBasicParsing -TimeoutSec 120 }
+            catch { Write-Host "  (web.zip not in this release - keeping existing web console)" -ForegroundColor DarkGray; return }
+            if (-not (Test-Path $zip) -or (Get-Item $zip).Length -lt 1KB) { return }
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+            Expand-Archive -Path $zip -DestinationPath $DigiAssetDir -Force   # zip has a top-level web\ folder
+            Write-Host "  + web console (from release)" -ForegroundColor Green
+        }
+    } catch { Write-Host "  (web console refresh skipped: $($_.Exception.Message))" -ForegroundColor Yellow }
+}
+
 # Pause the auto-restart supervisors so they can't relaunch the OLD exe during
 # the swap (which would re-lock the file or leave two instances). Re-enabled in
 # the finally block no matter what happens.
@@ -165,6 +189,9 @@ try {
         Write-Host "  + updated $($it.name)" -ForegroundColor Green
         if ($it.restart) { $restartList += @{ exe = $dst; proc = $it.proc } }
     }
+
+    # Refresh the web console before restarting the node so it finds web\ at boot.
+    if ($updated -gt 0) { Update-WebConsole }
 
     if ($updated -gt 0) {
         foreach ($r in $restartList) {
