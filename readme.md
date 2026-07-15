@@ -341,7 +341,20 @@ in one command with `pool/deploy/provision-peer-pool.ps1`; see
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the pieces fit together · **[CHANGELOG.md](CHANGELOG.md)** — release history.
 - **[Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)** — the `.exe`s + scripts for each build.
 
-The web UI is built into `DigiAssetWindows.exe` — once running, open http://localhost:8090/ in your browser.
+### The Node Console (http://localhost:8090)
+
+Built into `DigiAssetWindows.exe` (no separate exe) — once the node is running,
+open **http://localhost:8090** in a browser. It's a live, loopback-only console:
+
+- **Dashboard** — sync progress + ETA, DigiAssets indexed + latest issuances,
+  IPFS serving, permanent-storage coverage, **DigiByte network + wallet** (balance,
+  peers, verification %, difficulty), **pool status + payout**, and service health.
+  Same animated look as the pool site; refreshes every few seconds.
+- **RPC Reference** — a searchable, categorized browser for every RPC method
+  (DigiAssets methods documented from source), with a "how to call these" primer
+  and copy-paste CLI/curl examples.
+
+Keep port 8090 private — never forward it.
 
 ## Credits
 

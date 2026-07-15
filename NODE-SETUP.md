@@ -119,6 +119,12 @@ Windows**, your **local firewall** + **hosting ports** (4001 and 12024), and
 
 Other quick checks:
 
+- **In your browser — the Node Console:** open **http://localhost:8090**. It's a
+  live dashboard of your node: sync progress, DigiAssets indexed + latest
+  issuances, IPFS serving, permanent-storage coverage, **DigiByte network + wallet**
+  (balance, peers, verification %), and your **pool status + payout**. A second
+  tab is a searchable **RPC Reference** with copy-paste examples for every method.
+  (Loopback-only — it stays on your machine; never forward port 8090.)
 - **In the app:** in the `DigiAssetWindows.exe` window press **`P`** (re-tests port
   4001) or **`N`** (lists pool nodes; yours is marked `<-- YOU`).
 - **From anywhere:** visit https://pool.digistamp.co — your node shows up in the
