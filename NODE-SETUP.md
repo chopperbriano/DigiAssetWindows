@@ -54,6 +54,11 @@ paid) — then does everything else automatically:
   **auto-updates the components** and re-checks health — logging to `C:\DigiAssetWindows\logs`
   and alerting you only if something needs your attention.
 
+**Fast-sync is automatic.** On a fresh install it downloads, verifies, and extracts
+a pre-synced blockchain + `chain.db` snapshot, so a new node is ready in minutes
+instead of days. If the snapshot is ever unavailable it just falls back to a normal
+sync — nothing to configure.
+
 You do **not** edit any files by hand. The only manual step is one router port
 forward (next section).
 
