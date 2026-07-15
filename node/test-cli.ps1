@@ -84,8 +84,8 @@ function Invoke-Cli {
         $status = 'FAIL'   # command not recognized
     } elseif ($code -ne 0 -and $t -eq '') {
         $status = 'FAIL'   # non-zero exit, no output at all
-    } elseif ($lower -match '"error"|^error\b|error:|exception|invalid parameter|not found|does not exist|no such|missing') {
-        $status = 'NOTE'   # method ran, returned an error/empty result
+    } elseif ($lower -match 'error code:|error message:|"error"\s*:|^error\b|\bexception\b') {
+        $status = 'NOTE'   # method ran, returned an error (its actual CLI error format)
     } elseif ($t -eq '') {
         $status = 'NOTE'   # empty but clean exit (e.g. void-ish)
     } else {
@@ -102,7 +102,7 @@ function Invoke-Cli {
 }
 
 # Small helper: pull the first regex capture from CLI JSON-ish text.
-function First-Match($text, $pattern) {
+function Get-FirstMatch($text, $pattern) {
     $m = [regex]::Match($text, $pattern)
     if ($m.Success) { return $m.Groups[1].Value }
     return ''
@@ -115,7 +115,7 @@ Out2 '==============================================================' 'Cyan'
 
 # ---- Preflight: is the node reachable? ---------------------------------------
 Out2 "`n[preflight]" 'White'
-$ver = Invoke-Cli 'version' @('version') 'preflight'
+Invoke-Cli 'version' @('version') 'preflight' | Out-Null
 if ($results[0].Status -eq 'FAIL') {
     Out2 "`nThe node did not answer 'version'. Is DigiAssetWindows.exe running and synced enough to serve RPC (port 14024)?" 'Red'
     Out2 "Start the node, then re-run this test." 'Red'
@@ -123,25 +123,25 @@ if ($results[0].Status -eq 'FAIL') {
     exit 2
 }
 $sync = Invoke-Cli 'syncstate' @('syncstate') 'preflight'
-$syncH = First-Match $sync '"height"\s*:\s*(\d+)'
+$syncH = Get-FirstMatch $sync '"height"\s*:\s*(\d+)'
 if ($syncH) { Out2 "  node analyzer height: $syncH" 'Gray' }
 
 # ---- Auto-discover a sample asset / address / exchange rate ------------------
 Out2 "`n[discovery]" 'White'
 if (-not $AssetIndex -or -not $AssetId) {
     $sample = Invoke-Cli 'listlastassets(discover)' @('listlastassets', '1') 'discovery'
-    if (-not $AssetIndex) { $AssetIndex = First-Match $sample '"assetIndex"\s*:\s*(\d+)' }
-    if (-not $AssetId)    { $AssetId    = First-Match $sample '"assetId"\s*:\s*"([^"]+)"' }
+    if (-not $AssetIndex) { $AssetIndex = Get-FirstMatch $sample '"assetIndex"\s*:\s*(\d+)' }
+    if (-not $AssetId)    { $AssetId    = Get-FirstMatch $sample '"assetId"\s*:\s*"([^"]+)"' }
 }
 if (-not $Address -and $AssetIndex) {
     $holders = Invoke-Cli 'getassetholders(discover)' @('getassetholders', "$AssetIndex") 'discovery'
     # holders is an object { "address": count, ... } - grab the first key that looks like an address
-    $Address = First-Match $holders '"([A-Za-z0-9]{20,})"\s*:'
+    $Address = Get-FirstMatch $holders '"([A-Za-z0-9]{20,})"\s*:'
 }
 # an exchange-rate publisher (address + index) for getdgbequivalent, if any exist
 $rates = Invoke-Cli 'getexchangerates(discover)' @('getexchangerates') 'discovery'
-$rateAddr = First-Match $rates '"address"\s*:\s*"([^"]+)"'
-$rateIdx  = First-Match $rates '"index"\s*:\s*(\d+)'
+$rateAddr = Get-FirstMatch $rates '"address"\s*:\s*"([^"]+)"'
+$rateIdx  = Get-FirstMatch $rates '"index"\s*:\s*(\d+)'
 if (-not $rateAddr) { $rateAddr = $Address; $rateIdx = '0' }
 
 $aiDisp  = if ($AssetIndex) { $AssetIndex } else { '(none)' }
