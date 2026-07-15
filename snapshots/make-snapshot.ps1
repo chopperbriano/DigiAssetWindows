@@ -69,8 +69,11 @@ function Invoke-TarWithProgress($archive, $srcDir, $items, $label) {
         Start-Sleep -Seconds 3
         $gb = 0.0; if (Test-Path $archive) { try { $gb = (Get-Item $archive).Length / 1GB } catch {} }
         $elStr = ((Get-Date) - $t0).ToString('hh\:mm\:ss')
+        # Live banner (blue box) refreshes every loop (~3s); the scrolling text log
+        # line is much less frequent (every 5 min) so long archives don't flood the
+        # console - the banner is the live "still working" signal.
         Write-Progress -Activity "Archiving $label" -Status ("{0:N2} GB written   elapsed {1}   (compressing, please wait...)" -f $gb, $elStr)
-        if (((Get-Date) - $lastSay).TotalSeconds -ge 15) {
+        if (((Get-Date) - $lastSay).TotalSeconds -ge 300) {
             Say ("  ...still archiving $label - {0:N2} GB written, elapsed {1}" -f $gb, $elStr) 'DarkGray'
             $lastSay = Get-Date
         }
