@@ -332,6 +332,7 @@ in one command with `pool/deploy/provision-peer-pool.ps1`; see
 
 ## Documentation
 
+- **[CHEATSHEET.md](CHEATSHEET.md)** — one page, every script: pick your role (node / pool / peer pool / snapshot), copy the command. Start here.
 - **[NODE-SETUP.md](NODE-SETUP.md)** — run a node and get paid: one-line install, ports, monitoring, updating.
 - **[POOL-SETUP.md](POOL-SETUP.md)** — run a Permanent Storage Pool: setup, payouts, and running multiple **peer-aware, auto-discovering pools** as one network.
 - **[pool/README.md](pool/README.md)** — pool reference: every `pool.cfg` key, the verification model, the payout flow.
