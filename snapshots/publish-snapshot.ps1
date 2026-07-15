@@ -36,6 +36,7 @@ param(
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
     [int]   $KeepLocal    = 1,        # keep newest N local .tar.gz of each kind
     [switch]$PruneRemote,             # delete superseded archives from R2 too
+    [switch]$NoManifest,              # upload the archive(s) only; do NOT rebuild/replace snapshot.json
     [switch]$Schedule,                # register a weekly task instead of running now
     [string]$ScheduleDay  = 'Sunday',
     [string]$ScheduleTime = '03:00'
@@ -69,6 +70,7 @@ if (-not $admin) {
         Say 'Snapshot publish needs Administrator - approve the UAC prompt...' 'Yellow'
         $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
+        if ($NoManifest)  { $fwd += ' -NoManifest' }
         if ($Schedule)    { $fwd += " -Schedule -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; return
     } else { throw 'Run this in an elevated (Administrator) PowerShell.' }
@@ -138,22 +140,32 @@ foreach ($partName in 'digibyte-part.json','chaindb-part.json') {
 }
 
 # --- 3. Rebuild + upload snapshot.json ---------------------------------------
-Step 3 'Rebuilding + uploading snapshot.json'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component manifest -NonInteractive -BaseUrl $BaseUrl -OutDir $OutDir
-$manifest = Join-Path $OutDir 'snapshot.json'
-if (-not (Test-Path $manifest)) { throw 'snapshot.json was not produced.' }
-& rclone copyto $manifest "$remote/snapshot.json" --s3-no-check-bucket
-if ($LASTEXITCODE -ne 0) { throw "rclone upload of snapshot.json failed (exit $LASTEXITCODE)." }
-
-# --- 4. Verify it's live -----------------------------------------------------
-Step 4 'Verifying the live manifest'
+# -NoManifest: the archive(s) are now on R2, but we deliberately DON'T rebuild
+# snapshot.json. Use this to stage a new chain.db without making it live, then
+# publish a height-consistent pair later with -Component both.
 $cur = $null
-try {
-    $resp = Invoke-WebRequest ("$($BaseUrl.TrimEnd('/'))/snapshot.json") -UseBasicParsing -TimeoutSec 30
-    $txt = $resp.Content; if ($txt -is [byte[]]) { $txt = [Text.Encoding]::UTF8.GetString($txt) }
-    $cur = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
-    Say ("  live: DigiByte height {0:N0} ({1}), chain.db height {2:N0}" -f [int]$cur.digibyte.height, $cur.digibyte.file, [int]$cur.chaindb.height) 'Green'
-} catch { Say "  WARNING: could not verify snapshot.json: $($_.Exception.Message)" 'Yellow' }
+if ($NoManifest) {
+    Write-Host ''
+    Say '[3] Skipping snapshot.json (-NoManifest).' 'Yellow'
+    Say '    The archive(s) are uploaded, but the LIVE manifest still points at the previous parts.' 'Yellow'
+    Say '    Publish a consistent pair later with:  .\publish-snapshot.ps1 -Component both' 'Yellow'
+} else {
+    Step 3 'Rebuilding + uploading snapshot.json'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component manifest -NonInteractive -BaseUrl $BaseUrl -OutDir $OutDir
+    $manifest = Join-Path $OutDir 'snapshot.json'
+    if (-not (Test-Path $manifest)) { throw 'snapshot.json was not produced.' }
+    & rclone copyto $manifest "$remote/snapshot.json" --s3-no-check-bucket
+    if ($LASTEXITCODE -ne 0) { throw "rclone upload of snapshot.json failed (exit $LASTEXITCODE)." }
+
+    # --- 4. Verify it's live -------------------------------------------------
+    Step 4 'Verifying the live manifest'
+    try {
+        $resp = Invoke-WebRequest ("$($BaseUrl.TrimEnd('/'))/snapshot.json") -UseBasicParsing -TimeoutSec 30
+        $txt = $resp.Content; if ($txt -is [byte[]]) { $txt = [Text.Encoding]::UTF8.GetString($txt) }
+        $cur = ($txt.TrimStart([char]0xFEFF)) | ConvertFrom-Json
+        Say ("  live: DigiByte height {0:N0} ({1}), chain.db height {2:N0}" -f [int]$cur.digibyte.height, $cur.digibyte.file, [int]$cur.chaindb.height) 'Green'
+    } catch { Say "  WARNING: could not verify snapshot.json: $($_.Exception.Message)" 'Yellow' }
+}
 
 # --- 5. Prune old local archives ---------------------------------------------
 Step 5 "Pruning old local archives (keeping newest $KeepLocal of each kind)"
