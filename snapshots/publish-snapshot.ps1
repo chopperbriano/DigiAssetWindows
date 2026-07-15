@@ -112,7 +112,14 @@ Say '==============================================================' 'Cyan'
 # The manifest is built once, correctly, in Step 3 (which passes -BaseUrl).
 $step1Component = if ($Component -eq 'both') { 'archives' } else { $Component }
 Step 1 'Building snapshot archives (stops + restarts DigiByte / the node)'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $makeSnap -Component $step1Component -NonInteractive -DigiByteDir $DigiByteDir -DigiAssetDir $DigiAssetDir -DataDir $DataDir -OutDir $OutDir
+# Build the argument list and only add -DataDir when it's set. Passing an EMPTY
+# -DataDir through `powershell.exe -File` drops the empty token, so make-snapshot
+# saw "-DataDir" with no value and failed ("Missing an argument for parameter").
+$snapArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$makeSnap,
+              '-Component',$step1Component,'-NonInteractive',
+              '-DigiByteDir',$DigiByteDir,'-DigiAssetDir',$DigiAssetDir,'-OutDir',$OutDir)
+if ($DataDir) { $snapArgs += @('-DataDir',$DataDir) }
+& powershell.exe @snapArgs
 if ($LASTEXITCODE -ne 0) { throw "make-snapshot failed (exit $LASTEXITCODE)." }
 
 # --- 2. Upload archives + part files -----------------------------------------
