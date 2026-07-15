@@ -57,6 +57,28 @@ function Confirm-OrAbort($question, $reason){
     return ((Read-Host $question) -match '^[Yy]')
 }
 
+# Run `tar -czf` as a background process with a live heartbeat (archive size +
+# elapsed), so a multi-GB compress doesn't look frozen. Compressing ~30 GB with
+# single-threaded gzip is inherently slow (often 20-60 min) - this just shows it's
+# still working. Returns $true on success.
+function Invoke-TarWithProgress($archive, $srcDir, $items, $label) {
+    $argList = @('-czf', "$archive", '-C', "$srcDir") + $items
+    $p = Start-Process -FilePath 'tar.exe' -ArgumentList $argList -PassThru -WindowStyle Hidden
+    $t0 = Get-Date; $lastSay = $t0
+    while (-not $p.HasExited) {
+        Start-Sleep -Seconds 3
+        $gb = 0.0; if (Test-Path $archive) { try { $gb = (Get-Item $archive).Length / 1GB } catch {} }
+        $elStr = ((Get-Date) - $t0).ToString('hh\:mm\:ss')
+        Write-Progress -Activity "Archiving $label" -Status ("{0:N2} GB written   elapsed {1}   (compressing, please wait...)" -f $gb, $elStr)
+        if (((Get-Date) - $lastSay).TotalSeconds -ge 30) {
+            Say ("  ...still archiving $label - {0:N2} GB written, elapsed {1}" -f $gb, $elStr) 'DarkGray'
+            $lastSay = Get-Date
+        }
+    }
+    Write-Progress -Activity "Archiving $label" -Completed
+    return ($p.ExitCode -eq 0)
+}
+
 # --- Elevate --------------------------------------------------------------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
@@ -122,11 +144,10 @@ function New-DigiByteArchive {
     $dgbDirs = @('blocks','chainstate','indexes') | Where-Object { Test-Path (Join-Path $DgbData $_) }
     if ($dgbDirs -notcontains 'blocks' -or $dgbDirs -notcontains 'chainstate') { throw "blocks\ or chainstate\ missing under $DgbData." }
     $archive = Join-Path $OutDir "digibyte-$h.tar.gz"
-    Say "Archiving the DigiByte blockchain (big - be patient)..." 'Cyan'
-    & tar.exe -czf "$archive" -C "$DgbData" $dgbDirs
-    if ($LASTEXITCODE -ne 0) { throw "tar failed (exit $LASTEXITCODE)." }
+    Say "Archiving the DigiByte blockchain (big - compressing ~30 GB can take 20-60 min)..." 'Cyan'
+    if (-not (Invoke-TarWithProgress $archive $DgbData $dgbDirs 'DigiByte blockchain')) { throw "tar failed." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
-    Say "Computing SHA256..." 'Cyan'
+    Say "Computing SHA256 (reads the whole file, ~a minute for a large archive)..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
     $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$h; version=$ver; sizeBytes=(Get-Item $archive).Length }
     ($part|ConvertTo-Json) | Set-Content -Path (Join-Path $OutDir 'digibyte-part.json') -Encoding UTF8
@@ -161,10 +182,9 @@ function New-ChainDbArchive {
     $chainFiles = @('chain.db','chain.db-wal','chain.db-shm') | Where-Object { Test-Path (Join-Path $DigiAssetDir $_) }
     $archive = Join-Path $OutDir "digiasset-chaindb-$height.tar.gz"
     Say "Archiving chain.db..." 'Cyan'
-    & tar.exe -czf "$archive" -C "$DigiAssetDir" $chainFiles
-    if ($LASTEXITCODE -ne 0) { throw "tar failed (exit $LASTEXITCODE)." }
+    if (-not (Invoke-TarWithProgress $archive $DigiAssetDir $chainFiles 'chain.db')) { throw "tar failed." }
     Say ("  + {0} ({1:N1} GB)" -f (Split-Path $archive -Leaf),((Get-Item $archive).Length/1GB)) 'Green'
-    Say "Computing SHA256..." 'Cyan'
+    Say "Computing SHA256 (reads the whole file)..." 'Cyan'
     $sha=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
     $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$height; sizeBytes=(Get-Item $archive).Length }
     ($part|ConvertTo-Json) | Set-Content -Path (Join-Path $OutDir 'chaindb-part.json') -Encoding UTF8
