@@ -73,6 +73,8 @@ Pick your role below — you only need the scripts in your section.
 | Update binaries, incl. pool exe | `node\update-binaries.ps1 -IncludePool` |
 | Install exes you just compiled | `node\update-binaries.ps1 -FromBuild -IncludePool` |
 | Force reinstall even if up to date | `node\update-binaries.ps1 -Force` |
+| **Smoke-test every CLI command** (auto-discovers a real asset/address) | `node\test-cli.ps1` |
+| CLI test + save transcript | `node\test-cli.ps1 -OutFile cli-test.log` |
 | **Check for a memory leak** (log Private Bytes over time) | `node\memwatch.ps1 -OutCsv C:\temp\mem.csv` |
 | Benchmark sync speed (prep, then run) | `node\bench-sync.ps1 -Prepare` then `node\bench-sync.ps1 -Pipeline 1` |
 
