@@ -3,7 +3,11 @@ project(DigiAssetWindows-cli)
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-set(CMAKE_CXX_STANDARD 11)
+if(MSVC)
+  set(CMAKE_CXX_STANDARD 20)   # match the lib (upstream designated initializers)
+else()
+  set(CMAKE_CXX_STANDARD 11)
+endif()
 
 include_directories("${CMAKE_SOURCE_DIR}/jsoncpp/install/include")
 include_directories("${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/include")
@@ -17,6 +21,7 @@ set(HEADER_FILES
 set(SOURCE_FILES
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
+        ../src/utils.cpp
         )
 
 if(WIN32 AND MSVC)

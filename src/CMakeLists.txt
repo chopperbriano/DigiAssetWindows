@@ -56,7 +56,12 @@ endforeach()
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-set(CMAKE_CXX_STANDARD 11)
+# C++20 on MSVC so upstream's designated initializers compile (see root CMakeLists).
+if(MSVC)
+  set(CMAKE_CXX_STANDARD 20)
+else()
+  set(CMAKE_CXX_STANDARD 11)
+endif()
 FIND_PACKAGE(JSONCPP REQUIRED)
 FIND_PACKAGE(JSONRPCCPP REQUIRED)
 find_package(CURL)
@@ -96,6 +101,7 @@ set(HEADER_FILES
         Base58.h
         serialize.h
         DigiAssetTypes.h
+        DigiAssetConstants.h
         DigiByteDomain.h
         Config.h
         RPC/Server.h
@@ -123,6 +129,7 @@ set(HEADER_FILES
         Database_LockedStatement.h
         crypto/ripemd.h
         crypto/SHA256.h
+        InstanceLock.h
         )
 
 set(SOURCE_FILES
@@ -175,6 +182,7 @@ set(SOURCE_FILES
         jsonrpccpp/common/streamwriter.cpp
         jsonrpccpp/client/client.cpp
         jsonrpccpp/client/connectors/httpclient.cpp
+        InstanceLock.cpp
         )
 
 add_executable(DigiAssetWindows main.cpp ${SOURCE_FILES} ${HEADER_FILES} ${RPC_METHODS_FILES})

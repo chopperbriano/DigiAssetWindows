@@ -24,6 +24,7 @@ LockedStatement::LockedStatement(Statement& statement)
 // Reports how long the lock was held to the owning Statement (for profiling)
 // and, as the _lock member is destroyed, releases the mutex.
 LockedStatement::~LockedStatement() {
+    sqlite3_reset(_stmt); //release any read lock before giving up the mutex
     auto duration = std::chrono::steady_clock::now() - _creationTime;
     _creator->addLockDuration(std::chrono::duration_cast<std::chrono::microseconds>(duration));
 }
@@ -79,6 +80,7 @@ double LockedStatement::getColumnDouble(int index) {
 // the query/schema guaranteeing the column is non-NULL.
 std::string LockedStatement::getColumnText(int index) {
     const unsigned char* text = sqlite3_column_text(_stmt, index);
+    if (text == nullptr) return "";
     return std::string(reinterpret_cast<const char*>(text));
 }
 

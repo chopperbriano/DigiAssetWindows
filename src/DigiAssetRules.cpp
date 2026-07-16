@@ -12,6 +12,7 @@
 #include "AppMain.h"
 #include "DigiAsset.h"
 #include "DigiAssetTypes.h"
+#include "DigiAssetConstants.h"
 #include "serialize.h"
 #include <algorithm>
 
@@ -171,8 +172,8 @@ void DigiAssetRules::decodeRoyaltyUnits(const getrawtransaction_t& txData, BitIO
 
         //standard currency
         unsigned int erIndex = dataStream.getBits(7); //0..127 but only 20 standard rates exist
-        if (erIndex >= DigiAsset::standardExchangeRatesCount) throw out_of_range("standard exchange rate index out of bounds"); //audit MUST-FIX #4
-        _exchangeRate = DigiAsset::standardExchangeRates[erIndex];
+        if (erIndex >= DigiAssetConstants::standardExchangeRatesCount) throw out_of_range("standard exchange rate index out of bounds"); //audit MUST-FIX #4
+        _exchangeRate = DigiAssetConstants::standardExchangeRates[erIndex];
 
     } else {
 
@@ -262,12 +263,11 @@ void DigiAssetRules::decodeVoteAndExpiry(const getrawtransaction_t& txData, BitI
     //get address list
     if (voteStart == -1) {
         //default list(recommended as counts are tracked and garbage auto collected)
-        if (voteLength > DigiAsset::standardVoteCount) throw out_of_range("vote length exceeds standard address list"); //audit MUST-FIX #3
+        if (voteLength > DigiAssetConstants::standardVoteCount) throw out_of_range("vote length exceeds standard address list"); //audit MUST-FIX #3
         for (unsigned char i = 0; i < voteLength; i++) {
-            VoteOption opt;
-            opt.address = DigiAsset::standardVoteAddresses[i];
-            opt.label = "";
-            _voteOptions.emplace_back(opt);
+            _voteOptions.emplace_back(VoteOption{
+                    .address = DigiAssetConstants::standardVoteAddresses[i],
+                    .label = ""});
         }
 
     } else {
@@ -763,7 +763,7 @@ std::vector<VoteOption> DigiAssetRules::getVoteOptions() {
         if (!votes.isArray()) throw exceptionVoteOptionsCorrupt();
         bool usingString = (votes.empty() ||
                             votes[0].isString()); //allowed either array of vote labels or array of strings
-        if ((usingString) && (votes.size() > DigiAsset::standardVoteCount)) {
+        if ((usingString) && (votes.size() > DigiAssetConstants::standardVoteCount)) {
             throw exceptionVoteOptionsCorrupt();
         }
 
@@ -775,10 +775,9 @@ std::vector<VoteOption> DigiAssetRules::getVoteOptions() {
 
                 //array of string processing
                 if (!vote.isString()) throw exceptionVoteOptionsCorrupt(); //invalid format
-                VoteOption opt;
-                opt.address = DigiAsset::standardVoteAddresses[i];
-                opt.label = vote.asString();
-                options.emplace_back(opt);
+                options.emplace_back(VoteOption{
+                        .address = DigiAssetConstants::standardVoteAddresses[i],
+                        .label = vote.asString()});
 
             } else {
 

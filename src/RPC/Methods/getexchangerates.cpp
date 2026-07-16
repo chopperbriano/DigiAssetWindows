@@ -31,7 +31,7 @@ namespace RPC {
         *    units will be same as units used for inputAmount
         *
         *    so for example if you wanted to convert from USD to DGB you would get the inputRate where
-        *    address="dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh" and index=1(see DigiAsset::standardExchangeRates in DigiAsset.cpp for standard exchange rate addresses and indexes)
+        *    address="dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh" and index=1(see DigiAssetConstants::standardExchangeRates in DigiAsset.cpp for standard exchange rate addresses and indexes)
         *    and use 100000000 as the outputRate
         */
         extern const Response getexchangerates(const Json::Value& params) {

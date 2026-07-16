@@ -23,6 +23,7 @@
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
 #include "utils.h"
 #include <algorithm>
+#include <cstdint>
 #include <mutex>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -249,6 +250,10 @@ void Database::initializeClassValues() {
     addPerformanceIndex("utxos", "heightCreated");
     addPerformanceIndex("utxos", "heightDestroyed");
     addPerformanceIndex("votes", "height");
+
+    //covering indexes for hot queries (getAddressHoldings, getAssetHolders, getValidUTXO)
+    addPerformanceIndex("utxos", "address", "heightDestroyed", "assetIndex", "amount");
+    addPerformanceIndex("utxos", "assetIndex", "heightDestroyed", "address", "amount");
 
 
 
@@ -700,6 +705,32 @@ Database::Database(const string& newFileName) {
         throw exceptionFailedToOpen();
     }
 
+    //configure SQLite performance pragmas
+    sqlite3_busy_timeout(_db, 5000); //5 second busy timeout instead of manual retry
+    sqlite3_exec(_db, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
+    sqlite3_wal_autocheckpoint(_db, 0); //disable auto-checkpoint on main connection (it would fail with SQLITE_LOCKED due to active cursors)
+
+    //open a second connection dedicated to WAL checkpointing
+    //a same-connection checkpoint returns SQLITE_LOCKED whenever any prepared statement
+    //has an active cursor (stepped but not reset).  With 10+ IPFS/RPC threads constantly
+    //querying, there is almost always an active cursor, so same-connection checkpoints
+    //silently fail every time.  A second connection avoids this entirely.
+    rc = sqlite3_open_v2(newFileName.c_str(), &_dbCheckpoint, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr);
+    if (rc) {
+        if (_dbCheckpoint) { sqlite3_close_v2(_dbCheckpoint); _dbCheckpoint = nullptr; }
+        if (_db) { sqlite3_close_v2(_db); _db = nullptr; }
+        throw exceptionFailedToOpen();
+    }
+    sqlite3_busy_timeout(_dbCheckpoint, 5000);
+    sqlite3_exec(_dbCheckpoint, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr); //must match main connection
+    sqlite3_exec(_db, "PRAGMA synchronous = FULL;", nullptr, nullptr, nullptr);
+    sqlite3_exec(_db, "PRAGMA cache_size = -65536;", nullptr, nullptr, nullptr); //64MB page cache
+#if INTPTR_MAX == INT64_MAX
+    sqlite3_exec(_db, "PRAGMA mmap_size = 268435456;", nullptr, nullptr, nullptr); //256MB mmap on 64-bit
+#else
+    sqlite3_exec(_db, "PRAGMA mmap_size = 33554432;", nullptr, nullptr, nullptr); //32MB mmap on 32-bit
+#endif
+
     // On ANY failure below, close the handle before rethrowing so the caller can
     // rename/rebuild the file (an open handle would block that on Windows).
     try {
@@ -739,6 +770,7 @@ Database::Database(const string& newFileName) {
         }
         initializeClassValues();
     } catch (...) {
+        if (_dbCheckpoint) { sqlite3_close_v2(_dbCheckpoint); _dbCheckpoint = nullptr; }
         if (_db) { sqlite3_close_v2(_db); _db = nullptr; }
         throw;
     }
@@ -783,6 +815,7 @@ void Database::dropAllTables() {
 }
 
 Database::~Database() {
+    if (_dbCheckpoint) sqlite3_close_v2(_dbCheckpoint);
     sqlite3_close_v2(_db);
 }
 
@@ -802,33 +835,90 @@ Database::~Database() {
  * time it takes to make all the transactions
  */
 void Database::startTransaction() {
-    if (_transactionDepth++ == 0) {
+    if (_transactionDepth == 0) {
         char* zErrMsg = nullptr;
-        sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+        int rc = sqlite3_exec(_db, "BEGIN TRANSACTION", nullptr, nullptr, &zErrMsg);
+        if (rc != SQLITE_OK) {
+            if (zErrMsg) sqlite3_free(zErrMsg);
+            throw exceptionFailedSQLCommand();
+        }
     }
+    _transactionDepth++;
 }
 
 /**
- * Finishes the batch transaction
+ * Finishes the batch transaction.  Only actually commits when the outermost
+ * transaction ends, allowing nested startTransaction/endTransaction calls.
  */
 void Database::endTransaction() {
     if (_transactionDepth <= 0) return; // guard against unmatched calls
-    if (--_transactionDepth == 0) {
+    if (_transactionDepth == 1) {
+        //outermost transaction — actually commit
         char* zErrMsg = nullptr;
-        sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+        int rc = sqlite3_exec(_db, "END TRANSACTION", nullptr, nullptr, &zErrMsg);
+        if (rc != SQLITE_OK) {
+            std::string errStr = zErrMsg ? zErrMsg : "unknown";
+            if (zErrMsg) sqlite3_free(zErrMsg);
+            Log::GetInstance()->addMessage("COMMIT failed (rc=" + std::to_string(rc) + "): " + errStr, Log::WARNING);
+            //commit failed — rollback to release the transaction so WAL can be checkpointed
+            sqlite3_exec(_db, "ROLLBACK", nullptr, nullptr, nullptr);
+            _transactionDepth = 0;
+            throw exceptionFailedSQLCommand();
+        }
+        _transactionDepth = 0;
+    } else {
+        _transactionDepth--;
     }
 }
 
 /**
- * disables write verification.  gives significant speed increase but on power failure data
- * may not all be written to the drive so must recheck at startup
+ * Flushes the WAL back to the main database file and truncates the WAL.
+ * Call periodically during heavy writes to prevent unbounded WAL growth.
+ *
+ * Strategy: try PASSIVE first (always succeeds, checkpoints what it can),
+ * then try TRUNCATE to reset the WAL file.  Avoids RESTART/FULL which hold
+ * the connection mutex during busy-wait and deadlock with FULLMUTEX.
+ */
+void Database::walCheckpoint() {
+    int nLog = 0, nCkpt = 0;
+
+    //use the dedicated checkpoint connection to avoid SQLITE_LOCKED from active cursors
+    //on the main connection.  PASSIVE always succeeds and checkpoints committed frames.
+    int rc = sqlite3_wal_checkpoint_v2(_dbCheckpoint, nullptr, SQLITE_CHECKPOINT_PASSIVE, &nLog, &nCkpt);
+    Log* log = Log::GetInstance();
+    log->addMessage("WAL checkpoint PASSIVE: rc=" + std::to_string(rc) +
+                    " frames=" + std::to_string(nLog) +
+                    " checkpointed=" + std::to_string(nCkpt), Log::DEBUG);
+
+    //always attempt TRUNCATE to shrink the WAL file on disk.
+    //TRUNCATE is a blocking checkpoint that waits for readers to finish before
+    //checkpointing all remaining frames and resetting the WAL file.
+    //Without this, the WAL writer pointer never wraps back to the beginning
+    //(SQLite only resets the write pointer after a COMPLETE checkpoint) and
+    //the WAL grows without bound.  LockedStatement readers are short-lived
+    //(microseconds) so the busy_timeout (5s) is more than enough.
+    if (rc == SQLITE_OK && nLog > 0) {
+        rc = sqlite3_wal_checkpoint_v2(_dbCheckpoint, nullptr, SQLITE_CHECKPOINT_TRUNCATE, &nLog, &nCkpt);
+        if (rc == SQLITE_OK) {
+            log->addMessage("WAL TRUNCATE succeeded", Log::DEBUG);
+        } else {
+            log->addMessage("WAL TRUNCATE failed (rc=" + std::to_string(rc) +
+                            "), WAL will be retried next checkpoint", Log::DEBUG);
+        }
+    }
+}
+
+/**
+ * disables write verification.  Under WAL mode, NORMAL is nearly as fast as OFF
+ * but survives application crashes.  Only OS crash/power failure can lose the last
+ * transaction, and the database will never corrupt.
  */
 void Database::disableWriteVerification() {
     char* zErrMsg = nullptr;
     sqlite3_exec(_db, "PRAGMA synchronous = OFF", nullptr, nullptr, &zErrMsg);
+    // NOTE: journal_mode change fails silently (SQLITE_BUSY) while the dedicated
+    // _dbCheckpoint connection is open, so the DB stays in WAL mode here.
     sqlite3_exec(_db, "PRAGMA journal_mode = MEMORY", nullptr, nullptr, &zErrMsg);
-    // Exclusive lock — no other process can access DB, eliminates per-query lock overhead
-    sqlite3_exec(_db, "PRAGMA locking_mode = EXCLUSIVE", nullptr, nullptr, &zErrMsg);
     // 256MB page cache keeps UTXO index pages in RAM
     sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
     // Store temp tables/indexes in memory
@@ -847,8 +937,7 @@ void Database::disableWriteVerification() {
 void Database::enableWriteVerification() {
     char* zErrMsg = nullptr;
     sqlite3_exec(_db, "PRAGMA synchronous = FULL", nullptr, nullptr, &zErrMsg);
-    sqlite3_exec(_db, "PRAGMA journal_mode = DELETE", nullptr, nullptr, &zErrMsg);
-    sqlite3_exec(_db, "PRAGMA locking_mode = NORMAL", nullptr, nullptr, &zErrMsg);
+    sqlite3_exec(_db, "PRAGMA journal_mode = WAL", nullptr, nullptr, &zErrMsg);
     // Keep the durability-neutral read accelerators.
     sqlite3_exec(_db, "PRAGMA cache_size = -262144", nullptr, nullptr, &zErrMsg);
     sqlite3_exec(_db, "PRAGMA temp_store = MEMORY", nullptr, nullptr, &zErrMsg);
@@ -1163,7 +1252,7 @@ std::vector<AssetBasics> Database::getLastAssetsIssued(unsigned int amount, unsi
  * Possible Errors:
  *  exceptionFailedSelect
  */
-int Database::getFlagInt(const string& flag) {
+int Database::getFlagInt(const string& flag, int defaultValue=INT_MIN) {
     //try to get from ram
     try {
         return _flagState.at(flag); //will throw out of range error if not present
@@ -1175,6 +1264,7 @@ int Database::getFlagInt(const string& flag) {
     checkFlag.bindText(1, flag);
     int rc = checkFlag.executeStep();
     if (rc != SQLITE_ROW) { //there should always be one
+        if (defaultValue!=INT_MIN) return defaultValue;
         handleSpecialErrors(__LINE__);
         throw exceptionFailedSelect(); //failed to check database
     }
@@ -1271,6 +1361,48 @@ void Database::setBeenPrunedVoteHistory(int state) {
 
 void Database::setBeenPrunedNonAssetUTXOHistory(bool state) {
     setFlagInt("wasPrunedNonAssetUTXOHistory", state);
+}
+
+
+DigiByteCore::WalletVersion Database::getCompatibleWalletVersion() {
+    return DigiByteCore::WalletVersion::unknown;
+
+    //check if defined
+    int allowedCoreVersion=getFlagInt("coreVersion",0);
+    if (allowedCoreVersion>DigiByteCore::WalletVersion::unknown)
+        return static_cast<DigiByteCore::WalletVersion>(allowedCoreVersion);
+
+    //search database for v8 only values
+    sqlite3_stmt* stmt;
+    const char* sql8="SELECT * FROM utxos WHERE lower(substr(address, 1, 1)) IN ('0','1','2','3','4','5','6','7','8','9','a','b','c','e','f') LIMIT 1;";
+    int rc = sqlite3_prepare_v2(_db, sql8, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        setFlagInt("coreVersion",8);
+        return DigiByteCore::WalletVersion::v8;
+    }
+
+    //search database for first tx that can show v7
+    const char* sql7a="SELECT address FROM utxos WHERE txid='dd8a4a3b8ecdc14e4142ffb73a5b0c8801030f98dbd818f1b90ac3683b4f2c60' AND vout=0 LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql7a, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        //if 8 value will be 038776097791c01e02d4f729485361ba00e5fe7528bca55e416bbce611f0e9f10c which would trigger v8 code above so must be v7
+        setFlagInt("coreVersion",7);
+        return DigiByteCore::WalletVersion::v7;
+    }
+
+    //if pruning is turned on database could still be v7 otherwise database is compatible with both(unknown)
+    const char* sql7b="SELECT address FROM utxos WHERE txid='344dd72b318f8676f420bd6c4a15cf4ca8cda5fa11efb14e0f109ab1acec5f25' AND vout=2 LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql7b, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) throw exceptionCreatingStatement();
+    if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        //if 8 value will be hex which would trigger v8 code above so must be v7
+        setFlagInt("coreVersion",7);
+        return DigiByteCore::WalletVersion::v7;
+    }
+
+    return DigiByteCore::WalletVersion::unknown;
 }
 
 

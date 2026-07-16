@@ -112,6 +112,7 @@ struct BlockBasics {
 class Database {
 private:
     sqlite3* _db = nullptr;
+    sqlite3* _dbCheckpoint = nullptr; //second connection used exclusively for WAL checkpointing (avoids SQLITE_LOCKED on same-connection cursors)
 
     // In-memory cache of non-asset UTXOs to avoid RPC fallback in getAssetUTXO
     // Uses two generations: when active map exceeds MAX_UTXO_CACHE, it becomes
@@ -335,7 +336,7 @@ private:
     void dropAllTables();         // DROP every schema table (used to rebuild an incoherent chain.db)
 
     //flag table
-    int getFlagInt(const std::string& flag);
+    int getFlagInt(const std::string& flag, int defaultValue);  //defaultValue is optional
     void setFlagInt(const std::string& flag, int state);
     std::map<std::string, int> _flagState;
 
@@ -383,6 +384,7 @@ public:
     //performance related
     void startTransaction();
     void endTransaction();
+    void walCheckpoint();       //flushes WAL back to main db and truncates the WAL file
     void
     disableWriteVerification(); //on power failure not all commands may be written.  If using need to check at startup
     // Restores durable, shareable write settings (synchronous=FULL, on-disk
@@ -447,6 +449,9 @@ public:
 
     //reset database
     void reset(); //used in case of roll back exceeding pruned history
+
+    //check database integrity to core wallet
+    DigiByteCore::WalletVersion getCompatibleWalletVersion();
 
     //assets table
     uint64_t addAsset(const DigiAsset& asset);

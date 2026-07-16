@@ -120,11 +120,12 @@ namespace RPC {
     /**
      * Builds the RPC server from a config file. Reads rpcuser/rpcpassword,
      * rpcassetport (default 14024), rpcthreads (default 16), the rpcallow map
-     * and rpcdebugshowparamsonerror; spins up the worker thread pool running
-     * _io.run(); then opens, binds and listens on the TCP acceptor. Throws (and
-     * logs CRITICAL) if any step fails. Does NOT begin accepting connections —
-     * call start() for that. See the inline notes re: _workGuard/_acceptor being
-     * members to keep the io_context alive and avoid the boost::asio stub.
+     * and rpcdebugshowparamsonerror; opens, binds and listens on the TCP
+     * acceptor, then spins up the worker thread pool running _io.run(). Throws
+     * (and logs CRITICAL) if any step fails. Does NOT begin accepting
+     * connections — call start() for that. See the inline notes re:
+     * _workGuard/_acceptor being members to keep the io_context alive and avoid
+     * the boost::asio stub.
      * @param fileName path to the config file (default "config.cfg")
      */
     Server::Server(const string& fileName)
@@ -151,12 +152,6 @@ namespace RPC {
             _username = config.getString("rpcuser");
             _password = config.getString("rpcpassword");
             _port = config.getInteger("rpcassetport", 14024);
-
-            // Create a pool of threads to run all of the io_services.
-            size_t poolSize = config.getInteger("rpcthreads", 16);
-            for (std::size_t i = 0; i < poolSize; ++i) {
-                _thread_pool.emplace_back([this] { run_thread(); });
-            }
 
             // Bind LOOPBACK by default (the documented localhost-only design).
             // This RPC forwards wallet money-movement calls to Core, so it must
@@ -193,6 +188,17 @@ namespace RPC {
 
             _allowedRPC = config.getBoolMap("rpcallow");
             _showParamsOnError = config.getBool("rpcdebugshowparamsonerror", false);
+
+            // Create a pool of threads to run all of the io_services.
+            // Adopt upstream (mctrivia/development) ordering: bind/listen the
+            // acceptor BEFORE spawning the pool, so a bind failure throws
+            // without leaking worker threads. We keep our config key/default
+            // (rpcthreads, 16); upstream uses rpcparallel/8.
+            size_t poolSize = config.getInteger("rpcthreads", 16);
+            for (std::size_t i = 0; i < poolSize; ++i) {
+                _thread_pool.emplace_back([this] { run_thread(); });
+            }
+
             log->addMessage("RPC Server listening on port " + std::to_string(_port));
         } catch (const std::exception& e) {
             log->addMessage(std::string("RPC::Server ctor exception: ") + e.what(), Log::CRITICAL);

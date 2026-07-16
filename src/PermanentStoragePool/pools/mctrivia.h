@@ -102,21 +102,29 @@ private:
     void permanentFetcherTask();
     void probeListEndpoint(); // POST /list/<floor>.json once, update _registrationHealth
     bool fetchAndPinPermanentPage(unsigned int page); // returns true if page was `done`
-    void updateBadList();
+    // updateBadList() is declared as `virtual void updateBadList()` in the
+    // protected section below (upstream refactor); no private redeclaration here.
     void _callServer(ServerCalls command, const std::string& extra = "");
 
-    std::vector<std::string> _badAssets;
-    std::vector<std::string> _badFiles;
-    unsigned int _badTime = 0;
+    std::mutex _badListMutex;
     bool _visible = true;
 
 protected:
+    std::vector<std::string> _badAssets;
+    std::vector<std::string> _badFiles;
+    unsigned int _badTime = 0;
+
     void _setConfig(const Config& config) override;
     void _reportAssetBad(const std::string& assetId) override;
     void _reportFileBad(const std::string& cid) override;
+    virtual void updateBadList();
 
 public:
     mctrivia();
+    ~mctrivia();
+
+    size_t getBadAssetCount() const { return _badAssets.size(); }
+    size_t getBadFileCount() const { return _badFiles.size(); }
 
     //called by Node Operators that subscribe to PSP
     std::string serializeMetaProcessor(const DigiByteTransaction& tx) override;                                              //always returns "" — see .cpp for why

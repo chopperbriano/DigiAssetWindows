@@ -439,6 +439,8 @@ void ChainAnalyzer::phaseSync() {
     long totalProcessed = 0;
     int insertBatch = 0;
     bool pipelineActive = false; // whether the background prefetch producer is running
+    int blocksSinceCheckpoint = 0; // WAL auto-checkpoint is disabled (Database ctor), so flush it ourselves
+    auto lastCheckpointTime = chrono::steady_clock::now();
     stringstream ss;
 
     bool needsAssetInit = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
@@ -537,6 +539,12 @@ void ChainAnalyzer::phaseSync() {
             totalProcessed = 0;
             chrono::milliseconds dura(500);
             this_thread::sleep_for(dura);
+            // Idle at the tip - no blocks are being processed here, so flush the
+            // WAL on a timer too (background writes still land in it otherwise).
+            if (chrono::duration_cast<chrono::seconds>(chrono::steady_clock::now() - lastCheckpointTime).count() >= 60) {
+                db->walCheckpoint();
+                lastCheckpointTime = chrono::steady_clock::now();
+            }
             string currentHash = dgb->getBlockHash(_height);
             if (hash != currentHash) {
                 if (pipelineActive) { dgb->stopPrefetch(); pipelineActive = false; }
@@ -626,11 +634,27 @@ void ChainAnalyzer::phaseSync() {
                 insertBatch = 0;
             }
         }
+
+        // Auto-checkpoint is disabled on the main connection (see Database ctor),
+        // so the WAL grows unbounded otherwise. Flush it via the dedicated
+        // checkpoint connection every ~2500 blocks OR every 60s (whichever comes
+        // first), but only when no header-batch transaction is open
+        // (insertBatch == 0) so TRUNCATE can fully reset the WAL. PASSIVE/TRUNCATE
+        // on a separate connection never touches the main connection's cursors -
+        // safe mid-sync.
+        bool ckptDue = (++blocksSinceCheckpoint >= 2500) ||
+                       (chrono::duration_cast<chrono::seconds>(chrono::steady_clock::now() - lastCheckpointTime).count() >= 60);
+        if (ckptDue && insertBatch == 0) {
+            db->walCheckpoint();
+            blocksSinceCheckpoint = 0;
+            lastCheckpointTime = chrono::steady_clock::now();
+        }
     }
 
     //cleanup
     if (pipelineActive) dgb->stopPrefetch(); // stop-requested / loop exit — join the producer
     if (insertBatch > 0) db->endTransaction();
+    db->walCheckpoint(); // final flush + shrink the WAL when we reach the tip / pause
 }
 
 /**

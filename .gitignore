@@ -1,6 +1,7 @@
 # ---- Build output ----
 build/
 cmake-build-debug/
+cmake-build-release/
 bin/*
 bin/cache/*
 bin/stream/*
@@ -37,7 +38,7 @@ config.cfg
 *.db
 _testFunc_*.db
 tests/testFiles/assetTest.*
-tests/testFiles/rpcTest.db
+tests/testFiles/rpcTest.*
 
 # ---- Historical boost stub / orphan stubs (kept local, never published) ----
 src/boost/
