@@ -22,6 +22,11 @@
 #include <ctime>
 #include <iostream>
 #include <memory>
+#include "InstanceLock.h"
+#ifdef _WIN32
+#include <process.h>       // MSVC: getpid lives here as _getpid
+#define getpid _getpid
+#endif
 
 // Global flag for graceful shutdown
 static volatile std::sig_atomic_t g_shutdown = 0;
@@ -39,15 +44,34 @@ static void signalHandler(int signal) {
 // exception. Note: the happy path never falls through to `return 0` - it calls
 // std::exit(0) after teardown to kill the detached RPC/web-server threads.
 int main() {
-  // Handle Ctrl+C gracefully
-  std::signal(SIGINT, signalHandler);
-  std::signal(SIGTERM, signalHandler);
 
   try {
+    struct bootStrap {
+        string cid;
+        unsigned int height;
+    };
+
+    //make sure only one instance
+    InstanceLock lock("digiasset_core");
+    if (!lock.acquire()) {
+        return 1;
+    }
+    std::cout << "Core application running. PID: " << getpid() << std::endl;
+
+    // Handle Ctrl+C gracefully. NOTE: register our handlers AFTER
+    // InstanceLock::acquire(), because acquire() installs its own SIGINT/SIGTERM
+    // handlers (for lock-file cleanup). Registering ours last ensures our
+    // graceful-shutdown flag (g_shutdown) wins so the dashboard/cursor teardown
+    // below still runs.
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+
     ///When updating bootstrap image change both values.   Reviewers make sure this value is only ever changed by trusted party
-    const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM"};
-    const string officialBootstrapCID = "QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU";
-    const unsigned int officialBootStrapHeight = 19256623;
+    const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM","QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU"};
+    const bootStrap officialBootstrap[2]{
+            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 21505152},   //v7
+            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 21505152}    //v8
+    };
 
     /*
      * Check if config exists and prompt user to make one if it doesn't
@@ -161,39 +185,10 @@ int main() {
     log->addMessage("Starting " + getProductVersionString());
 
     /*
-     * Predownload database files if config files allow and database missing
+     * Get database filename from config (default "chain.db")
      */
-    unsigned int pauseHeight = 0;
-    if (                                                   //download bootstrap if all of the above are true
-            config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
-            !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
-            !utils::fileExists("chain.db")) {              //if the chain database does not yet exist
-        log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
-        IPFS ipfs("config.cfg", false);
-        //The bootstrap download depends on IPFS being up and the CID being
-        //reachable.  Rather than let a timeout abort the whole node, retry a few
-        //times (IPFS may still be starting) and, if it still won't come, carry on
-        //WITHOUT the bootstrap - the chain simply syncs from scratch instead.
-        bool bootstrapped = false;
-        for (unsigned int attempt = 1; attempt <= 5 && !bootstrapped; attempt++) {
-            try {
-                ipfs.downloadFile(officialBootstrapCID, "chain.db", true);
-                bootstrapped = true;
-            } catch (const std::exception& e) {
-                std::remove("chain.db"); //discard any partial download before retrying
-                log->addMessage(
-                        "Bootstrap download failed (is IPFS running/reachable?): " + string(e.what()) +
-                        " - attempt " + to_string(attempt) + " of 5, waiting 30s...");
-                if (attempt < 5) this_thread::sleep_for(chrono::seconds(30));
-            }
-        }
-        if (bootstrapped) {
-            pauseHeight = officialBootStrapHeight+2;
-        } else {
-            std::remove("chain.db"); //ensure no partial file is left for the DB to open
-            log->addMessage("Bootstrap unavailable - continuing without it; the chain will sync from scratch (slower, but the node won't crash).");
-        }
-    }
+    string dbFilename = config.getString("dbfilename", "chain.db");
+    log->addMessage("Using database file: " + dbFilename);
 
     /*
      * Create AppMain
@@ -232,6 +227,49 @@ int main() {
     }
     main->setDigiByteCore(&dgb);
 
+    /*
+     * Get wallet version
+     */
+    DigiByteCore::WalletVersion walletVersion = dgb.coreVersion();
+
+    /*
+     * Predownload database files if config files allow and database missing.
+     * Runs after the core connection so we know the wallet version and can pick
+     * the matching bootstrap image (v7 vs v8).
+     */
+    unsigned int pauseHeight = 0;
+    if (                                                   //download bootstrap if all of the above are true
+            config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
+            !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
+            !utils::fileExists(dbFilename)) {              //if the chain database does not yet exist
+        log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
+        IPFS ipfs("config.cfg", false);
+        const auto bootstrap = (walletVersion == DigiByteCore::WalletVersion::v8) ? officialBootstrap[1] : officialBootstrap[0];
+        //The bootstrap download depends on IPFS being up and the CID being
+        //reachable.  Rather than let a timeout abort the whole node, retry a few
+        //times (IPFS may still be starting) and, if it still won't come, carry on
+        //WITHOUT the bootstrap - the chain simply syncs from scratch instead.
+        bool bootstrapped = false;
+        for (unsigned int attempt = 1; attempt <= 5 && !bootstrapped; attempt++) {
+            try {
+                ipfs.downloadFile(bootstrap.cid, dbFilename, true);
+                bootstrapped = true;
+            } catch (const std::exception& e) {
+                std::remove(dbFilename.c_str()); //discard any partial download before retrying
+                log->addMessage(
+                        "Bootstrap download failed (is IPFS running/reachable?): " + string(e.what()) +
+                        " - attempt " + to_string(attempt) + " of 5, waiting 30s...");
+                if (attempt < 5) this_thread::sleep_for(chrono::seconds(30));
+            }
+        }
+        if (bootstrapped) {
+            pauseHeight = bootstrap.height + 2;
+        } else {
+            std::remove(dbFilename.c_str()); //ensure no partial file is left for the DB to open
+            log->addMessage("Bootstrap unavailable - continuing without it; the chain will sync from scratch (slower, but the node won't crash).");
+        }
+    }
+
     //make sure if we predownloaded data from ipfs that the wallet is synced past
     //the point the image was synced to.  A FRESH wallet can take a WEEK to get
     //there, so this loop must (a) tolerate transient RPC errors instead of
@@ -259,7 +297,20 @@ int main() {
     Database* db = nullptr;
     try {
         log->addMessage("Loading Database");
-        db = new Database("chain.db");
+        db = new Database(dbFilename);
+        auto compatibleWalletVersion = db->getCompatibleWalletVersion();
+        if ((compatibleWalletVersion>0) && (compatibleWalletVersion != walletVersion)) {
+            cout << "██ ███    ██  ██████  ██████  ███    ███ ██████   █████  ████████ ██ ██████  ██      ███████ \n"
+                    "██ ████   ██ ██      ██    ██ ████  ████ ██   ██ ██   ██    ██    ██ ██   ██ ██      ██      \n"
+                    "██ ██ ██  ██ ██      ██    ██ ██ ████ ██ ██████  ███████    ██    ██ ██████  ██      █████   \n"
+                    "██ ██  ██ ██ ██      ██    ██ ██  ██  ██ ██      ██   ██    ██    ██ ██   ██ ██      ██      \n"
+                    "██ ██   ████  ██████  ██████  ██      ██ ██      ██   ██    ██    ██ ██████  ███████ ███████ \n"
+                    "                                                                                             \n"
+                    " DigiByte Core Wallet " << (walletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << " detected. \n"
+                    " Database compatible with " << (compatibleWalletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << "\n"
+                    " Change core version or delete chain.db and restart\n";
+            return -1;
+        }
         main->setDatabase(db);
     } catch (const std::exception& e) {
         // chain.db is unusable (corrupt or half-built). It is 100% re-derivable
@@ -294,7 +345,9 @@ int main() {
     log->addMessage("Starting IPFS handler");
     IPFS ipfs("config.cfg");
     main->setIPFS(&ipfs);
-    ipfs.pin(officialBootstrapCID);
+    for (const auto& bootstrap: officialBootstrap) {
+        ipfs.pin(bootstrap.cid);
+    }
     for (const auto& cid: oldBootstrapCIDs) {
         ipfs.unpin(cid);
     }

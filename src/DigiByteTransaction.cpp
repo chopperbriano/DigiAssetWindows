@@ -16,6 +16,7 @@
 #include "DigiByteDomain.h"
 #include "IPFS.h"
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
+#include "DigiAssetConstants.h"
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -559,9 +560,9 @@ double DigiByteTransaction::getExchangeRate(uint8_t i) const {
 ExchangeRate DigiByteTransaction::getExchangeRateName(uint8_t i) const {
     if (i >= _exchangeRate.size()) throw out_of_range("Non existent exchange rate");
     string name;
-    for (size_t offset = 0; offset < DigiAsset::standardExchangeRatesCount; offset += 10) {
-        if (_outputs[1].address == DigiAsset::standardExchangeRates[offset].address) {
-            name = DigiAsset::standardExchangeRates[offset + i].name;
+    for (size_t offset = 0; offset < DigiAssetConstants::standardExchangeRatesCount; offset += 10) {
+        if (_outputs[1].address == DigiAssetConstants::standardExchangeRates[offset].address) {
+            name = DigiAssetConstants::standardExchangeRates[offset + i].name;
         }
     }
     ExchangeRate result;

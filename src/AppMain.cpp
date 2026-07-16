@@ -84,6 +84,8 @@ void AppMain::reset() {
     _dgb = nullptr;
     _db = nullptr;
     _rpcCache = nullptr;
+    _psp = nullptr;
+    _analyzer = nullptr;
 }
 void AppMain::setPermanentStoragePoolList(PermanentStoragePoolList* psp) {
     _psp = psp;

@@ -143,3 +143,95 @@ TEST(DigiAsset, getStrCount) {
     //clean up
     main->reset();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Count operations — no AppMain or database required
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAsset, countOperations) {
+    DigiAsset asset;
+    EXPECT_EQ(asset.getCount(), 0u);
+
+    asset.setCount(100);
+    EXPECT_EQ(asset.getCount(), 100u);
+
+    asset.addCount(50);
+    EXPECT_EQ(asset.getCount(), 150u);
+
+    asset.removeCount(30);
+    EXPECT_EQ(asset.getCount(), 120u);
+
+    asset.setCount(0);
+    EXPECT_EQ(asset.getCount(), 0u);
+}
+
+TEST(DigiAsset, removeCount_underflow_throws) {
+    DigiAsset asset;
+    asset.setCount(10);
+    EXPECT_THROW(asset.removeCount(11), std::out_of_range);
+    EXPECT_EQ(asset.getCount(), 10u); // unchanged after throw
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Type flags decoded from assetId — uses the DB constructor, no AppMain needed
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAsset, typeFlags) {
+    // Unlocked + aggregable asset from calculateAssetId test
+    DigiAsset unlocked(0, "Ua94nEKabzhJeDJtxGFXdviT185tYeHqyHKeWC", "", KYC(), DigiAssetRules(), 1, 1, 0);
+    EXPECT_FALSE(unlocked.isLocked());
+    EXPECT_TRUE(unlocked.isAggregable());
+    EXPECT_FALSE(unlocked.isHybrid());
+    EXPECT_FALSE(unlocked.isDispersed());
+
+    // Locked + aggregable asset from calculateAssetId test
+    DigiAsset locked(0, "La3fq5SvLvxHssNL9FJESiemGwMVsou89tuD3m", "", KYC(), DigiAssetRules(), 1, 1, 0);
+    EXPECT_TRUE(locked.isLocked());
+    EXPECT_TRUE(locked.isAggregable());
+    EXPECT_FALSE(locked.isHybrid());
+    EXPECT_FALSE(locked.isDispersed());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Asset index write protection
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAsset, assetIndexWriteProtection) {
+    // When assetIndex=0 (not yet assigned), setAssetIndex should succeed once
+    DigiAsset asset(0, "Ua94nEKabzhJeDJtxGFXdviT185tYeHqyHKeWC", "", KYC(), DigiAssetRules(), 1, 1, 0);
+    EXPECT_FALSE(asset.isAssetIndexSet());
+
+    asset.setAssetIndex(42);
+    EXPECT_TRUE(asset.isAssetIndexSet());
+    EXPECT_EQ(asset.getAssetIndex(), 42u);
+
+    // Second call throws — already set
+    EXPECT_THROW(asset.setAssetIndex(99), DigiAsset::exceptionWriteProtected);
+    EXPECT_EQ(asset.getAssetIndex(), 42u); // unchanged
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// setRules write protection
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiAsset, setRulesWriteProtection) {
+    // Locked asset: setOwned() is a no-op, setRules throws
+    DigiAsset lockedAsset(0, "La3fq5SvLvxHssNL9FJESiemGwMVsou89tuD3m", "", KYC(), DigiAssetRules(), 1, 1, 0);
+    lockedAsset.setOwned(); // no-op for locked assets
+    EXPECT_THROW(lockedAsset.setRules(DigiAssetRules()), DigiAsset::exceptionWriteProtected);
+
+    // Unlocked asset with non-rewritable rules: setOwned works but rules.isRewritable()=false throws
+    DigiAsset frozenAsset(0, "Ua94nEKabzhJeDJtxGFXdviT185tYeHqyHKeWC", "", KYC(), DigiAssetRules(), 1, 1, 0);
+    frozenAsset.setOwned();
+    EXPECT_THROW(frozenAsset.setRules(DigiAssetRules()), DigiAsset::exceptionWriteProtected);
+
+    // Unlocked asset with rewritable rules: can update after setOwned()
+    DigiAssetRules rewritable;
+    rewritable.setRewritable(true);
+    DigiAsset rewritableAsset(0, "Ua94nEKabzhJeDJtxGFXdviT185tYeHqyHKeWC", "", KYC(), rewritable, 1, 1, 0);
+    rewritableAsset.setOwned();
+    DigiAssetRules newRules;
+    newRules.setDeflationary(100);
+    EXPECT_NO_THROW(rewritableAsset.setRules(newRules));
+    EXPECT_EQ(rewritableAsset.getRules().getRequiredBurn(), 100u);
+}

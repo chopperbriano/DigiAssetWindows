@@ -71,6 +71,21 @@ namespace jsonrpc {
  */
 class DigiByteCore {
 public:
+    // Address format requested from getnewaddress.
+    enum AddressTypes {
+        LEGACY,
+        SEGWIT,
+        BECH32
+    };
+
+    // Detected DigiByte Core wallet/RPC version, inferred from the shape of
+    // scriptPubKey in getrawtransaction results (see coreVersion()).
+    enum WalletVersion {
+        unknown= 0,
+        v7=7,         //7 or less
+        v8=8          //8 or higher
+    };
+
     // A fully self-contained pre-fetched block: the header/tx-id list PLUS this
     // block's own transaction data (never the shared _txCache). Consumed by the
     // ChainAnalyzer sync loop. `error` carries any fetch failure to the consumer
@@ -99,6 +114,7 @@ private:
 
     long long _runTime = 0;      // cumulative RPC time (microseconds) for profiling
     unsigned int _runCount = 0;  // number of RPC calls made, for profiling
+    WalletVersion _walletVersion = unknown;
 
     // TX cache for prefetched data (loaded before processing a block)
     std::mutex _txCacheMutex;
@@ -122,12 +138,9 @@ private:
 
 
 public:
-    // Address format requested from getnewaddress.
-    enum AddressTypes {
-        LEGACY,
-        SEGWIT,
-        BECH32
-    };
+    // Returns the detected Core wallet version, forcing a probe RPC if not yet
+    // known (see DigiByteCore.cpp).
+    WalletVersion coreVersion();
 
 
     // Returns a formatted one-line row of accumulated RPC profiling stats:

@@ -144,6 +144,16 @@ public:
     // Adds an output carrying the given DigiAssets to a new/writable tx.
     void addDigiAssetOutput(const std::string& address, const std::vector<DigiAsset>& assets);
 
+    // Test helpers — not for production use
+    void setHeightForTesting(unsigned int h) { _height = h; }
+    void setIssuanceForTesting() { _txType = DIGIASSET_ISSUANCE; }
+    void addOutputForTesting(const std::string& address, uint64_t amount) {
+        AssetUTXO utxo;
+        utxo.address = address;
+        utxo.digibyte = amount;
+        _outputs.push_back(utxo);
+    }
+
     // Serializes the whole transaction to JSON for the API, optionally merging
     // into an existing Json value (see the .cpp for the full field list).
     Value toJSON(const Value& original = Json::objectValue) const;

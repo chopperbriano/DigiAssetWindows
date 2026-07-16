@@ -64,6 +64,8 @@ namespace RPC {
         // local in the ctor, which meant the thread pool ran for a few
         // microseconds and then exited the moment the ctor returned, leaving
         // posted work with nothing to execute it.
+        // (Upstream mctrivia/development also moved to executor_work_guard here,
+        // naming it _work; we keep the name _workGuard used throughout our ctor.)
         boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _workGuard;
         std::vector<std::thread> _thread_pool;
 

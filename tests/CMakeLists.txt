@@ -23,6 +23,18 @@ if(WIN32 AND MSVC)
     include_directories(BEFORE "${CMAKE_SOURCE_DIR}/packages/boost.1.82.0/lib/native/include")
 endif()
 
+# Ensure testFiles directory exists (not tracked by git, needed by tests at runtime)
+file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/tests/testFiles)  # googletest 1.14+ requires C++14 minimum; C++17 breaks system libjsonrpccpp headers
+
+# Upstream requires OpenSSL/Threads for its cross-platform test linking; this
+# Windows fork links winhttp + the vendored static libs instead, so only require
+# them off-MSVC (they're not available on the Windows build).
+if(NOT MSVC)
+    find_package(OpenSSL REQUIRED)
+    find_package(Threads REQUIRED)
+endif()
+find_package(jsoncpp CONFIG QUIET)
+find_package(JSONCPP QUIET)
 
 set(TESTS
         BitIO.cpp
@@ -33,6 +45,25 @@ set(TESTS
         DigiAssetTest.cpp
         DigiAssetRulesTest.cpp
         DigiAssetTransactionTest.cpp
+        PermanentStoragePoolTest.cpp
+        ConfigTest.cpp
+        KYCTest.cpp
+        BlobTest.cpp
+        UtilsTest.cpp
+        SHA256Test.cpp
+        DigiAssetTypesTest.cpp
+        UniqueTaskQueueTest.cpp
+        ThreadedTest.cpp
+        LogTest.cpp
+        InstanceLockTest.cpp
+        RPC_ResponseTest.cpp
+        RPC_CacheTest.cpp
+        Database_StatementTest.cpp
+        DatabaseTest.cpp
+        ChainAnalyzerTest.cpp
+        RPC_MethodListTest.cpp
+        CurlHandlerTest.cpp
+        PermanentStoragePoolMetaProcessorTest.cpp
         TestHelpers.cpp TestHelpers.h RPCMethods.cpp RPCMethods.h)
 
 #load RPC tests

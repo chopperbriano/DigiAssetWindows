@@ -1,6 +1,27 @@
 //
 // Created by mctrivia on 07/07/23.
 // This test sweet tests all historical DigiAsset, KYC, and Exchange transactions up to block todo ???????
+//
+// ============================================================
+// WARNING: THIS FILE HAS DOWNSTREAM TEST DEPENDENCIES
+// ============================================================
+// This test produces testFiles/rpcTest.db, which is required
+// by the following test suites:
+//
+//   - RPCMethods         (tests/RPCMethods.cpp)
+//   - PermanentStoragePool.mctrivia_allAddressesRecognized
+//                        (tests/PermanentStoragePoolTest.cpp)
+//
+// If this test is disabled or skipped (e.g. no IPFS connection),
+// those suites will FAIL with a clear error message rather than
+// silently skip.  This is intentional — do not add GTEST_SKIP()
+// to suppress those failures without also disabling this test.
+//
+// To run the full test suite with all dependents passing:
+//   1. Ensure an IPFS node is reachable (config.cfg)
+//   2. Ensure a DigiByte Core node is reachable (config.cfg)
+//   3. Run this test first (suite name: DigiAssetTransaction)
+// ============================================================
 
 #include "AppMain.h"
 #include "DigiAsset.h"
@@ -34,14 +55,26 @@ TEST(DigiAssetTransaction, existingAssetTransactions) {
     const bool showAll = false; ///set true if debugging and want it to show the txid before doing each test
     string errorList = "";
 
-    //delete old test database if still exists
+    //delete old test databases if still exists (including WAL/SHM to avoid SQLite confusion)
+    //rpcTest.db is also cleaned up here in case a previous run crashed before TearDownTestSuite could remove it
     try {
         remove("../tests/testFiles/assetTest.db");
+        remove("../tests/testFiles/assetTest.db-wal");
+        remove("../tests/testFiles/assetTest.db-shm");
+        remove("../tests/testFiles/rpcTest.db");
+        remove("../tests/testFiles/rpcTest.db-wal");
+        remove("../tests/testFiles/rpcTest.db-shm");
     } catch (...) {}
 
     IPFS ipfs("config.cfg", false);
-    ipfs.downloadFile("QmNPyr5tkm48cUu5iMbReiM8GN8AW6PRpzUztPFadaxC8j", "../tests/testFiles/assetTest.csv", true);
-    ipfs.downloadFile("QmVoawgnYej8TNwpBB7DtJ75KbrAB99k7f9VAWzqSLJBeX", "../tests/testFiles/assetTest.db", true);
+    try {
+        ipfs.downloadFile("QmNPyr5tkm48cUu5iMbReiM8GN8AW6PRpzUztPFadaxC8j", "../tests/testFiles/assetTest.csv", true);
+        ipfs.downloadFile("QmVoawgnYej8TNwpBB7DtJ75KbrAB99k7f9VAWzqSLJBeX", "../tests/testFiles/assetTest.db", true);
+    } catch (const IPFS::exceptionNoConnection&) {
+        GTEST_SKIP() << "IPFS node not available - skipping transaction tests";
+    } catch (const IPFS::exceptionTimeout&) {
+        GTEST_SKIP() << "IPFS node timed out - skipping transaction tests";
+    }
 
     //initialize prerequisites
     AppMain* main = AppMain::GetInstance();
@@ -287,6 +320,15 @@ TEST(DigiAssetTransaction, existingAssetTransactions) {
         utils::copyFile("../tests/testFiles/assetTest.db", "../tests/testFiles/rpcTest.db");
     }
 
+    //stop IPFS thread before resetting AppMain to prevent CRITICAL log spam from worker accessing null db
+    ipfs.stop();
+
     //clean up
     main->reset();
+
+    //remove downloaded test files
+    remove("../tests/testFiles/assetTest.db");
+    remove("../tests/testFiles/assetTest.db-wal");
+    remove("../tests/testFiles/assetTest.db-shm");
+    remove("../tests/testFiles/assetTest.csv");
 }

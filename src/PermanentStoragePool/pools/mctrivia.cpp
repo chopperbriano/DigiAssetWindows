@@ -17,6 +17,7 @@
 #include "CurlHandler.h"
 #include "IPFS.h"
 #include "Log.h"
+#include "DigiAssetConstants.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -39,6 +40,7 @@ namespace {
 }
 
 mctrivia::mctrivia() : _keepRunning(false), _fetcherRunning(false) {}
+mctrivia::~mctrivia() { stop(); }
 
 
 
@@ -112,7 +114,7 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
 
     //get current DGB cost
     Database* db = AppMain::GetInstance()->getDatabase();
-    double exchangeRate = db->getCurrentExchangeRate(DigiAsset::standardExchangeRates[1]); //USD
+    double exchangeRate = db->getCurrentExchangeRate(DigiAssetConstants::standardExchangeRates[1]); //USD
     return usdCost * exchangeRate;
 }
 
@@ -605,6 +607,7 @@ bool mctrivia::isAssetBad(const std::string& assetId) {
     if (currentTime - _badTime > 1200) updateBadList();
 
     //see if assetIndex in bad list
+    std::lock_guard<std::mutex> lock(_badListMutex);
     auto it = find(_badAssets.begin(), _badAssets.end(), assetId);
     return it != _badAssets.end();
 }
@@ -629,6 +632,7 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
  * Updates _badTime on success; failures are swallowed and logged at DEBUG.
  */
 void mctrivia::updateBadList() {
+    std::lock_guard<std::mutex> lock(_badListMutex);
     try {
         //make curl request
         const string url = _baseUrl + "/bad.json";

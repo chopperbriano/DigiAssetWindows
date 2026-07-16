@@ -56,4 +56,6 @@ TEST(DatabaseChain, getPermanentSize) {
 
 TEST(DatabaseChain, CleanUp) {
     remove("../tests/testFiles/_testNew.db");
+    remove("../tests/testFiles/_testNew.db-wal");
+    remove("../tests/testFiles/_testNew.db-shm");
 }
