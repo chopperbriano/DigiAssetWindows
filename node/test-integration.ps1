@@ -49,6 +49,7 @@ param(
     [int]   $WatchMinutes = 15,
     [int]   $WebPort      = 8922,
     [int]   $AssetPort    = 14924,
+    [string]$PayoutAddress = '',   # required if Core has multiple wallets (auto-create can't pick one)
     [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
@@ -113,10 +114,12 @@ rpcassetport=$AssetPort
 rpcallowip=127.0.0.1
 webport=$WebPort
 ipfspath=http://127.0.0.1:5001/api/v0/
+psp0payout=$PayoutAddress
 psp1server=https://pool.digistamp.co
-psp1payout=
+psp1payout=$PayoutAddress
 storeNonAssetUTXO=0
 "@ | Set-Content -Path (Join-Path $TestDir 'config.cfg') -Encoding ASCII
+if (-not $PayoutAddress) { Say "  NOTE: no -PayoutAddress given; the node will try to auto-create one. That FAILS if Core has multiple wallets loaded - pass -PayoutAddress <dgb1...> then." 'Yellow' }
 Say "test dir : $TestDir  (fresh chain.db, web :$WebPort, asset RPC :$AssetPort)" 'Gray'
 
 # ---- 5. Launch the node (visible window so you can watch the dashboard) ----

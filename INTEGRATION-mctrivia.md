@@ -110,6 +110,15 @@ $cmake = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Comm
 - Merged node **boots without crashing**, reads config, and handles no-Core gracefully.
 - **InstanceLock Windows port works** — a 2nd launch is correctly rejected ("Another instance is already running").
 
+**Runtime resync test — PASSED (2026-07-16).** Ran `node/test-integration.ps1`
+against a live (syncing) Core: node stayed up, synced 110 -> 24,026 blocks in
+~2.5 min, and the **WAL stayed bounded — it grew to 1.7 MB then repeatedly
+checkpointed back down** (proving the `walCheckpoint` wiring). Console + RPC
+answered. IPFS was down and sync worked fine (IPFS isn't needed for chain sync).
+Finding: on a Core with **multiple wallets loaded**, payout auto-create fails
+(wallet RPC needs a `/wallet/<name>` path) - set explicit `psp0payout` +
+`psp1payout` (pre-existing fork behavior, not the merge).
+
 **Runtime resync test (run on a TEST server with DigiByte Core synced, NOT your production node box):**
 ```powershell
 # on the integration branch, on a box where the PRODUCTION node is NOT running:
