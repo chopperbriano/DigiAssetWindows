@@ -50,6 +50,7 @@ param(
     [int]   $WebPort      = 8922,
     [int]   $AssetPort    = 14924,
     [string]$PayoutAddress = '',   # required if Core has multiple wallets (auto-create can't pick one)
+    [string]$SeedChainDb   = '',   # optional: copy this existing chain.db into the test dir (tests loading an OLD chain.db + asset-era catch-up) instead of syncing from genesis
     [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
@@ -120,10 +121,19 @@ psp1payout=$PayoutAddress
 storeNonAssetUTXO=0
 "@ | Set-Content -Path (Join-Path $TestDir 'config.cfg') -Encoding ASCII
 if (-not $PayoutAddress) { Say "  NOTE: no -PayoutAddress given; the node will try to auto-create one. That FAILS if Core has multiple wallets loaded - pass -PayoutAddress <dgb1...> then." 'Yellow' }
-Say "test dir : $TestDir  (fresh chain.db, web :$WebPort, asset RPC :$AssetPort)" 'Gray'
+# Optional: seed an existing chain.db (tests loading an OLD/production DB + asset-era catch-up).
+$seeded = $false
+if ($SeedChainDb) {
+    if (-not (Test-Path $SeedChainDb)) { throw "SeedChainDb not found: $SeedChainDb" }
+    Say ("Seeding chain.db from {0} ({1:N1} GB)..." -f $SeedChainDb, ((Get-Item $SeedChainDb).Length/1GB)) 'Cyan'
+    Copy-Item $SeedChainDb (Join-Path $TestDir 'chain.db') -Force
+    $seeded = $true
+}
+Say "test dir : $TestDir  (web :$WebPort, asset RPC :$AssetPort)" 'Gray'
 
 # ---- 5. Launch the node (visible window so you can watch the dashboard) ----
-Say "`nStarting the merged node (fresh sync from genesis)..." 'Cyan'
+$mode = if ($seeded) { 'loading seeded chain.db + catching up to tip' } else { 'fresh sync from genesis' }
+Say "`nStarting the merged node ($mode)..." 'Cyan'
 Start-Process -FilePath (Join-Path $TestDir 'DigiAssetWindows.exe') -WorkingDirectory $TestDir -WindowStyle Normal
 Start-Sleep -Seconds 8
 if (-not (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue)) { throw "Node exited immediately - check $TestDir. FAIL." }

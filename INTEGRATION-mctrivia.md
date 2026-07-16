@@ -111,13 +111,28 @@ $cmake = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Comm
 - **InstanceLock Windows port works** — a 2nd launch is correctly rejected ("Another instance is already running").
 
 **Runtime resync test — PASSED (2026-07-16).** Ran `node/test-integration.ps1`
-against a live (syncing) Core: node stayed up, synced 110 -> 24,026 blocks in
-~2.5 min, and the **WAL stayed bounded — it grew to 1.7 MB then repeatedly
-checkpointed back down** (proving the `walCheckpoint` wiring). Console + RPC
-answered. IPFS was down and sync worked fine (IPFS isn't needed for chain sync).
+against a live Core:
+- **Fresh sync from genesis:** synced 110 -> 24,026 blocks in ~2.5 min; WAL grew
+  to 1.7 MB then repeatedly checkpointed back down; console + RPC answered.
+- **Seeded with a real 1.2 GB production chain.db** (`-SeedChainDb`): the merged
+  node **loaded it with NO rebuild** (schema unchanged - confirms existing nodes
+  update cleanly), built the asset-era performance indexes, and **checkpointed the
+  WAL from 8.2 MB down to 0.15 MB**.
+- **No IPFS:** handled gracefully (logs "IPFS down", keeps running).
+
+WAL fix: the checkpoint now fires every ~2500 blocks **OR every 60s** (in both the
+sync loop and the idle-at-tip wait) - the seed test exposed that a per-block-only
+trigger never fired while idle. Now bounded in all states.
+
 Finding: on a Core with **multiple wallets loaded**, payout auto-create fails
 (wallet RPC needs a `/wallet/<name>` path) - set explicit `psp0payout` +
 `psp1payout` (pre-existing fork behavior, not the merge).
+
+**Not yet exercised:** forward asset-*block* processing (processTX on new asset
+blocks) - this box's Core is ~26k blocks behind the seed, so the node idled at the
+seed height rather than processing new asset blocks. The asset-era DB/index path
+and the asset logic (unit tests) are covered; a node whose Core is at/ahead of its
+chain.db will process forward normally.
 
 **Runtime resync test (run on a TEST server with DigiByte Core synced, NOT your production node box):**
 ```powershell
