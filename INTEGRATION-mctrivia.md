@@ -105,8 +105,23 @@ $cmake = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Comm
 .\build\tests\Release\Unit_Tests_run.exe --gtest_brief=1   # expect: 63 tests PASSED
 ```
 
-Runtime smoke test (needs a synced node): install/run as usual and confirm the
-`:8090` console, sync, and pool status all still work.
+**Validated on the build box (no DigiByte Core needed):**
+- All 4 targets build clean at MSVC C++20; **Unit_Tests_run 63/63**; upstream Config tests 18/18.
+- Merged node **boots without crashing**, reads config, and handles no-Core gracefully.
+- **InstanceLock Windows port works** — a 2nd launch is correctly rejected ("Another instance is already running").
+
+**Runtime resync test (run on a TEST server with DigiByte Core synced, NOT your production node box):**
+```powershell
+# on the integration branch, on a box where the PRODUCTION node is NOT running:
+powershell -ExecutionPolicy Bypass -File .\node\test-integration.ps1 -WatchMinutes 20
+```
+`node/test-integration.ps1` is **isolated and safe** — fresh chain.db in its own
+folder (`C:\DigiAssetIntegrationTest`), its own high ports (web 8922 / asset RPC
+14924), reads DigiByte Core RPC read-only, never touches your production node,
+wallet, chain.db, or snapshot. It watches sync progress + **WAL file size** and
+prints PASS/FAIL for: node stays up, sync advances, **WAL stays bounded (proves
+the checkpoint fix)**, console answers, CLI answers. Run it long enough to sync
+past ~2500 blocks to see a checkpoint fire.
 
 ---
 
