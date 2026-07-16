@@ -128,11 +128,13 @@ Finding: on a Core with **multiple wallets loaded**, payout auto-create fails
 (wallet RPC needs a `/wallet/<name>` path) - set explicit `psp0payout` +
 `psp1payout` (pre-existing fork behavior, not the merge).
 
-**Not yet exercised:** forward asset-*block* processing (processTX on new asset
-blocks) - this box's Core is ~26k blocks behind the seed, so the node idled at the
-seed height rather than processing new asset blocks. The asset-era DB/index path
-and the asset logic (unit tests) are covered; a node whose Core is at/ahead of its
-chain.db will process forward normally.
+**Forward asset-block processing — PASSED (2026-07-16).** Re-ran the seeded test
+once Core reached 23,865,503 (ahead of the seed). The node loaded the seed at
+23,858,467, processed **~7,000 asset-era blocks forward** to the tip (processTX /
+DigiAsset decode / DB writes), reached synced, and then **processed brand-new live
+blocks in real time** (23,865,515 -> 23,865,527). WAL grew to 37 MB during the
+heavy asset catch-up then checkpointed down to 0.1 MB and stayed tight at the tip.
+This exercised the last untested path. **Full runtime validation complete.**
 
 **Runtime resync test (run on a TEST server with DigiByte Core synced, NOT your production node box):**
 ```powershell
