@@ -73,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.18.0'
+$SCRIPT_VERSION = '2.19.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1519,14 +1519,6 @@ function Invoke-Install {
     Write-Host "`n===== Done =====" -ForegroundColor Green
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.' -ForegroundColor White
     Write-Host ''
-    Write-Host 'HOSTING PORTS - your local Windows firewall is ALREADY open for these.' -ForegroundColor Cyan
-    Write-Host 'The installer tried to auto-forward them on your router via UPnP. If the port 4001' -ForegroundColor White
-    Write-Host 'test above did NOT say OPEN, UPnP was blocked - forward these on your router manually:' -ForegroundColor White
-    Write-Host '   TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)' -ForegroundColor White
-    Write-Host '   UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)' -ForegroundColor White
-    Write-Host '   TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)' -ForegroundColor White
-    Write-Host '   Keep 5001 / 14022 / 8090 PRIVATE - never forward them (they are local-only).' -ForegroundColor Red
-    Write-Host ''
     Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
     Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.' -ForegroundColor White
     if ($treasury -and $treasury.donationAddress) {
@@ -1600,6 +1592,26 @@ function Invoke-Install {
     Write-Host '   4. File > Backup Wallet... -> save wallet.dat somewhere safe/offline.' -ForegroundColor White
     Write-Host '   Encrypting does NOT affect RECEIVING payouts; you only unlock when YOU send.' -ForegroundColor Gray
     Write-Host '============================================================' -ForegroundColor Yellow
+
+    # VERY LAST on screen (most visible) - the one manual action to get hosting + paid.
+    Write-Host ''
+    Write-Host '============================================================' -ForegroundColor Cyan
+    Write-Host ' LAST STEP - FORWARD THESE PORTS ON YOUR ROUTER' -ForegroundColor Cyan
+    Write-Host '============================================================' -ForegroundColor Cyan
+    Write-Host '  Your Windows firewall is ALREADY open. The installer tried UPnP - if the' -ForegroundColor White
+    Write-Host '  port 4001 test earlier did NOT say OPEN, add these on your router MANUALLY:' -ForegroundColor White
+    Write-Host ''
+    if ($localIp) {
+        Write-Host '  Forward them TO this PC:  ' -ForegroundColor Gray -NoNewline
+        Write-Host $localIp -ForegroundColor Green
+    } else {
+        Write-Host '  Find this PC IP with  ipconfig  (the IPv4 Address) and forward TO it.' -ForegroundColor Gray
+    }
+    Write-Host '     TCP 4001    DigiAsset / IPFS hosting  (REQUIRED - the pool verifies + pays you)' -ForegroundColor White
+    Write-Host '     UDP 4001    DigiAsset / IPFS (QUIC)   (recommended - faster peer connections)' -ForegroundColor White
+    Write-Host '     TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)' -ForegroundColor White
+    Write-Host '  Keep 5001 / 14022 / 8090 PRIVATE - never forward them (local-only).' -ForegroundColor Red
+    Write-Host '============================================================' -ForegroundColor Cyan
 
     # Durable proof of completion (the window may close; this file + log line stay).
     Log "Install completed successfully (script v$SCRIPT_VERSION)." 'OK'
