@@ -76,7 +76,18 @@ if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) {
 }
 
 # ---- 3. Read Core RPC creds so the test node can reach DigiByte Core -------
-if (-not (Test-Path $DigiByteConf)) { throw "digibyte.conf not found at $DigiByteConf (pass -DigiByteConf). The test node needs Core RPC creds." }
+# Auto-find digibyte.conf across the common locations if the given path is absent.
+if (-not (Test-Path $DigiByteConf)) {
+    $cands = @(
+        'C:\DigiByte\digibyte.conf',
+        'C:\DigiByte\Data\digibyte.conf',
+        (Join-Path $env:APPDATA 'DigiByte\digibyte.conf'),
+        (Join-Path $env:APPDATA 'DigiByte\Data\digibyte.conf')
+    )
+    $found = $cands | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($found) { $DigiByteConf = $found } else { throw "digibyte.conf not found (looked in C:\DigiByte and %APPDATA%\DigiByte). Pass -DigiByteConf <path>." }
+}
+Say "core conf: $DigiByteConf" 'Gray'
 $dc = @{}
 Get-Content $DigiByteConf | ForEach-Object { if ($_ -match '^\s*([^#=]+?)\s*=\s*(.*?)\s*$') { $dc[$Matches[1].Trim()] = $Matches[2].Trim() } }
 $ru = $dc['rpcuser']; $rp = $dc['rpcpassword']; $rport = if ($dc['rpcport']) { [int]$dc['rpcport'] } else { 14022 }
@@ -119,7 +130,7 @@ $statusUrl = "http://127.0.0.1:$WebPort/api/status.json"
 $walPath   = Join-Path $TestDir 'chain.db-wal'
 $deadline  = (Get-Date).AddMinutes($WatchMinutes)
 $maxWalMB = 0.0; $walDropped = $false; $lastWalMB = 0.0
-$startHeight = -1; $lastHeight = -1; $sawConsole = $false; $samples = 0
+$startHeight = -1; $lastHeight = -1; $samples = 0
 Say ("`nWatching for {0} min  (time | sync height | WAL MB | note)" -f $WatchMinutes) 'White'
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 15
@@ -127,7 +138,6 @@ while ((Get-Date) -lt $deadline) {
     $h = -1
     try {
         $s = Invoke-RestMethod -Uri $statusUrl -TimeoutSec 8
-        $sawConsole = $true
         $h = [int]$s.sync.height
         if ($startHeight -lt 0 -and $h -gt 0) { $startHeight = $h }
         $lastHeight = $h
