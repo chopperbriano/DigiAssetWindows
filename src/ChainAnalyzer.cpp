@@ -439,6 +439,7 @@ void ChainAnalyzer::phaseSync() {
     long totalProcessed = 0;
     int insertBatch = 0;
     bool pipelineActive = false; // whether the background prefetch producer is running
+    int blocksSinceCheckpoint = 0; // WAL auto-checkpoint is disabled (Database ctor), so flush it ourselves
     stringstream ss;
 
     bool needsAssetInit = (shouldStoreNonAssetUTXO() || (_height >= 8432316));
@@ -626,11 +627,23 @@ void ChainAnalyzer::phaseSync() {
                 insertBatch = 0;
             }
         }
+
+        // Auto-checkpoint is disabled on the main connection (see Database ctor),
+        // so the WAL grows unbounded during a long sync. Flush it via the dedicated
+        // checkpoint connection every ~2500 blocks, but only when no header-batch
+        // transaction is open (insertBatch == 0) so TRUNCATE can fully reset the
+        // WAL file. PASSIVE/TRUNCATE on a separate connection never touches the
+        // main connection's cursors, so this is safe mid-sync.
+        if (++blocksSinceCheckpoint >= 2500 && insertBatch == 0) {
+            db->walCheckpoint();
+            blocksSinceCheckpoint = 0;
+        }
     }
 
     //cleanup
     if (pipelineActive) dgb->stopPrefetch(); // stop-requested / loop exit — join the producer
     if (insertBatch > 0) db->endTransaction();
+    db->walCheckpoint(); // final flush + shrink the WAL when we reach the tip / pause
 }
 
 /**

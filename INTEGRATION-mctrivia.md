@@ -79,7 +79,7 @@ No blanket ours/theirs was used; every hunk was combined where both mattered.
 
 These are deliberate calls where upstream and the fork diverged. None break the build; each is reversible.
 
-1. **`walCheckpoint()` not integrated (`ChainAnalyzer.cpp`).** Upstream periodically checkpoints the SQLite WAL during long sync to bound its growth. Our sync batches up to 100 blocks in one transaction, and a mid-transaction checkpoint can't truncate the WAL — so it was left out to guarantee correctness. **Follow-up:** call `db->walCheckpoint()` only when no `insertBatch` transaction is open and `!pipelineActive`. Low urgency, but worth adding for very long syncs.
+1. ~~**`walCheckpoint()` not integrated.**~~ **DONE (`ChainAnalyzer.cpp`).** Confirmed upstream *disables* SQLite auto-checkpoint (`Database.cpp:711`), so the WAL would grow unbounded during sync. Now wired safely: `db->walCheckpoint()` is called every ~2500 blocks **only when no header-batch transaction is open (`insertBatch == 0`)** so TRUNCATE can fully reset the WAL, plus a final flush when the analyzer reaches the tip. The checkpoint runs on the dedicated `_dbCheckpoint` connection (PASSIVE/TRUNCATE), so it never touches the main connection's cursors. **Still worth a real-resync sanity check** on WAL size + sync speed.
 2. **Write-verification pragmas adapted (`Database.cpp`).** Our fast-catch-up `disableWriteVerification()` dropped `PRAGMA locking_mode=EXCLUSIVE` (would lock out the new checkpoint connection) and `enableWriteVerification()` now reverts to `journal_mode=WAL` (not `DELETE`). **Confirm** fast-catch-up sync speed is still acceptable on a real resync.
 3. **RPC pool key kept as `rpcthreads` (default 16), not upstream's `rpcparallel` (8).** Ours is documented in `example.cfg` + `CHANGELOG.md`. Switching would be a user-facing config regression.
 4. **On-chain payout path kept retired (`mctrivia.cpp`).** Upstream still implements on-chain fee-matching; our fork routes payouts through the pool server (`serializeMetaProcessor` returns `""`). Kept ours.
@@ -89,9 +89,9 @@ These are deliberate calls where upstream and the fork diverged. None break the 
 
 ## 6. Not integrated / deferred
 
-- **Upstream's ~35 new tests** (`Google_Tests_run`) are configured but **not validated** here — they may need live services/fixtures. The baseline that passes is **`Unit_Tests_run` (63 tests)**. Validate `Google_Tests_run` before relying on it.
+- **Upstream's `Google_Tests_run` suite** now **compiles on Windows** (fixed `ConfigTest.cpp`'s POSIX `mkstemp` → portable `std::filesystem`). Its pure-unit tests pass (e.g. **18/18 Config tests**), but its **integration tests need a live DigiByte Core + IPFS** ("Core offline"/"IPFS down") — run them against a synced node. The no-services baseline remains **`Unit_Tests_run` (63/63)**.
 - **Qt GUI (`qt/`)** — `BUILD_QT OFF`; not built (no Qt toolchain wired on this box).
-- **Standalone web exe (`web/` `digiasset_core-web`, `BUILD_WEB ON`)** — not explicitly built/verified. Your Web *Console* is static files served by the node's built-in `WebServer` and is unaffected.
+- **Standalone web exe (`web/`, `digiasset_core-web`)** — `BUILD_WEB OFF`. Not needed: your Web *Console* is static files served by the node's built-in `WebServer` (in `src/`, always compiled). Turning it off keeps a fresh configure from building an unneeded upstream exe.
 - **`bin/` output layout** — not adopted (keeps your build/release scripts working).
 
 ---

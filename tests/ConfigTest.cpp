@@ -5,8 +5,10 @@
 #include "Config.h"
 #include "gtest/gtest.h"
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <map>
+#include <stdexcept>
 #include <string>
 
 using namespace std;
@@ -15,14 +17,18 @@ using namespace std;
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Portable temp-config writer (no POSIX mkstemp, no windows.h). Uses the
+// system temp directory + a per-process counter for a unique filename.
 static string writeTempConfig(const string& content) {
-    char path[] = "/tmp/digiasset_config_test_XXXXXX";
-    int fd = mkstemp(path);
-    if (fd == -1) throw runtime_error("mkstemp failed");
-    FILE* f = fdopen(fd, "w");
-    fputs(content.c_str(), f);
-    fclose(f);
-    return string(path);
+    namespace fs = std::filesystem;
+    static int counter = 0;
+    fs::path p = fs::temp_directory_path() /
+                 ("digiasset_config_test_" + std::to_string(++counter) + ".tmp");
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    if (!f) throw runtime_error("temp file open failed: " + p.string());
+    f << content;
+    f.close();
+    return p.string();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(digiasset_core)
 
 option(BUILD_CLI "Build CLI" ON)
-option(BUILD_WEB "Build Web Server" ON)
+option(BUILD_WEB "Build Web Server" OFF)  # upstream's STANDALONE web exe; this fork's :8090 console is served by the node's built-in WebServer (src/), so off by default
 option(BUILD_QT "Build QT" OFF)   # upstream Qt GUI; off by default on this Windows fork (no Qt toolchain wired)
 option(BUILD_TEST "Build Tests" OFF)
 
