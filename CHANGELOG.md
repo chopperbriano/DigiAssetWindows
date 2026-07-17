@@ -20,7 +20,22 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.0-win.98 (current) — Node Console on :8090
+## 0.3.3-win.99 (current) — merge upstream mctrivia/development
+
+Integrated 117 upstream commits from `mctrivia/development` (DigiAsset Core 0.3.3)
+into the Windows fork, preserving all Windows functionality. Highlights: upstream
+`DigiAssetConstants` refactor, single-instance guard (ported to a Windows named
+mutex), DigiByte Core wallet-version detection + bootstrap selection, SQLite WAL
+mode with a dedicated checkpoint connection (WAL checkpoint wired into the sync
+loop + a 60s idle timer), and the RPC bind-before-spawn fix. Built at C++20 on
+MSVC (upstream uses designated initializers). Fully validated: builds clean,
+63/63 unit tests, live asset-era resync, and an existing production chain.db loads
+with **no rebuild** (schema unchanged - existing nodes update cleanly). Full change
+record + decisions in **[INTEGRATION-mctrivia.md](INTEGRATION-mctrivia.md)**.
+
+---
+
+## 0.3.0-win.98 — Node Console on :8090
 
 The built-in web UI (http://localhost:8090) is no longer a static RPC doc dump —
 it's a live **Node Console**, loopback-only.
