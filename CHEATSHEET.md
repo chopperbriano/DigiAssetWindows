@@ -59,10 +59,18 @@ Pick your role below — you only need the scripts in your section.
 | **Publish a fresh snapshot** (build + upload + manifest) | `snapshots\publish-snapshot.ps1` |
 | Publish ONLY the DigiByte chain (no chain.db on this box) | `snapshots\publish-snapshot.ps1 -Component digibyte` |
 | Schedule it weekly (Sun 3am) | `snapshots\publish-snapshot.ps1 -Schedule` |
-| **Seed a NEW node** from the published snapshot | `snapshots\seed-digibyte.ps1` |
+| **Seed a DigiByte wallet** from the published snapshot (prompts for + validates the target folder) | `snapshots\seed-digibyte.ps1` |
 | Copy a synced data dir across your own LAN | `snapshots\snapshot-digibyte-datadir.ps1 -Mode Snapshot` / `-Mode Restore` |
 
 > `make-snapshot.ps1` is the low-level piece-builder — `publish-snapshot.ps1` calls it for you. Only run it directly to debug.
+
+**Seed a standalone DigiByte wallet (no repo needed).** Anyone can fast-sync a plain DigiByte Core wallet with one line in an **Administrator PowerShell**. It prompts for the data folder, sanity-checks it (and offers **[O]verride / [R]e-enter / [C]ancel** if it doesn't look like a DigiByte directory), then downloads + extracts:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
+```
+
+Add `-DataDir "$env:APPDATA\DigiByte"` to skip the prompt, or `-Force` for unattended runs.
 
 ---
 

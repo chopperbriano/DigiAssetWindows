@@ -2,15 +2,18 @@
 
 New installs skip the ~week-long DigiByte sync by downloading a **pre-synced
 blockchain + `chain.db`** from Cloudflare R2. These scripts create and publish
-that snapshot. **Only the snapshot maintainer runs these** — regular node
-operators never do.
+that snapshot. **Only the snapshot maintainer runs the publishing scripts** —
+regular node operators never do. The one exception is **`seed-digibyte.ps1`**,
+which *any* user can run to fast-sync a standalone DigiByte wallet (see
+[Seed a standalone DigiByte wallet](#seed-a-standalone-digibyte-wallet-any-user)
+at the bottom).
 
 | Script | Purpose |
 |---|---|
 | `setup-cloudflare-snapshots.ps1` | **Run once.** Installs rclone + configures your Cloudflare R2 remote from your keys, then publishing needs no arguments. |
 | `publish-snapshot.ps1` | **The one you run each time.** Build both archives → upload to R2 → rebuild + upload `snapshot.json` → verify. Can schedule itself weekly. |
 | `make-snapshot.ps1` | The building block: creates the archives + `*-part.json` (and, with `-Component manifest`, `snapshot.json`). `publish-snapshot.ps1` calls this. |
-| `seed-digibyte.ps1` | Standalone consumer: seeds *any* DigiByte wallet from the published snapshot (install DigiByte, close it, run this). |
+| `seed-digibyte.ps1` | **Standalone consumer** (any user, no repo needed): seeds *any* DigiByte wallet from the published snapshot. **Prompts for the data directory and validates it before extracting**; `-DataDir` / `-Force` skip the prompts. See [below](#seed-a-standalone-digibyte-wallet-any-user). |
 | `snapshot-digibyte-datadir.ps1` | **Local / LAN fleet provisioning.** `-Mode Snapshot` archives one healthy box's `blocks`+`chainstate`+`indexes` (wallet excluded); `-Mode Restore` applies it to another box directly (file or `\\share`) — no R2 round-trip, no reindex, no re-sync. Restored nodes inherit the built indexes. |
 
 ## First: one-time Cloudflare R2 setup
@@ -73,3 +76,30 @@ The installer's `$DefaultSnapshotUrl` points at `…/snapshot.json`. On a fresh
 install it downloads + SHA256-verifies + extracts the DigiByte archive into
 `C:\DigiByte\Data` and `chain.db` into `C:\DigiAssetWindows` — only if those are
 empty. So keep `-BaseUrl` here in sync with the installer's baked-in URL.
+
+## Seed a standalone DigiByte wallet (any user)
+`seed-digibyte.ps1` is the only script here a **regular user** runs — it fast-syncs
+a plain DigiByte Core wallet (no DigiAsset node required) from the same published
+snapshot. Install DigiByte Core, start it once and close it (so the data directory
+exists), then run this single line in an **Administrator PowerShell**:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
+```
+
+It:
+1. Fetches the manifest and shows the snapshot height / download size.
+2. **Prompts for the data directory**, offering a detected default —
+   `%APPDATA%\DigiByte` for stock DigiByte Core, `C:\DigiByte\data` for the
+   DigiAsset for Windows layout.
+3. **Validates the folder before extracting.** If it has no `blocks\`,
+   `chainstate\`, `digibyte.conf`, wallet, or `DigiByte` in the path, it warns that
+   extracting would drop the chain into that exact folder and offers
+   **[O]verride / [R]e-enter / [C]ancel** — so the blockchain never lands in the
+   wrong place.
+4. Stops a running DigiByte, downloads (resumable, with %/speed/ETA),
+   SHA256-verifies, and extracts with a "still working" heartbeat.
+
+**Flags:** `-DataDir <path>` seeds a specific folder and skips the prompt;
+`-Force` skips the folder check + overwrite confirmation for unattended use;
+`-SnapshotUrl <url>` points at a different manifest (defaults to the official feed).

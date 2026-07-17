@@ -29,12 +29,33 @@ Your node hosts DigiAsset content and automatically joins the **DigiStamp pool**
 (`pool.digistamp.co`), which verifies it and pays it DGB for hosting. You don't
 run or manage a pool — it's already run for you. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
 
+## ⚡ Fast-sync a DigiByte Core wallet (standalone)
+
+Running (or installing) **DigiByte Core on its own** and want to skip the
+week-long initial sync? This one script downloads the same pre-synced blockchain
+snapshot the node installer uses, verifies its SHA256, and extracts it into your
+DigiByte data directory. It **prompts you for the location and sanity-checks it
+first**, so you can't accidentally unpack the chain into the wrong folder. In an
+**Administrator PowerShell**:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
+```
+
+Install DigiByte Core, start it once and close it (so the data directory exists),
+then run the line above. It offers a detected default (`%APPDATA%\DigiByte` for
+stock DigiByte Core, `C:\DigiByte\data` for the DigiAsset layout), warns and asks
+for confirmation if the folder doesn't look like a DigiByte data directory, then
+downloads + extracts. Pass `-DataDir "$env:APPDATA\DigiByte"` to skip the prompt,
+or `-Force` for unattended use. (The full node installer above already does this
+for you — you only need this script for a **standalone** DigiByte wallet.)
+
 ## Repository layout
 | Path | What |
 |---|---|
 | `setup-digiasset.ps1` | **Node installer — the one-liner. This is what you run.** |
 | `node/` | Node operator helpers: `monitor-node.ps1`, `stop-node.ps1`, `update-binaries.ps1`. |
-| `snapshots/` | Fast-sync tooling: `make-snapshot.ps1` (create), `seed-digibyte.ps1` (consume). |
+| `snapshots/` | Fast-sync tooling: `make-snapshot.ps1` (create), `seed-digibyte.ps1` (consume — prompts for + validates the DigiByte data folder). |
 | `pool/`, `setup-pool.ps1` | Pool-server code + installer. **Operator-only — you don't need these**; the DigiStamp pool is already run for you. |
 | `src/`, `cli/` | The node/analyzer C++ and command-line client. See **[ARCHITECTURE.md](ARCHITECTURE.md)**. |
 | `example.cfg` | Fully-commented `config.cfg` reference. |
