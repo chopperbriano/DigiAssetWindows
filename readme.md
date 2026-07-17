@@ -42,6 +42,9 @@ first**, so you can't accidentally unpack the chain into the wrong folder. In an
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
 ```
 
+> Prefer a release-pinned copy? The same script also ships as a release asset:
+> `https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download/seed-digibyte.ps1`
+
 Install DigiByte Core, start it once and close it (so the data directory exists),
 then run the line above. It offers a detected default (`%APPDATA%\DigiByte` for
 stock DigiByte Core, `C:\DigiByte\data` for the DigiAsset layout), warns and asks

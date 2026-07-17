@@ -87,6 +87,10 @@ exists), then run this single line in an **Administrator PowerShell**:
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
 ```
 
+The `master` raw URL above always fetches the newest script. For a release-pinned
+copy instead, download it from the release:
+`https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download/seed-digibyte.ps1`
+
 It:
 1. Fetches the manifest and shows the snapshot height / download size.
 2. **Prompts for the data directory**, offering a detected default —
