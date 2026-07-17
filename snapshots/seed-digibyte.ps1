@@ -12,22 +12,35 @@
 
 .PARAMETER SnapshotUrl  URL of snapshot.json. Defaults to the official R2 feed, so
                         normally you pass nothing.
-.PARAMETER DataDir      DigiByte data directory to seed.
-                        Default: C:\DigiByte\data (the DigiAsset for Windows layout).
-                        For a stock DigiByte Core install, pass %APPDATA%\DigiByte.
+.PARAMETER DataDir      DigiByte data directory to seed. If you OMIT this, the
+                        script PROMPTS you for the location (offering the detected
+                        default) and sanity-checks it before extracting.
+                        Stock DigiByte Core:            %APPDATA%\DigiByte
+                        DigiAsset for Windows layout:   C:\DigiByte\data
+.PARAMETER Force        Skip the "does this look like a DigiByte folder?" check and
+                        the overwrite confirmation (for unattended/scripted use).
 
 .EXAMPLE
+    # Interactive - prompts for the location and validates it before extracting:
     powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1
+
+.EXAMPLE
+    # Non-interactive - seed a specific data directory:
     powershell -ExecutionPolicy Bypass -File .\seed-digibyte.ps1 -DataDir "$env:APPDATA\DigiByte"
 #>
 [CmdletBinding()]
 param(
     [string]$SnapshotUrl = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json',
-    [string]$DataDir = 'C:\DigiByte\data'
+    [string]$DataDir = 'C:\DigiByte\data',
+    [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.3.0'
+$ScriptVersion = '1.4.0'
+# Did the user set -DataDir explicitly? Captured BEFORE we elevate so the answer
+# survives the UAC relaunch (we only forward -DataDir when it was set). That is
+# how the elevated instance knows whether to PROMPT for a location or not.
+$DataDirExplicit = $PSBoundParameters.ContainsKey('DataDir')
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 
 # Resumable BITS download with live %/speed/ETA; falls back to a plain download.
@@ -63,10 +76,57 @@ function Expand-DL($a,$dst){
     Write-Progress -Activity "Extracting" -Completed; return ($p.ExitCode -eq 0)
 }
 
+# --- DigiByte data-directory detection + validation -------------------------
+# The snapshot tar contains blocks\ + chainstate\ (+ indexes\) and unpacks them
+# STRAIGHT into the target folder. So the target MUST be a DigiByte Core data
+# directory - point it at the wrong place and you scatter tens of GB of chain
+# data into some random folder. These helpers pick a sane default and sanity-
+# check whatever the user picks before we commit to downloading/extracting.
+
+# Look for tell-tale signs that $dir is (or is meant to be) a DigiByte data dir.
+# Returns .Looks ($true when at least one signal is present) plus the reasons.
+function Test-DigiByteDataDir($dir) {
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $hasChain = $false
+    if (Test-Path -LiteralPath $dir) {
+        if (Test-Path (Join-Path $dir 'blocks'))        { [void]$reasons.Add('has blocks\');      $hasChain = $true }
+        if (Test-Path (Join-Path $dir 'chainstate'))    { [void]$reasons.Add('has chainstate\');  $hasChain = $true }
+        if (Test-Path (Join-Path $dir 'digibyte.conf')) { [void]$reasons.Add('has digibyte.conf') }
+        if (Test-Path (Join-Path $dir 'wallets'))       { [void]$reasons.Add('has wallets\') }
+        if (Test-Path (Join-Path $dir 'wallet.dat'))    { [void]$reasons.Add('has wallet.dat') }
+        foreach ($f in 'peers.dat','banlist.dat','mempool.dat','.lock','debug.log','settings.json') {
+            if (Test-Path (Join-Path $dir $f)) { [void]$reasons.Add("has $f") }
+        }
+        # The fork layout keeps digibyte.conf in the PARENT (C:\DigiByte) with the
+        # blockchain in C:\DigiByte\data, so a config one level up counts too.
+        $parent = Split-Path $dir -Parent
+        if ($parent -and (Test-Path (Join-Path $parent 'digibyte.conf'))) { [void]$reasons.Add('parent has digibyte.conf') }
+    }
+    # Weak signal: an as-yet-unused datadir (DigiByte never launched) is empty,
+    # but a path literally named ...\DigiByte is still a strong hint of intent.
+    if ($dir -match '(?i)(^|[\\/])digibyte(\b|[\\/]|$)') { [void]$reasons.Add("path is named 'DigiByte'") }
+    [pscustomobject]@{ Dir=$dir; Exists=(Test-Path -LiteralPath $dir); Looks=($reasons.Count -gt 0); HasChain=$hasChain; Reasons=$reasons }
+}
+
+# Pick the most likely existing datadir to offer as the prompt default.
+function Find-DigiByteDataDir {
+    foreach ($c in @((Join-Path $env:APPDATA 'DigiByte'), 'C:\DigiByte\data', 'C:\DigiByte\Data')) {
+        if ((Test-DigiByteDataDir $c).Looks) { return $c }
+    }
+    Join-Path $env:APPDATA 'DigiByte'   # stock DigiByte Core default
+}
+
 # Elevate (writing into the datadir / stopping DigiByte may need admin).
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -SnapshotUrl `"$SnapshotUrl`" -DataDir `"$DataDir`""; return }
+    if ($PSCommandPath) {
+        # Only forward -DataDir when the user actually set it, so the elevated
+        # instance still knows to PROMPT for a location when they didn't.
+        $fwd = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -SnapshotUrl `"$SnapshotUrl`""
+        if ($DataDirExplicit) { $fwd += " -DataDir `"$DataDir`"" }
+        if ($Force)           { $fwd += " -Force" }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; return
+    }
     else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
 
@@ -92,12 +152,58 @@ if ($m -and $m.digibyte -is [string]) {
 if (-not $m -or -not $m.digibyte -or -not $m.baseUrl) { throw 'Manifest is missing digibyte / baseUrl.' }
 $base = ("$($m.baseUrl)").TrimEnd('/')
 $url  = "$base/$($m.digibyte.file)"
-Say ("Snapshot: {0}   height {1:N0}   DigiByte {2}" -f $m.digibyte.file,[int]$m.digibyte.height,$m.digibyte.version) 'White'
+$szGB = if ($m.digibyte.sizeBytes) { [double]$m.digibyte.sizeBytes / 1GB } else { 0 }
+Say ("Snapshot: {0}   height {1:N0}   DigiByte {2}{3}" -f `
+        $m.digibyte.file,[int]$m.digibyte.height,$m.digibyte.version,`
+        $(if ($szGB) { "   ~{0:N1} GB download" -f $szGB } else { '' })) 'White'
+
+# --- Choose + validate the target data directory ---------------------------
+# The tar unpacks blocks\ + chainstate\ straight into $DataDir, so pointing it
+# at the wrong folder scatters the chain there. Prompt (unless -DataDir was
+# given), sanity-check the choice, and require an explicit override when it does
+# not look like a DigiByte data directory.
+if (-not $DataDirExplicit -and -not $Force) {
+    $suggested = Find-DigiByteDataDir
+    Say ''
+    Say 'Where should the DigiByte blockchain data be placed?' 'Cyan'
+    Say 'This is your DigiByte Core DATA directory - the folder that holds blocks\ and chainstate\:' 'Gray'
+    Say "    Stock DigiByte Core:    $env:APPDATA\DigiByte" 'Gray'
+    Say '    DigiAsset for Windows:  C:\DigiByte\data' 'Gray'
+    while ($true) {
+        $ans = Read-Host "`nData directory [$suggested]"
+        if ([string]::IsNullOrWhiteSpace($ans)) { $ans = $suggested }
+        $ans = [System.Environment]::ExpandEnvironmentVariables($ans.Trim().Trim('"'))
+        $chk = Test-DigiByteDataDir $ans
+        if ($chk.Looks) {
+            Say ("  OK - looks like a DigiByte data directory ({0})." -f ($chk.Reasons -join '; ')) 'Green'
+            $DataDir = $ans; break
+        }
+        Say ''
+        Say "  '$ans' does NOT look like a DigiByte data directory." 'Yellow'
+        Say '  Found none of: blocks\, chainstate\, digibyte.conf, a wallet, or "DigiByte" in the path.' 'Yellow'
+        Say '  Extracting here would drop blocks\ + chainstate\ into that exact folder.' 'Yellow'
+        $ov = Read-Host '  [O]verride and use it anyway / [R]e-enter a path / [C]ancel'
+        if     ($ov -match '^[Oo]') { $DataDir = $ans; Say "  Overriding - using $ans" 'Yellow'; break }
+        elseif ($ov -match '^[Cc]') { Say 'Cancelled.'; return }
+        # anything else: loop and re-enter
+    }
+} else {
+    # -DataDir (or -Force) given: still validate, but only ask once (and not at
+    # all under -Force) so scripted/unattended runs do not hang on a prompt.
+    $chk = Test-DigiByteDataDir $DataDir
+    if (-not $chk.Looks) {
+        Say ''
+        Say "WARNING: '$DataDir' does not look like a DigiByte data directory" 'Yellow'
+        Say '  (no blocks\, chainstate\, digibyte.conf, wallet, or "DigiByte" in the path).' 'Yellow'
+        if ($Force) { Say '  -Force set: continuing anyway.' 'Yellow' }
+        elseif ((Read-Host '  Extract here anyway? (y/N)') -notmatch '^[Yy]') { Say 'Cancelled.'; return }
+    }
+}
 Say "Target:   $DataDir" 'White'
 
 if (Test-Path (Join-Path $DataDir 'blocks')) {
-    Say "`nWARNING: $DataDir already has a blockchain (blocks/). The snapshot will overwrite matching files." 'Yellow'
-    if ((Read-Host "Continue? (y/N)") -notmatch '^[Yy]') { Say 'Cancelled.'; return }
+    Say "`nThis folder already has a blockchain (blocks\). The snapshot will overwrite matching files." 'Yellow'
+    if (-not $Force -and ((Read-Host 'Continue? (y/N)') -notmatch '^[Yy]')) { Say 'Cancelled.'; return }
 }
 
 if (Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue) {
