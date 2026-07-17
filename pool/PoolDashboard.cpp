@@ -812,10 +812,17 @@ void PoolDashboard::render() {
     // key hints immediately after (no blank gap). Clear-to-end-of-screen
     // wipes any stale content below from prior longer renders or window
     // resizes.
+    // Count the ACTUAL header rows emitted so far (robust to header changes) so
+    // the log area + "Log:" + key-hints exactly fill the window. Hardcoding the
+    // header height made the render overflow by a few lines each frame, which
+    // scrolled the pinned name/version header off the top of the console.
+    int headerRows = 0;
+    { const std::string sofar = out.str(); for (char c : sofar) { if (c == '\n') headerRows++; } }
+
     out << BOLD << ERASE_LINE << " Log:" << RESET << "\n";
     {
-        // Available = terminal height - fixed header rows(10) - "Log:" row(1) - key hint row(1)
-        int availableLogLines = _height - 12;
+        // Available = window height - actual header rows - "Log:" row(1) - key-hint row(1)
+        int availableLogLines = _height - headerRows - 2;
         if (availableLogLines < 5) availableLogLines = 5;
 
         std::lock_guard<std::mutex> lk(_logMutex);
