@@ -20,7 +20,19 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.99 (current) — merge upstream mctrivia/development
+## 0.3.3-win.100 (current) — pool dashboard header fix
+
+Fixes the pool server console dashboard scrolling its name/version header off
+the top. `PoolDashboard::render()` hardcoded the header at 10 rows, but the
+header actually emits ~13, so the log area overran the window by a few lines
+each frame and the console scrolled. It now counts the actual header rows
+emitted and sizes the log area from that (matching how the node's
+`ConsoleDashboard` sizes itself), so the header stays pinned. Rebuilt all
+targets at win.100.
+
+---
+
+## 0.3.3-win.99 — merge upstream mctrivia/development
 
 Integrated 117 upstream commits from `mctrivia/development` (DigiAsset Core 0.3.3)
 into the Windows fork, preserving all Windows functionality. Highlights: upstream
