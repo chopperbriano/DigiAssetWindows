@@ -21,7 +21,6 @@ namespace RPC {
         {"getencryptedkey", Methods::getencryptedkey},
         {"getexchangerates", Methods::getexchangerates},
         {"getipfscount", Methods::getipfscount},
-        {"getoldstreamkey", Methods::getoldstreamkey},
         {"getpsp", Methods::getpsp},
         {"getrandom", Methods::getrandom},
         {"getrawtransaction", Methods::getrawtransaction},

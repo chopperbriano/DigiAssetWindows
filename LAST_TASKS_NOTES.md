@@ -629,6 +629,37 @@ OldStream is the legacy DigiAsset v2 stream-key lookup. Removal checklist:
 - Commit A+B together or as two commits; suggested msg:
   "Remove legacy OldStream and bump version to 1.0.0"
 
+### Session 6 — 2026-07-19: plan A+B EXECUTED ✅
+
+**A. OldStream removed.** Deleted src/OldStream.{cpp,h}, src/RPC/Methods/
+getoldstreamkey.{cpp,html}, tests/RPC_Methods/getoldstreamkey.cpp; removed the two
+src/CMakeLists.txt entries and the web/index.html link block. Beyond the plan's
+checklist, grep found 3 more references, all handled: src/RPC/MethodList.h extern decl
+(auto-generated like MethodList.cpp — fixed by reconfigure), tests/RPC_MethodListTest.cpp
+expected-name list (edited), and src/RPC/Methods/getoldstreamkey.html (deleted; the plan
+only knew about the dead web/rpc/ link). Post-reconfigure grep for
+`OldStream|getoldstreamkey` across src/tests/web/cli/qt: zero hits.
+
+**B. Version 0.3.3.0 → MAJOR 1 / MINOR 0 / PATCH 0, SO_VERSION 0→1** in root
+CMakeLists.txt. Note: VERSION_STRING is MAJOR.MINOR.PATCH.SO, so the daemon now
+reports **"1.0.0.1"** (the .1 is the SO bump the plan approved). Version.h regenerated
+from template at reconfigure.
+
+**Verification:**
+- Full rebuild clean; suite **422 pass / 1 network skip / 0 fail** (423 total = old 426
+  minus the 3 deleted getoldstreamkey tests; RPCMethodsTest all ran — rpcTest.db was
+  present pre-run and consumed by teardown as usual).
+- Live smoke on 10.0.3.50 daemon: old daemon SIGTERM'd, new build started (DB repair
+  pass, then tip 23842938, event port 14025 up). RPC `version` → "1.0.0.1";
+  `getoldstreamkey` → forwarded to DGB wallet → clean -32601 "Method not found". GUI
+  from session 5 still running and polling fine.
+
+**Environment observations (not code):** tests/testFiles is a REAL directory again
+(not the session-4 symlink) and holds only assetTest.* — rpcTest.db.keep is NOT there
+anymore. /Volumes/external is mounted but this shell gets TCC "Operation not permitted"
+on it, so couldn't check/restore the archived copies. To rerun RPCMethodsTest: either
+restore rpcTest.db from the external archive (needs disk access) or rerun the 2h replay.
+
 ### C. Backlog (proposed to user, NOT yet approved — re-confirm before doing)
 
 Pre-PR candidates (recommended, small):

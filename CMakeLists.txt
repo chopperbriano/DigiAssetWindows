@@ -19,10 +19,10 @@ else()
 endif()
 
 # Set version number
-SET(MAJOR_VERSION 0)
-SET(MINOR_VERSION 3)
-SET(PATCH_VERSION 3)
-SET(SO_VERSION    0)
+SET(MAJOR_VERSION 1)
+SET(MINOR_VERSION 0)
+SET(PATCH_VERSION 0)
+SET(SO_VERSION    1)
 
 # Set output directory for binaries and libraries
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)  # For executables

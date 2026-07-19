@@ -97,7 +97,6 @@ set(HEADER_FILES
         AssetWallet.h
         CurlHandler.h
         Version.h
-        OldStream.h
         UniqueTaskQueue.h
         Database_Statement.h
         Database_LockedStatement.h
@@ -137,7 +136,6 @@ set(SOURCE_FILES
         AppMain.cpp
         AssetWallet.cpp
         CurlHandler.cpp
-        OldStream.cpp
         UniqueTaskQueue.cpp
         Database_Statement.cpp
         Database_LockedStatement.cpp
