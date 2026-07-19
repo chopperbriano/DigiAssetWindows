@@ -44,11 +44,13 @@ param(
     [switch]$Schedule,                # register a scheduled task instead of running now
     [ValidateSet('Weekly','Daily')][string]$Cadence = 'Weekly',
     [string]$ScheduleDay  = 'Sunday', # weekly cadence only: which day to run
-    [string]$ScheduleTime = '03:00'
+    [string]$ScheduleTime = '03:00',
+    [switch]$Hidden,                  # scheduled task runs with NO window (default: a minimized window you can watch)
+    [string]$LogDir       = ''        # where per-run logs go (default: <OutDir>\logs)
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.3.0'
+$SCRIPT_VERSION = '1.4.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 function Step($n,$m){ Write-Host ''; Write-Host "[$n] $m" -ForegroundColor Cyan }
 $here     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -67,15 +69,17 @@ if (Test-Path $cfgFile) {
 }
 $makeSnap = Join-Path $here 'make-snapshot.ps1'
 $remote   = "${RcloneRemote}:${Bucket}"
+if (-not $LogDir) { $LogDir = Join-Path $OutDir 'logs' }
 
 # --- Elevate (make-snapshot stops/starts services; scheduling needs admin) ---
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
     if ($PSCommandPath) {
         Say 'Snapshot publish needs Administrator - approve the UAC prompt...' 'Yellow'
-        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
+        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
         if ($NoManifest)  { $fwd += ' -NoManifest' }
+        if ($Hidden)      { $fwd += ' -Hidden' }
         if ($Schedule)    { $fwd += " -Schedule -Cadence $Cadence -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; return
     } else { throw 'Run this in an elevated (Administrator) PowerShell.' }
@@ -83,7 +87,11 @@ if (-not $admin) {
 
 # --- Schedule mode: register the weekly task and exit ------------------------
 if ($Schedule) {
-    $selfArg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
+    # Visible by default (Minimized) so a console shows in the taskbar and you can
+    # open it to watch a run live; -Hidden restores the old invisible behavior.
+    # Either way every run is logged to $LogDir, so activity is reviewable.
+    $winStyle = if ($Hidden) { 'Hidden' } else { 'Minimized' }
+    $selfArg = "-NoProfile -WindowStyle $winStyle -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal"
     if ($PruneRemote) { $selfArg += ' -PruneRemote' }
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $selfArg
     # Daily or weekly trigger. Each run snapshots the SAME height-consistent pair
@@ -101,10 +109,30 @@ if ($Schedule) {
     Register-ScheduledTask -TaskName 'DigiAssetSnapshotPublish' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
     $when = if ($Cadence -eq 'Daily') { "every day at $ScheduleTime" } else { "$ScheduleDay at $ScheduleTime" }
     Say "Snapshot task 'DigiAssetSnapshotPublish' registered ($Cadence): $when." 'Green'
-    Say "Component: $Component. Runs as $u while logged on (use Autologon on an always-on box)." 'White'
+    Say "Runs as $u -- ONLY WHILE THAT USER IS LOGGED ON. On an always-on box use" 'Yellow'
+    Say "Autologon so a session exists at trigger time, or the task won't fire." 'Yellow'
+    $winNote = if ($Hidden) { 'no window (review the log file)' } else { 'a MINIMIZED window - open it from the taskbar to watch a run live' }
+    Say "Component: $Component.  Window: $winNote." 'White'
+    Say "Every run is logged to:  $LogDir\publish-<timestamp>.log" 'White'
     Say "Each run briefly stops DigiByte + the node, snapshots both, restarts them, uploads to $remote, and refreshes snapshot.json." 'White'
+    Say "Run it once now to confirm it works:  Start-ScheduledTask -TaskName DigiAssetSnapshotPublish" 'Gray'
     return
 }
+
+# --- Per-run logging ---------------------------------------------------------
+# Capture the whole run to a timestamped file so activity is reviewable - vital
+# for the unattended scheduled runs and for diagnosing a task that "didn't run
+# right." Keeps the newest 14 logs. Non-fatal if it can't start.
+$runLog = $null
+try {
+    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
+    $runLog = Join-Path $LogDir ("publish-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+    Start-Transcript -Path $runLog | Out-Null
+    Get-ChildItem (Join-Path $LogDir 'publish-*.log') -EA SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 14 |
+        Remove-Item -Force -EA SilentlyContinue
+    Say "Logging this run to: $runLog" 'Gray'
+} catch { Say "  (couldn't start run log: $($_.Exception.Message))" 'Yellow'; $runLog = $null }
 
 # --- Preconditions -----------------------------------------------------------
 if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) { throw "rclone not found. Run setup-cloudflare-snapshots.ps1 once to install + configure it: .\setup-cloudflare-snapshots.ps1" }
@@ -230,3 +258,5 @@ if ($PruneRemote -and $cur) {
 Write-Host ''
 Say '===================== SNAPSHOT PUBLISHED =====================' 'Green'
 Say " Nodes will now fast-sync from the refreshed $remote/snapshot.json" 'White'
+if ($runLog) { Say " Full log of this run: $runLog" 'Gray' }
+try { Stop-Transcript | Out-Null } catch {}

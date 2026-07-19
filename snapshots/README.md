@@ -61,8 +61,22 @@ powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule
 # daily (every day at 03:00)
 powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule -Cadence Daily
 ```
-Registers the **`DigiAssetSnapshotPublish`** task, running as you while logged on
-— pair with **Autologon** on an always-on box.
+Registers the **`DigiAssetSnapshotPublish`** task.
+
+**It only runs WHILE YOU ARE LOGGED ON.** The task uses an interactive logon, so
+on an always-on box it will silently not fire if the machine is sitting at the
+lock screen or was rebooted without a login. Pair with **Autologon** so a session
+exists at trigger time. (This is the usual reason a snapshot task "doesn't run.")
+
+**Seeing activity / logs.** Each run opens a **minimized** PowerShell window — open
+it from the taskbar to watch live — and writes a full transcript to
+`C:\DigiAssetSnapshots\logs\publish-<timestamp>.log` (newest 14 kept). Add
+`-Hidden` when scheduling if you'd rather it run with no window (the log is still
+written). Check the last result and force a test run anytime:
+```powershell
+Get-ScheduledTaskInfo -TaskName DigiAssetSnapshotPublish   # LastRunTime / LastTaskResult (0 = success)
+Start-ScheduledTask   -TaskName DigiAssetSnapshotPublish   # run it now to confirm
+```
 
 **Keep the apps running between snapshots.** The DigiByte wallet + node stay up
 24/7 via the installer's autostart tasks (that's what keeps them synced); this job
