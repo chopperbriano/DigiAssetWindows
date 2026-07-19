@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "Database.h"
 #include "DigiByteCore.h"
+#include "EventBroadcaster.h"
 #include "IPFS.h"
 #include "Log.h"
 #include "RPC/Server.h"
@@ -260,6 +261,11 @@ int main() {
     main->setChainAnalyzer(&analyzer);
 
     //analyzer.stop();
+
+    /**
+     * Start event stream(TCP newline delimited JSON events.  config eventport, 0 disables)
+     */
+    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025));
 
     /**
      * Start RPC Server

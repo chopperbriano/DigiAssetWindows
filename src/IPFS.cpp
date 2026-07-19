@@ -110,6 +110,8 @@ void IPFS::mainFunction() {
                     (getSize(cid) < stoul(extra)) //within restrictions
             ) {
                 _command("pin/add/" + cid, {}, _timeoutPin * 1000);
+                std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+                _pinnedCache.insert(cid);
             }
         } catch (const exceptionTimeout& e) {
             //don't worry about failed pin
@@ -122,6 +124,8 @@ void IPFS::mainFunction() {
                     (getSize(cid) < stoul(extra)) //within restrictions
             ) {
                 _command("pin/rm/" + cid, {}, _timeoutPin * 1000);
+                std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+                _pinnedCache.erase(cid);
             }
         } catch (const exceptionTimeout& e) {
             //don't worry about failed pin
@@ -470,8 +474,29 @@ void IPFS::unpin(const string& cid) {
 
 
 bool IPFS::isPinned(const string& cid) const {
-    string results = _command("pin/ls/" + cid);
-    return (results.find("is not pinned") == string::npos);
+    std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+
+    //one bulk load instead of one HTTP round trip per lookup.  The cache is kept fresh
+    //by the pin/unpin job handlers, so the only misses are pins made by OTHER programs
+    //sharing the node - for those we just queue a download job which is still correct
+    if (!_pinnedCacheLoaded) {
+        try {
+            string results = _command("pin/ls?type=recursive");
+            Json::Value json;
+            Json::CharReaderBuilder rbuilder;
+            istringstream stream(results);
+            string errs;
+            if (Json::parseFromStream(rbuilder, stream, &json, &errs) && json.isMember("Keys")) {
+                for (const string& key: json["Keys"].getMemberNames()) {
+                    _pinnedCache.insert(key);
+                }
+            }
+            _pinnedCacheLoaded = true;
+        } catch (...) {
+            return false; //node not reachable - treat as not pinned, retry the load next call
+        }
+    }
+    return (_pinnedCache.count(cid) > 0);
 }
 
 unsigned int IPFS::getSize(const string& cid) const {
@@ -503,7 +528,11 @@ unsigned int IPFS::getSize(const string& cid) const {
 void IPFS::downloadFile(const string& cid, const string& filePath, bool pinAlso) {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
-    if (pinAlso) _command("pin/add/" + cid);
+    if (pinAlso) {
+        _command("pin/add/" + cid);
+        std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+        _pinnedCache.insert(cid);
+    }
     _command("cat?arg=" + cid, {}, 0, filePath);
 }
 

@@ -3,6 +3,7 @@
 //
 
 #include "ChainAnalyzer.h"
+#include "EventBroadcaster.h"
 #include "AppMain.h"
 #include "BitIO.h"
 #include "Config.h"
@@ -324,6 +325,13 @@ void ChainAnalyzer::phaseSync() {
         if (shouldStoreNonAssetUTXO() || (_height >= 8432316)) { //only non asset utxo below this height
             for (string& tx: blockData.tx)
                 processTX(tx, blockData.height);
+        }
+
+        if (!fastMode) {
+            //near the tip: let event stream subscribers know a block was processed
+            EventBroadcaster::GetInstance()->broadcast(
+                    "{\"event\":\"newBlock\",\"height\":" + to_string(_height) +
+                    ",\"blocksBehind\":" + to_string(0 - _state) + "}");
         }
 
         if (endBatch && inTransaction) {

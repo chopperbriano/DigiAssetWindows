@@ -64,6 +64,7 @@ set(HEADER_FILES
         static_block.hpp
         Threaded.h
         ChainAnalyzer.h
+        EventBroadcaster.h
         Database.h
         DigiByteCore.h
         Blob.h
@@ -108,6 +109,7 @@ set(HEADER_FILES
 set(SOURCE_FILES
         Threaded.cpp
         ChainAnalyzer.cpp
+        EventBroadcaster.cpp
         Database.cpp
         DigiByteCore.cpp
         Blob.cpp

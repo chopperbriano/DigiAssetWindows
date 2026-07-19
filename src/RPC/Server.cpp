@@ -173,7 +173,9 @@ namespace RPC {
                 error = true;
             } catch (const std::exception& e) {
                 log->addMessage("Unexpected exception in RPC call #" + std::to_string(callNumber) + ": " + e.what(), Log::DEBUG);
-                response = createErrorResponse(RPC_MISC_ERROR, "Unexpected Error", request);
+                //surface the real reason - "Unexpected Error" alone cost hours of debugging
+                //(the detail used to exist only at DEBUG log level)
+                response = createErrorResponse(RPC_MISC_ERROR, std::string("Unexpected Error: ") + e.what(), request);
                 error = true;
             } catch (...) {
                 log->addMessage("Unknown exception in RPC call #" + std::to_string(callNumber), Log::DEBUG);

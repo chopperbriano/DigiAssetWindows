@@ -12,6 +12,7 @@
 #include <future>
 #include <mutex>
 #include <sqlite3.h>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -28,6 +29,13 @@ class IPFS : public Threaded {
 private:
     const static std::vector<std::string> _knownLostCID;
     std::string _nodePrefix = "http://localhost:5001/api/v0/";
+
+    //cache of cids pinned on the node so isPinned never blocks the callers(the chain
+    //analyzer asks for every pool issuance it processes - one HTTP round trip each was
+    //enough to stall sync 400x when the ipfs daemon was busy)
+    mutable std::set<std::string> _pinnedCache;
+    mutable std::mutex _pinnedCacheMutex;
+    mutable bool _pinnedCacheLoaded = false;
 
     ///timeout times are in seconds
     unsigned int _timeoutPin = 1200;
