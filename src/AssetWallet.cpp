@@ -6,6 +6,7 @@
 #include "AppMain.h"
 #include "Database.h"
 #include "DigiByteCore.h"
+#include "RPC/Server.h" //for the RPC_ error code constants
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -122,6 +123,21 @@ namespace AssetWallet {
         return whole + "." + frac;
     }
 
+    uint64_t estimateMinerFee(const DigiByteTransaction& tx) {
+        uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
+        try {
+            Json::Value feeParams = Json::arrayValue;
+            feeParams.append(6);
+            Json::Value est = AppMain::GetInstance()->getDigiByteCore()->sendcommand("estimatesmartfee", feeParams);
+            if (est.isMember("feerate") && est["feerate"].isNumeric() && (est["feerate"].asDouble() > 0)) {
+                feeRate = static_cast<uint64_t>(est["feerate"].asDouble() * 100000000);
+            }
+        } catch (...) {} //fallback rate already set
+        size_t estimatedVSize = 200 + (tx.encodeAssetOpReturn().length() / 2) +
+                                (tx.getOutputCount() * 35) + (tx.getInputCount() * 70) + 150;
+        return feeRate * estimatedVSize / 1000;
+    }
+
     string fundSignSend(const DigiByteTransaction& tx, string* signedHex) {
         AppMain* main = AppMain::GetInstance();
         DigiByteCore* dgb = main->getDigiByteCore();
@@ -228,10 +244,23 @@ namespace AssetWallet {
             Json::Value signParams = Json::arrayValue;
             signParams.append(fundedHex);
             Json::Value signResult;
+            //-13 = RPC_WALLET_UNLOCK_NEEDED.  Surface it clearly instead of falling through
+            //to the legacy sign call whose "Method not found" would mask the real problem
+            auto throwIfWalletLocked = [](const DigiByteException& e) {
+                if ((e.getCode() == -13) || (e.getMessage().find("walletpassphrase") != string::npos)) {
+                    throw DigiByteException(RPC_MISC_ERROR, "Wallet is encrypted and locked.  Unlock it first with: walletpassphrase \"<passphrase>\" <seconds>");
+                }
+            };
             try {
                 signResult = dgb->sendcommand("signrawtransactionwithwallet", signParams);
             } catch (const DigiByteException& e) {
-                signResult = dgb->sendcommand("signrawtransaction", signParams);
+                throwIfWalletLocked(e);
+                try {
+                    signResult = dgb->sendcommand("signrawtransaction", signParams);
+                } catch (const DigiByteException& e2) {
+                    throwIfWalletLocked(e2);
+                    throw;
+                }
             }
             if (!signResult["complete"].asBool()) {
                 throw DigiByteTransaction::exception("Wallet could not fully sign the transaction.  Is the wallet unlocked?");

@@ -62,17 +62,20 @@ protected:
         cache = new RPC::Cache();
         AppMain::GetInstance()->setRpcCache(cache);
 
-        // Intentionally leaked: accept() is [[noreturn]] and the io_context
-        // work guard is never released, so ~Server would block forever on
-        // thread joins.  The blocked threads are harmless for the rest of the
-        // test run and die with the process.
         openServer = new RPC::Server(OPEN_CONFIG);
         restrictedServer = new RPC::Server(RESTRICTED_CONFIG);
-        std::thread([] { openServer->start(); }).detach();
-        std::thread([] { restrictedServer->start(); }).detach();
+        openServer->start();
+        restrictedServer->start();
     }
 
     static void TearDownTestSuite() {
+        // delete = stop(): joins every server thread.  Leaving them running
+        // used to crash the process at exit("mutex lock failed") when a still
+        // live thread touched an already destroyed static mutex.
+        delete openServer;
+        openServer = nullptr;
+        delete restrictedServer;
+        restrictedServer = nullptr;
         AppMain::GetInstance()->reset();
         delete cache;
         cache = nullptr;

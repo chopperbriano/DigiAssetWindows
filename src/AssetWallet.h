@@ -42,6 +42,14 @@ namespace AssetWallet {
     std::string satsToDecimal(uint64_t sats);
 
     /**
+     * Rough miner fee estimate in sats for a not yet funded asset transaction: the node's
+     * estimatesmartfee rate(min relay rate fallback) over an approximated funded size
+     * (base + op_return + outputs + one funding input + change).  DigiByte fees are tiny
+     * so rough is fine - used by the dryrun option of the asset RPC methods.
+     */
+    uint64_t estimateMinerFee(const DigiByteTransaction& tx);
+
+    /**
      * Takes a fully described asset transaction(inputs, outputs and issuance data set),
      * then funds(pays the fee), signs and broadcasts it via the DigiByte wallet.
      *

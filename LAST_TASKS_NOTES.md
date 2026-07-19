@@ -660,7 +660,94 @@ anymore. /Volumes/external is mounted but this shell gets TCC "Operation not per
 on it, so couldn't check/restore the archived copies. To rerun RPCMethodsTest: either
 restore rpcTest.db from the external archive (needs disk access) or rerun the 2h replay.
 
-### C. Backlog (proposed to user, NOT yet approved — re-confirm before doing)
+## Session 7 — 2026-07-19: Section C backlog APPROVED by user ("section c approved")
+
+Working through all 10 items: pre-PR items 1-4 first on `asset_features`, then 5-10.
+
+### Pre-PR items 1-4 (checkpoint 1)
+
+**1. Graceful shutdown — DONE, live verified.**
+- KEY DISCOVERY: `RPC::Server::start()` never returned (accept loop ran on the main
+  thread; the old `while(true)` sleep at the end of main was dead code).
+- Server: `start()` now spawns an accept thread and returns; new `stop()` closes the
+  acceptor, joins accept thread, releases the io_context work guard and joins the pool.
+  `[[noreturn]]` removed from accept(); loop exits on `_stopRequested`.
+- main.cpp: SIGINT/SIGTERM handler sets an atomic; main waits, then stops in order:
+  server → analyzer → ipfs → EventBroadcaster → walCheckpoint → delete psp/db. Logs
+  "Shutdown complete".
+- `shutdown` RPC now raises SIGTERM after its own stops, so the daemon actually EXITS
+  cleanly (response still delivered first — pool drained before sockets close).
+  Test binary ignores SIGTERM around the direct method call (tests/RPC_Methods/shutdown.cpp).
+- TWO SHUTDOWN HANGS found live and fixed:
+  a) ChainAnalyzer at-tip wait loop (`while nextblockhash.empty()`) never checked
+     stopRequested() — shutdown waited for the next block (minutes). Fixed.
+  b) IPFS job threads block in curl for up to ipfstimeoutpin/download (20-60 min) and
+     Threaded::stop() joins them. Fix: CurlHandler::abortAllTransfers(bool) — global
+     atomic checked by a curl progress callback (~1/s); aborts surface as
+     exceptionTimeout so jobs stay queued in db and resume on next start. IPFS::stop()
+     override (Threaded::stop now virtual) sets/clears the flag around the join.
+     Also fixed pre-existing curl handle leak on the timeout throw path.
+- LIVE: SIGTERM → clean exit in 2s, WAL truncated to 0. shutdown RPC → response
+  received, exit 2s later. (A hard-killed daemon had left a 293MB WAL; clean path
+  flushes it.)
+
+**2. Event stream bind — DONE, live verified.** Default bind now 127.0.0.1 (no auth on
+the stream); new config key `eventbind` (e.g. 0.0.0.0) for deliberate LAN exposure.
+Documented in example.cfg (+eventport which was never documented). lsof confirms
+127.0.0.1:14025.
+
+**3. Test-exit crash — SOLVED (it was two different crashes):**
+- The two macOS crash reports (7-14, 7-18) were NOT the mutex flake: they were SEGVs —
+  `RPCMethodsTest::TearDownTestSuite` calling `ipfs->stop()` with ipfs==nullptr after
+  SetUpTestSuite bailed (missing rpcTest.db). Fault address 0x10 = Threaded::_running
+  offset. FIXED: null-guarded teardown.
+- RPC_ServerTest no longer leaks two Servers + threads (delete in teardown now that
+  Server::stop() works) — removes a whole class of static-destruction hazards.
+- The "mutex lock failed" flake itself: reproduced 2x pre-fix, then 0 in 61+ runs after
+  the server-leak fix. A terminate handler is now permanently installed in
+  tests/TestHelpers.cpp that prints the throwing thread's backtrace if it ever recurs.
+
+**4. Wallet-locked detection — DONE (code).** fundSignSend detects RPC error -13 /
+"walletpassphrase" on both sign calls and throws a clear "Wallet is encrypted and
+locked. Unlock it first with: walletpassphrase ..." instead of falling through to the
+legacy sign call's confusing "Method not found". Not live-tested (test wallet is
+unencrypted; encrypting it on the shared box wasn't worth the state change).
+
+**3-EPILOGUE: the mutex flake was CAUGHT and root-caused.** The TestHelpers terminate
+handler fired during a checkpoint suite run and printed the smoking gun:
+`RPC::Methods::asyncstart`'s detached queue-processing thread → Log::addMessage →
+mutex::lock. The `RPC_asyncstart.validMethodName_returnsQueueLength` test (plain TEST,
+so not excluded by any RPCMethodsTest filter) spawns that detached forever-thread; at
+process exit it can be mid-job logging AFTER static `Log::_mutex` was destroyed
+(unordered static destruction across TUs). FIX: immortal-static pattern — Log, AppMain,
+EventBroadcaster and DigiByteCore static mutexes are now heap-allocated
+never-destroyed (`static std::mutex& getLock()`), and asyncstart's static
+UniqueTaskQueue is likewise immortal (the worker waits on its condition variable during
+exit — destroying the queue under it was UB of the same class). 5/5 suite runs green
+after the fix; the terminate-handler diagnostic stays in permanently.
+
+### Items 6+7 (backlog): asset events + dryrun — DONE, live verified
+
+**6. New event types** emitted from ChainAnalyzer::processTX after the DB write (only
+asset-bearing txs, so no firehose even during initial sync):
+`assetIssued`/`assetTransfer`/`assetBurn` `{assetIds:[...],txid,height}` +
+`balanceChanged` `{addresses:[...],txid,height}`. Documented in EventBroadcaster.h.
+LIVE end-to-end on mainnet: sent 10 of Valid Test Coin (txid d44dea24…) → on
+confirmation the nc listener received assetTransfer with the right assetId,
+balanceChanged with the 4 touched addresses, then newBlock. (Send left asset 5347
+balance 900→900 — self-send, only ~0.002 DGB miner fee spent.)
+
+**7. dryrun for sendasset/burnasset/reissueasset** — options.dryrun=true builds the
+full tx and returns {outputs, estimatedMinerFee, estimatedTotal, sats{}} without
+broadcasting. Miner-fee estimator factored into AssetWallet::estimateMinerFee (issueasset
+now uses it too). reissueasset dryrun uses the issuer address as stand-in instead of
+consuming a fresh wallet address. Docs updated in all 3 .html files. LIVE: sendasset
+dryrun 0.00246695 total, burnasset dryrun 0.0022, reissue dryrun correctly reports the
+unfunded-issuer error. NEW TEST FILES tests/RPC_Methods/{burnasset,reissueasset}.cpp
+(param validation incl. dryrun type; these had NO rpc-level tests before) + dryrun test
+in sendasset.cpp — all RPCMethodsTest fixture, need rpcTest.db to actually run.
+
+### C. Backlog (approved 2026-07-19; items 1-4 above done, 5-10 below)
 
 Pre-PR candidates (recommended, small):
 1. Graceful shutdown: SIGINT/SIGTERM handler in src/main.cpp replacing the

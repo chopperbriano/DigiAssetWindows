@@ -45,7 +45,10 @@ using Json::Value;
 using Json::ValueIterator;
 using namespace std;
 
-mutex DigiByteCore::_mutex;
+mutex& DigiByteCore::getLock() {
+    static mutex* m = new mutex; //intentionally leaked - see header
+    return *m;
+}
 
 DigiByteCore::~DigiByteCore() {
     dropConnection();
@@ -233,7 +236,7 @@ Value DigiByteCore::sendcommand(const string& command, const Value& params) {
     Value result;
     _runCount++;
     std::chrono::steady_clock::time_point _creationTime=std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(_mutex); //we can only run one at a time or bad things happen
+    std::lock_guard<std::mutex> lock(getLock()); //we can only run one at a time or bad things happen
     try {
         result = client->CallMethod(command, params);
 

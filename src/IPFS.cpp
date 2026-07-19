@@ -67,6 +67,19 @@ IPFS::IPFS(const string& configFile, bool runStart) {
     if (runStart) start();
 }
 
+IPFS::~IPFS() {
+    stop();
+}
+
+void IPFS::stop() {
+    //in flight requests can block for up to the pin/download timeout(minutes) and
+    //Threaded::stop() waits for every job thread - cut the requests short instead.
+    //Interrupted jobs fail like timeouts: still queued in the db, resumed on restart
+    CurlHandler::abortAllTransfers(true);
+    Threaded::stop();
+    CurlHandler::abortAllTransfers(false);
+}
+
 /*
 ████████╗██╗  ██╗██████╗ ███████╗ █████╗ ██████╗
 ╚══██╔══╝██║  ██║██╔══██╗██╔════╝██╔══██╗██╔══██╗

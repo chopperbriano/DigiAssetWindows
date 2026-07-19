@@ -27,10 +27,14 @@ namespace RPC {
         * params[2] - options(object optional):
         *             "toAddress"(string) - address or domain the new assets go to.  Defaults to
         *                                   a new wallet address
+        *             "dryrun"(bool default false) - build the transaction and return what it
+        *                                   would cost WITHOUT broadcasting anything
         *
         * @return object:
         *   "txid"(string) - txid of the reissuance transaction
         *   "assetId"(string) - id of the asset(same as the original)
+        * or when dryrun is set:
+        *   "outputs", "estimatedMinerFee", "estimatedTotal"(decimal DGB strings), "sats"{...}
         */
         extern const Response reissueasset(const Json::Value& params) {
             if (params.size() < 2 || params.size() > 3) {
@@ -74,6 +78,7 @@ namespace RPC {
 
             //get options
             std::string toAddress;
+            bool dryrun = false;
             if (params.size() == 3) {
                 if (!params[2].isObject()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
                 if (params[2].isMember("toAddress")) {
@@ -82,8 +87,12 @@ namespace RPC {
                         toAddress = DigiByteDomain::getAddress(toAddress);
                     }
                 }
+                if (params[2].isMember("dryrun")) {
+                    if (!params[2]["dryrun"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "dryrun must be a bool");
+                    dryrun = params[2]["dryrun"].asBool();
+                }
             }
-            if (toAddress.empty()) toAddress = main->getDigiByteCore()->getnewaddress();
+            if (toAddress.empty() && !dryrun) toAddress = main->getDigiByteCore()->getnewaddress();
 
             //the assetId is derived from the first input's address, so the reissuance MUST
             //spend a UTXO sitting on the original issuer address.  It also must not carry
@@ -123,7 +132,30 @@ namespace RPC {
             DigiByteTransaction tx;
             tx.addInput(issuerInput);
             tx.setIssuance(addition);
-            tx.addDigiAssetOutput(toAddress, std::vector<DigiAsset>{addition});
+            //a dry run with no explicit toAddress uses the issuer address as a stand in
+            //instead of consuming a fresh wallet address(cost is identical)
+            tx.addDigiAssetOutput(toAddress.empty() ? issuerAddress : toAddress, std::vector<DigiAsset>{addition});
+
+            //dry run stops here: report the cost without broadcasting anything
+            if (dryrun) {
+                uint64_t outputSats = 0;
+                for (unsigned int i = 0; i < tx.getOutputCount(); i++) outputSats += tx.getOutput(i).digibyte;
+                //the issuer input's DGB comes back out(minus fee), so cost is just the fee
+                //plus any dust the new asset output needs beyond that input
+                uint64_t minerFeeSats = AssetWallet::estimateMinerFee(tx);
+
+                Json::Value result = Json::objectValue;
+                result["outputs"] = AssetWallet::satsToDecimal(outputSats);
+                result["estimatedMinerFee"] = AssetWallet::satsToDecimal(minerFeeSats);
+                result["estimatedTotal"] = AssetWallet::satsToDecimal(outputSats + minerFeeSats);
+                result["sats"] = Json::objectValue;
+                result["sats"]["outputs"] = static_cast<Json::UInt64>(outputSats);
+                result["sats"]["estimatedMinerFee"] = static_cast<Json::UInt64>(minerFeeSats);
+                Response response;
+                response.setResult(result);
+                response.setBlocksGoodFor(-1); //do not cache
+                return response;
+            }
 
             //fund, sign and broadcast(fundSignSend verifies the first input keeps its place)
             std::string signedHex;

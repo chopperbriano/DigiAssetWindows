@@ -55,6 +55,13 @@ private:
 
 public:
     IPFS(const std::string& configFile, bool runStart = true);
+    ~IPFS() override;
+
+    ///aborts in flight http requests to the ipfs node before joining the job threads -
+    ///a pin or download can legitimately block for many minutes and shutdown shouldn't
+    ///wait for them.  Aborted jobs look like timeouts so they stay queued in the
+    ///database and resume on next start.
+    void stop() override;
 
     //helpers
     static std::string sha256ToCID(BitIO& hash);

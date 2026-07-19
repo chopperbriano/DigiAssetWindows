@@ -9,21 +9,26 @@ using boost::asio::ip::tcp;
 using namespace std;
 
 EventBroadcaster* EventBroadcaster::_pinstance = nullptr;
-std::mutex EventBroadcaster::_mutex;
+std::mutex& EventBroadcaster::getLock() {
+    static std::mutex* m = new std::mutex; //intentionally leaked - see header
+    return *m;
+}
 
 EventBroadcaster* EventBroadcaster::GetInstance() {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::mutex> lock(getLock());
     if (_pinstance == nullptr) _pinstance = new EventBroadcaster();
     return _pinstance;
 }
 
-void EventBroadcaster::start(unsigned int port) {
+void EventBroadcaster::start(unsigned int port, const std::string& bindAddress) {
     if (_running || (port == 0)) return;
     try {
-        _acceptor = std::unique_ptr<tcp::acceptor>(new tcp::acceptor(_io, tcp::endpoint(tcp::v4(), port)));
+        //no auth on this stream so default to loopback; config "eventbind" widens it deliberately
+        tcp::endpoint endpoint(boost::asio::ip::make_address(bindAddress), port);
+        _acceptor = std::unique_ptr<tcp::acceptor>(new tcp::acceptor(_io, endpoint));
     } catch (const std::exception& e) {
         Log* log = Log::GetInstance();
-        log->addMessage("Event stream could not bind port " + to_string(port) + ": " + e.what(), Log::WARNING);
+        log->addMessage("Event stream could not bind " + bindAddress + ":" + to_string(port) + ": " + e.what(), Log::WARNING);
         return;
     }
     _running = true;
@@ -40,7 +45,7 @@ void EventBroadcaster::start(unsigned int port) {
             }
         }
     });
-    Log::GetInstance()->addMessage("Event stream listening on port " + to_string(port));
+    Log::GetInstance()->addMessage("Event stream listening on " + bindAddress + ":" + to_string(port));
 }
 
 void EventBroadcaster::stop() {

@@ -42,7 +42,7 @@ private:
     std::unique_ptr<jsonrpc::HttpClient> httpClient = nullptr;
     std::unique_ptr<jsonrpc::Client> client = nullptr;
     uint64_t _dgbToSat(std::string value);
-    static std::mutex _mutex;
+    static std::mutex& getLock(); //never destroyed - safe to use during process exit
     bool _useAssetPort = false;
 
 

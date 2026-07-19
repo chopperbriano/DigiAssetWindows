@@ -9,9 +9,17 @@
 #include "RPC/Server.h"
 #include "Version.h"
 #include "utils.h"
+#include <atomic>
+#include <csignal>
 #include <iostream>
 #include "InstanceLock.h"
 
+namespace {
+    std::atomic<bool> shutdownRequested{false};
+    extern "C" void handleShutdownSignal(int) {
+        shutdownRequested = true; //signal safe: everything else happens on the main thread
+    }
+} // namespace
 
 int main() {
     struct bootStrap {
@@ -265,26 +273,43 @@ int main() {
     /**
      * Start event stream(TCP newline delimited JSON events.  config eventport, 0 disables)
      */
-    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025));
+    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
+                                           config.getString("eventbind", "127.0.0.1"));
 
     /**
      * Start RPC Server
      */
-
+    RPC::Server* server = nullptr;
     try {
         // Create and start the Bitcoin RPC server
         log->addMessage("Starting RPC Server");
-        RPC::Server server;
-        main->setRpcServer(&server);
-        server.start();
+        server = new RPC::Server();
+        main->setRpcServer(server);
+        server->start();
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
     }
 
-
-    while (true) {
-        std::chrono::seconds dura(100);
-        std::this_thread::sleep_for(dura);
+    /*
+     * Wait for SIGINT(ctrl-c)/SIGTERM then shut down cleanly
+     */
+    std::signal(SIGINT, handleShutdownSignal);
+    std::signal(SIGTERM, handleShutdownSignal);
+    while (!shutdownRequested) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+    log->addMessage("Shutdown signal received.  Stopping");
+
+    //order matters: stop everything that could touch the database before flushing/closing it
+    if (server != nullptr) server->stop(); //no new RPC calls; joins all RPC threads
+    analyzer.stop();                       //joins the chain analyzer thread
+    ipfs.stop();                           //joins the IPFS job threads
+    EventBroadcaster::GetInstance()->stop();
+    delete server;
+    db->walCheckpoint(); //flush WAL into chain.db so the db file is complete on its own
+    delete psp;          //closes the pools' own sqlite handles
+    delete db;           //closes the chain.db sqlite handles
+    log->addMessage("Shutdown complete");
+    return 0;
 }

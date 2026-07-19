@@ -34,7 +34,10 @@ http://opensource.org/licenses/MIT. -->
                 </p>
                 <pre class="literal-block">
 {
-    "toAddress": "dgb1...."       // address or domain the new assets go to.
+    "toAddress": "dgb1....",      // address or domain the new assets go to.
+    "dryrun": false               // when true builds the transaction and returns its cost
+                                  // (outputs, estimatedMinerFee, estimatedTotal) without
+                                  // broadcasting anything
                                   // defaults to a new wallet address
 }
 </pre

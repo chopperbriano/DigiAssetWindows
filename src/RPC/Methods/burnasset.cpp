@@ -23,8 +23,11 @@ namespace RPC {
         * params[2] - options(object optional):
         *             "changeAddress"(string) - address any asset change should go to.  Defaults
         *                                       to a new wallet change address
+        *             "dryrun"(bool default false) - build the transaction and return what it
+        *                                       would cost WITHOUT broadcasting anything
         *
-        * @return txid(string) of the broadcast transaction
+        * @return txid(string) of the broadcast transaction, or when dryrun is set an object:
+        *   "outputs", "estimatedMinerFee", "estimatedTotal"(decimal DGB strings), "sats"{...}
         */
         extern const Response burnasset(const Json::Value& params) {
             if (params.size() < 2 || params.size() > 3) {
@@ -65,6 +68,7 @@ namespace RPC {
 
             //get options
             std::string changeAddress;
+            bool dryrun = false;
             if (params.size() == 3) {
                 if (!params[2].isObject()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
                 if (params[2].isMember("changeAddress")) {
@@ -72,6 +76,10 @@ namespace RPC {
                     if (DigiByteDomain::isDomain(changeAddress)) {
                         changeAddress = DigiByteDomain::getAddress(changeAddress);
                     }
+                }
+                if (params[2].isMember("dryrun")) {
+                    if (!params[2]["dryrun"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "dryrun must be a bool");
+                    dryrun = params[2]["dryrun"].asBool();
                 }
             }
 
@@ -124,6 +132,25 @@ namespace RPC {
                     changeAssets.insert(changeAssets.begin(), changePart);
                 }
                 tx.addDigiAssetOutput(changeAddress, changeAssets);
+            }
+
+            //dry run stops here: report the cost without broadcasting anything
+            if (dryrun) {
+                uint64_t outputSats = 0;
+                for (unsigned int i = 0; i < tx.getOutputCount(); i++) outputSats += tx.getOutput(i).digibyte;
+                uint64_t minerFeeSats = AssetWallet::estimateMinerFee(tx);
+
+                Json::Value result = Json::objectValue;
+                result["outputs"] = AssetWallet::satsToDecimal(outputSats);
+                result["estimatedMinerFee"] = AssetWallet::satsToDecimal(minerFeeSats);
+                result["estimatedTotal"] = AssetWallet::satsToDecimal(outputSats + minerFeeSats);
+                result["sats"] = Json::objectValue;
+                result["sats"]["outputs"] = static_cast<Json::UInt64>(outputSats);
+                result["sats"]["estimatedMinerFee"] = static_cast<Json::UInt64>(minerFeeSats);
+                Response response;
+                response.setResult(result);
+                response.setBlocksGoodFor(-1); //do not cache
+                return response;
             }
 
             //fund, sign and broadcast

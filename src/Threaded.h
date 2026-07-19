@@ -27,8 +27,8 @@ protected:
 public:
     bool stopRequested();
     void start();
-    void stop();
-    ~Threaded();
+    virtual void stop();
+    virtual ~Threaded();
 };
 
 

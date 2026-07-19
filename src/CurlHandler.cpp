@@ -4,6 +4,7 @@
 
 #include "CurlHandler.h"
 #include "static_block.hpp"
+#include <atomic>
 #include <map>
 #include <stdexcept>
 
@@ -38,7 +39,24 @@ namespace CurlHandler {
             size_t written = fwrite(ptr, size, nmemb, stream);
             return written;
         }
+
+        std::atomic<bool> _abortAll{false};
+
+        //curl calls this roughly once a second during a transfer; nonzero return aborts
+        int progressCallback(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+            return _abortAll ? 1 : 0;
+        }
+
+        //attach the abort check to a request(curl disables progress callbacks by default)
+        void applyAbortCheck(CURL* curl) {
+            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCallback);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        }
     } // namespace
+
+    void abortAllTransfers(bool abort) {
+        _abortAll = abort;
+    }
 
     string get(const string& url, unsigned int timeout) {
         //check CURL is installed and get a thread safe instance of it
@@ -53,8 +71,12 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
-        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
+        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
+            curl_easy_cleanup(curl);
+            throw exceptionTimeout();
+        }
         if (res != CURLE_OK) {
             curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
@@ -87,8 +109,12 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
-        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
+        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
+            curl_easy_cleanup(curl);
+            throw exceptionTimeout();
+        }
         if (res != CURLE_OK) {
             curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
@@ -123,9 +149,10 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
         curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
         curl_mime_free(mime);
-        if (res == CURLE_OPERATION_TIMEDOUT) {
+        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
             curl_easy_cleanup(curl);
             throw exceptionTimeout();
         }
@@ -151,8 +178,12 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeData);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
-        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
+        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
+            curl_easy_cleanup(curl);
+            throw exceptionTimeout();
+        }
         if (res != CURLE_OK) {
             curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
@@ -186,8 +217,12 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
         if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+        applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
-        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
+        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
+            curl_easy_cleanup(curl);
+            throw exceptionTimeout();
+        }
         if (res != CURLE_OK) {
             curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));

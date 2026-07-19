@@ -415,19 +415,7 @@ namespace RPC {
                     }
                 }
 
-                //rough miner fee: relay fee rate over an estimated funded size(base + op_return
-                //+ outputs + funding input + change).  DigiByte fees are tiny so rough is fine
-                uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
-                try {
-                    Json::Value feeParams = Json::arrayValue;
-                    feeParams.append(6);
-                    Json::Value est = main->getDigiByteCore()->sendcommand("estimatesmartfee", feeParams);
-                    if (est.isMember("feerate") && est["feerate"].isNumeric() && (est["feerate"].asDouble() > 0)) {
-                        feeRate = static_cast<uint64_t>(est["feerate"].asDouble() * 100000000);
-                    }
-                } catch (...) {} //fallback rate already set
-                size_t estimatedVSize = 200 + (tx.encodeAssetOpReturn().length() / 2) + (tx.getOutputCount() * 35) + 150;
-                uint64_t minerFeeSats = feeRate * estimatedVSize / 1000;
+                uint64_t minerFeeSats = AssetWallet::estimateMinerFee(tx);
 
                 Json::Value result = Json::objectValue;
                 result["cid"] = cid;
