@@ -593,3 +593,58 @@ When context gets long, clear it and start a new session with:
 > then continue from the Work Log.
 
 Remember: no live-chain testing until DigiByte 8.22.2 resync done (~2026-07-20).
+
+---
+
+## Session 6 PLAN (approved by user 2026-07-19 — NOT yet executed)
+
+User approved two changes, plus recorded backlog. Work on branch `asset_features`
+(on top of the 5 existing commits ending 25f1733).
+
+### A. Remove OldStream (approved)
+
+OldStream is the legacy DigiAsset v2 stream-key lookup. Removal checklist:
+1. Delete `src/OldStream.cpp` and `src/OldStream.h`
+2. Remove both from `src/CMakeLists.txt` (currently lines ~100 and ~140)
+3. Delete `src/RPC/Methods/getoldstreamkey.cpp` (only consumer of OldStream.h)
+4. Delete `tests/RPC_Methods/getoldstreamkey.cpp` (already a skip-stub; not
+   explicitly listed in tests/CMakeLists.txt so no CMake edit needed there)
+5. Remove the `getoldstreamkey` link block in `web/index.html` (~line 1025).
+   Note: `web/rpc/getoldstreamkey.html` does NOT exist — the link is already dead,
+   nothing to delete there.
+6. **Reconfigure cmake** (`cmake -B build -S .`) so generated `MethodList.cpp`
+   drops the `{"getoldstreamkey", ...}` entry — same gotcha as adding methods.
+7. Grep for any remaining `OldStream|getoldstreamkey` references before building.
+8. Full test suite + quick live smoke (daemon starts, calling getoldstreamkey now
+   forwards to the DGB wallet and errors as unknown).
+
+### B. Version bump to next major: 0.3.3.0 → 1.0.0.0 (approved)
+
+- Version lives in root `CMakeLists.txt` (`SET(MAJOR_VERSION 0)` at ~line 22,
+  plus MINOR/PATCH/SO nearby) and is templated into `src/Version.h` from
+  `src/Version.h.in` at configure time. Do NOT edit src/Version.h directly.
+- Set MAJOR=1, MINOR=0, PATCH=0. Also bump SO_VERSION 0→1 (removing OldStream
+  changes the library ABI). If user disagrees on SO_VERSION, trivial to revert.
+- Reconfigure cmake, rebuild, verify startup log prints the new version string.
+- Commit A+B together or as two commits; suggested msg:
+  "Remove legacy OldStream and bump version to 1.0.0"
+
+### C. Backlog (proposed to user, NOT yet approved — re-confirm before doing)
+
+Pre-PR candidates (recommended, small):
+1. Graceful shutdown: SIGINT/SIGTERM handler in src/main.cpp replacing the
+   `while(true) sleep` loop — stop analyzer, WAL checkpoint, close DB cleanly.
+2. EventBroadcaster: bind 127.0.0.1 by default (currently all interfaces, no
+   auth); add config key for LAN exposure.
+3. Debug the "mutex lock failed" crash at test-suite exit (static destruction
+   order; reproducible).
+4. Wallet-locked detection in AssetWallet::fundSignSend — clear error telling
+   user to run walletpassphrase.
+
+Follow-up branch candidates:
+5. More event types (assetIssued/assetTransferred/balanceChanged)
+6. dryrun param for sendasset/burnasset/reissueasset (port issueasset pattern)
+7. Rules (at least royalties) in GUI CreateAssetTab
+8. Burn/reissue GUI + HistoryTab asset filter/pagination
+9. README refresh (event stream, dryrun, new RPC methods)
+10. Icon-render visual test with a real PNG icon asset
