@@ -22,10 +22,12 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ## 0.3.3-win.101 (current) — getdomainaddress reports burned domains
 
-`getdomainaddress` now reports a burned domain as **"Domain Burned"** instead of
-a plain lookup miss, so callers can distinguish a domain that was deliberately
-burned from one that was never registered (RPC method + its HTML reference page
-updated). All targets rebuilt at win.101.
+`getdomainaddress` now reports a burned domain (registered, but its controlling
+asset has no holders — swept by a non-DigiAsset-aware wallet) as **"Domain
+Burned"**. Previously that case escaped to the generic handler and came back as
+*"Unexpected Error,"* so callers couldn't tell a burned domain from an actual
+node error/outage (RPC method + its HTML reference page updated). All targets
+rebuilt at win.101.
 
 ---
 
