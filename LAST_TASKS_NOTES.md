@@ -493,16 +493,48 @@ All .html docs written + linked in web/index.html.  Balances after checkpoint 1:
 5345:100.00, 5347:900, 5348:500000001, 5349:750, 5350:300, 5351:200, 5352:50, 5353:25,
 5354:10, 5355:77, 5356:100, DGB ~4046.39.
 
-### Items 4-9 remaining (plan)
-4. Cost preview: issueasset {"dryrun":true} → {pspFee, estimated tx cost} without
-   broadcasting(compute after building tx, before fundSignSend; getCost per pool).
-   GUI confirm dialog should show the real DGB amounts.
-5. GUI BalancesTab icons: metadata data.urls entry name=="icon" → fetch via local IPFS
-   gateway(http://localhost:5001 api /cat), QPixmap in the table.
-6. GUI history tab: listaddresshistory RPC per wallet address(or listtransactions merge).
-7. Server.cpp catch-all: include e.what() in the RPC error message(not just log).
-8. Batch/cache IPFS::isPinned(analyzer stall finding, session 4 perf note).
-9. Event push: likely a lightweight websocket broadcasting new-block/sync/balance events.
+### Items 4-6 DONE (checkpoint 2 passed, committed on asset_features)
+4. **issueasset dryrun** — builds everything(metadata publish to local IPFS included,
+   needed for pool pricing) then returns {cid, assetOutputs, ruleOutputs, pspFee,
+   estimatedMinerFee(estimatesmartfee 6, fallback min relay), estimatedTotal, sats{}}
+   WITHOUT broadcasting.  LIVE verified: royalty asset previewed at 0.27007393 DGB.
+   CreateAssetTab confirm dialog now dryruns first and shows real pool fee + total.
+5. **BalancesTab names+icons** — new Name column(getassetdata → ipfs.data.assetName,
+   cached), icon from data.urls entry name=="icon" ipfs:// url, fetched async via the
+   config ipfspath api(cat), QNetworkAccessManager, cached by assetIndex.
+6. **HistoryTab** — wallet listtransactions("*",100) newest first: time/type/amount/
+   confirmations/txid.  Wired into main.cpp + qt/CMakeLists.  GUI relaunched with all 5
+   tabs against live daemon, no crash(visual check still pending - screen locked).
+Checkpoint 2: full suite green(the "rpcTest.db not found" batch was just the consumed
+db - restore from rpcTest.db.keep and RPCMethodsTest+PSP pass 41/41).
+
+### Items 7-9 DONE (checkpoint 3 passed — ALL 9 FEATURES COMPLETE)
+7. **RPC error detail** — catch-all returns "Unexpected Error: <e.what()>" now.
+8. **IPFS pin cache** — isPinned() = std::set lookup(lazy bulk preload via one
+   pin/ls?type=recursive; updated at the pin/unpin job handlers + downloadFile pinAlso;
+   mutex'd, misses from external pinners just queue a download job = still correct).
+9. **Event stream** — src/EventBroadcaster.{h,cpp}: TCP newline-JSON events, port from
+   config `eventport`(default 14025, 0 disables), started in main.cpp before the RPC
+   server; ChainAnalyzer broadcasts {"event":"newBlock","height","blocksBehind"} for
+   every block processed in slow mode(near tip only - no firehose during initial sync).
+   Non-blocking writes; slow clients dropped.  LIVE verified with nc: real mainnet block
+   event received.  GUI/phone app can subscribe instead of polling(future wiring).
+Checkpoint 3 suite: 425 pass / 0 fail / 1 network skip.  Committed on asset_features
+(3 commits: checkpoint 1 rules+reissue+burn+multisend, checkpoint 2 preview+GUI,
+checkpoint 3 errors+pins+events).
+
+### Session 5 state / handoff
+- Branches: `last_tasks` = session-4 PR-ready(instructions above); `asset_features` =
+  all 9 features(3 commits) ON TOP of last_tasks.  Suggest a SECOND PR from
+  asset_features after the first merges(or one combined PR - user's call).
+- Daemon running on the new build(event port 14025 live), GUI running(5 tabs incl.
+  History; icons need an asset with an icon url to show - none of the test assets has
+  one yet; Rich Metadata Coin's "icon" entry points at a JSON file so QPixmap will
+  simply not render it - a real PNG icon test is future work).
+- Test wallet: ~4046 DGB + 11 assets on 10.0.3.50(unencrypted - test funds only).
+- Reminder: rpcTest.db gets DELETED by every RPCMethodsTest run - restore from
+  tests/testFiles/rpcTest.db.keep(also archived on /Volumes/external/digiasset_testFiles).
+- New RPC methods need `cmake -B build -S .` reconfigure before building(MethodList).
 
 ### Remaining work (next session)
 1. **NOT COMMITTED:** all of session 4's changes are uncommitted on `last_tasks` —
