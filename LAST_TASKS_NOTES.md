@@ -778,6 +778,25 @@ the live daemon from the session-4 cli_test scratch dir with Icon Test Coin in t
 wallet — the icon should be VISIBLE in Balances when the screen gets unlocked
 (config quirk: GUI must run from a dir whose config.cfg has rpcbind=127.0.0.1).
 
+### Session 7 state / handoff (2026-07-19 afternoon)
+
+- **All 10 section-C items COMPLETE.** Two commits on `asset_features`:
+  `2866dbd` (items 1-4, 6, 7 + exit-crash fixes) and `0b32413` (items 8-11 + README).
+  Branch is now 7 commits ahead of `last_tasks` (5d308af).
+- Suite: 384 pass / 1 network skip (RPCMethodsTest + replay still need rpcTest.db /
+  2h replay — unchanged since session 6; new burnasset/reissueasset/dryrun tests are
+  in that gated group).
+- Daemon (new build, clean-shutdown capable) + GUI (new build, 6 tabs) left RUNNING.
+  Wallet: ~4046 DGB + 12 assets incl. the new Icon Test Coin (~0.04 DGB spent this
+  session: 1 self-send + 1 icon issuance with pool fee).
+- **STILL NOT PUSHED: no PRs exist.** Blocked only on the user's session-6 decision:
+  scrub internal IPs from notes/cheat-sheet, push as-is, or exclude those files
+  (see "How to submit this as a Pull Request" section above). asset_features could be
+  a second PR on top of the last_tasks one, or one combined PR.
+- Cleanup items from session 6 unchanged: configs point at 10.0.3.50 (.local backups
+  to restore), unencrypted test wallet on the shared box, rpcTest.db archive on
+  /Volumes/external unreachable from this shell (TCC).
+
 ### C. Backlog (approved 2026-07-19; ALL 10 ITEMS DONE — see session 7 above)
 
 Pre-PR candidates (recommended, small):
