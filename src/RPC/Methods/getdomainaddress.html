@@ -29,6 +29,28 @@ String representing the DigiByte address associated with the given domain.
 </pre
                 >
             </div>
+            <div class="section" id="errors">
+                <h2>Errors</h2>
+                <p>
+                    Throws an RPC error (code -1, RPC_MISC_ERROR) with one of the
+                    following messages when the domain cannot be resolved:
+                </p>
+                <ul>
+                    <li>
+                        <tt>Unknown Domain</tt> — the domain has never been issued
+                        (it is available to register).
+                    </li>
+                    <li>
+                        <tt>Domain Revoked</tt> — the domain existed but was
+                        revoked and no longer resolves.
+                    </li>
+                    <li>
+                        <tt>Domain Burned</tt> — the domain is registered but its
+                        controlling asset has no holders (it was swept by a
+                        non-DigiAsset-aware wallet), so it can no longer resolve.
+                    </li>
+                </ul>
+            </div>
             <div class="section" id="examples">
                 <h2>Examples</h2>
                 <pre class="literal-block">

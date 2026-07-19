@@ -36,6 +36,13 @@ namespace RPC {
                 throw DigiByteException(RPC_MISC_ERROR, "Unknown Domain");
             } catch (const DigiByteDomain::exceptionRevokedDomain& e) {
                 throw DigiByteException(RPC_MISC_ERROR, "Domain Revoked");
+            } catch (const DigiByteDomain::exceptionBurnedDomain& e) {
+                // Domain is registered but its controlling asset has no holders
+                // (swept by a non-DigiAsset-aware wallet). Distinct from a node
+                // outage — surface it so clients can say "burned", not "couldn't
+                // check". Without this catch it escapes to the server's generic
+                // handler and is reported as "Unexpected Error".
+                throw DigiByteException(RPC_MISC_ERROR, "Domain Burned");
             }
         }
 
