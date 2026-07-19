@@ -20,7 +20,16 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.100 (current) — pool dashboard header fix
+## 0.3.3-win.101 (current) — getdomainaddress reports burned domains
+
+`getdomainaddress` now reports a burned domain as **"Domain Burned"** instead of
+a plain lookup miss, so callers can distinguish a domain that was deliberately
+burned from one that was never registered (RPC method + its HTML reference page
+updated). All targets rebuilt at win.101.
+
+---
+
+## 0.3.3-win.100 — pool dashboard header fix
 
 Fixes the pool server console dashboard scrolling its name/version header off
 the top. `PoolDashboard::render()` hardcoded the header at 10 rows, but the

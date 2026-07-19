@@ -45,7 +45,7 @@ SET(SO_VERSION    0)
 # This is the SOURCE OF TRUTH for the version — it is substituted into
 # src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
 # match the win.<N> tag on every release; do NOT hand-edit the generated header.
-SET(WIN_BUILD 100)
+SET(WIN_BUILD 101)
 # NOTE: upstream added a CMAKE_*_OUTPUT_DIRECTORY -> bin/ redirect here. Not
 # adopted: this fork's release/update scripts expect build/<sub>/Release/. Revisit
 # later if we want the bin/ layout (would require updating those scripts).
