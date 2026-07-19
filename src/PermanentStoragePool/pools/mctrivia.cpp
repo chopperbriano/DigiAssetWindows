@@ -77,13 +77,13 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
         size += ipfs->getSize(url.substr(7));
     }
 
-    //calculate us dollar cost
-    uint64_t usdCost = size * 120; //$1.20 / MB
-
-    //get current DGB cost
+    //convert size to DGB sats: $1.20 USD per MB, exchange rate is DGB sats per US dollar.
+    //Must stay the exact inverse of serializeMetaProcessor's
+    //   bytes = 1000000 * dgb / (exchangeRate * 1.2)
+    //or pay ins won't buy the number of bytes the pool expects
     Database* db = AppMain::GetInstance()->getDatabase();
     double exchangeRate = db->getCurrentExchangeRate(DigiAssetConstants::standardExchangeRates[1]); //USD
-    return usdCost * exchangeRate;
+    return static_cast<uint64_t>(ceil(size * 1.2 * exchangeRate / 1000000.0));
 }
 
 /**
@@ -99,6 +99,10 @@ void mctrivia::enable(DigiByteTransaction& tx) {
 
     //get cost
     uint64_t cost = getCost(tx);
+
+    //an output below the dust threshold would make the whole tx unrelayable.  Overpaying
+    //slightly is harmless(pay in simply buys more storage than needed)
+    if (cost < DigiAssetConstants::DIGIBYTE_DUST) cost = DigiAssetConstants::DIGIBYTE_DUST;
 
     //check if there is already an output to output address:
     const string outputAddress = "dgb1qjnzadu643tsfzjqjydnh06s9lgzp3m4sg3j68x";

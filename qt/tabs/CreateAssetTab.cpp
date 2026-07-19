@@ -19,7 +19,7 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     form->addRow("Amount:", _amountEdit);
 
     _decimalsSpin = new QSpinBox();
-    _decimalsSpin->setRange(0, 8);
+    _decimalsSpin->setRange(0, 7);
     _decimalsSpin->setValue(0);
     form->addRow("Decimals:", _decimalsSpin);
 
@@ -32,6 +32,27 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _aggregationCombo->addItem("hybrid");
     _aggregationCombo->addItem("dispersed");
     form->addRow("Aggregation:", _aggregationCombo);
+
+    //permanent storage pools.  The metadata must be stored somewhere permanent or the
+    //asset won't be recognised by most of the ecosystem, so at least one is required
+    QVBoxLayout *pspLayout = new QVBoxLayout();
+    for (unsigned int i = 0;; i++) {
+        Json::Value args = Json::arrayValue;
+        args.append(i);
+        Json::Value pool;
+        try {
+            pool = _dgbCore.sendcommand("getpsp", args);
+        } catch (const DigiByteException &) {
+            break; //no more pools
+        }
+        QCheckBox *check = new QCheckBox(QString::fromStdString(pool["name"].asString()));
+        check->setToolTip(QString::fromStdString(pool["description"].asString()));
+        check->setChecked(i == 1); //public pool on by default
+        _pspChecks.push_back(check);
+        _pspIndexes.push_back(i);
+        pspLayout->addWidget(check);
+    }
+    form->addRow("Store Metadata In:", pspLayout);
 
     _descriptionEdit = new QTextEdit();
     _descriptionEdit->setPlaceholderText("Optional description stored in the asset's metadata");
@@ -63,10 +84,22 @@ void CreateAssetTab::createAsset() {
         return;
     }
 
+    //at least one storage pool is required - without permanent storage the metadata can be
+    //lost and the asset won't be recognised by most of the ecosystem
+    Json::Value pspArray = Json::arrayValue;
+    for (size_t i = 0; i < _pspChecks.size(); i++) {
+        if (_pspChecks[i]->isChecked()) pspArray.append(_pspIndexes[i]);
+    }
+    if (pspArray.empty()) {
+        _statusLabel->setText("Select at least one storage pool under \"Store Metadata In\".");
+        return;
+    }
+
     //confirm - issuance can not be undone
     QString lockedText = _lockedCheck->isChecked() ? "locked(supply can never change)" : "unlocked";
     if (QMessageBox::question(this, "Confirm Create Asset",
-                              QString("Create %1 of \"%2\" (%3)?\nThis writes to the blockchain and can not be undone.")
+                              QString("Create %1 of \"%2\" (%3)?\nA storage pool fee($1.20 USD per MB, paid in DGB) "
+                                      "is added to the transaction.\nThis writes to the blockchain and can not be undone.")
                                       .arg(amount, name, lockedText)) != QMessageBox::Yes) {
         return;
     }
@@ -82,6 +115,7 @@ void CreateAssetTab::createAsset() {
         if (!description.isEmpty()) config["description"] = description.toStdString();
         QString toAddress = _toAddressEdit->text().trimmed();
         if (!toAddress.isEmpty()) config["toAddress"] = toAddress.toStdString();
+        config["psp"] = pspArray;
 
         Json::Value args = Json::arrayValue;
         args.append(config);

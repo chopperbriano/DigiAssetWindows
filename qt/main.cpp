@@ -15,6 +15,7 @@
 #include <QProcess>
 #include <QProgressBar>
 #include <QTabWidget>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <chrono>
@@ -37,6 +38,22 @@ void startCoreProcess() {
     if (coreProcess && coreProcess->state() != QProcess::NotRunning) {
         qDebug() << "Core process is already running.";
         return;
+    }
+
+    //don't spawn a second daemon if one is already serving the RPC port
+    //(two daemons would run two chain analyzers over the same database)
+    try {
+        Config config("config.cfg");
+        QTcpSocket probe;
+        probe.connectToHost(QString::fromStdString(config.getString("rpcbind", "127.0.0.1")),
+                            static_cast<quint16>(config.getInteger("rpcassetport", 14024)));
+        if (probe.waitForConnected(500)) {
+            probe.disconnectFromHost();
+            qDebug() << "A DigiAsset Core daemon is already serving the RPC port; not starting another.";
+            return;
+        }
+    } catch (...) {
+        //no readable config yet - the daemon's own startup wizard will handle it
     }
 
     coreProcess = new QProcess();

@@ -14,6 +14,7 @@
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QWidget>
+#include <vector>
 
 /**
  * Form for creating(issuing) a new DigiAsset.  Uses the issueasset RPC method.
@@ -37,6 +38,8 @@ private:
     QLineEdit * _toAddressEdit;
     QPushButton * _createButton;
     QLabel * _statusLabel;
+    std::vector<QCheckBox*> _pspChecks;         //one per storage pool, same order as _pspIndexes
+    std::vector<unsigned int> _pspIndexes;      //pool indexes for the psp param of issueasset
     DigiByteCore _dgbCore;
 };
 

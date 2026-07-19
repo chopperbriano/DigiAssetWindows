@@ -29,7 +29,7 @@ http://opensource.org/licenses/MIT. -->
     "amount": 1000,               // (number or string required) number of assets to create
                                   //     in display units("1.5" with 2 decimals creates 150
                                   //     of the smallest unit)
-    "decimals": 0,                // (integer 0-8 optional default 0) decimal places
+    "decimals": 0,                // (integer 0-7 optional default 0) decimal places
     "locked": true,               // (bool optional default true) true means no more can
                                   //     ever be issued
     "aggregation": "aggregable",  // (string optional default "aggregable") one of
@@ -43,9 +43,16 @@ http://opensource.org/licenses/MIT. -->
     "userData": {},               // (object optional) any extra metadata
     "toAddress": "dgb1q....",     // (string optional) address or domain the new assets
                                   //     go to.  defaults to a new wallet address
-    "metadata": {}                // (object optional advanced) full metadata document to
+    "metadata": {},               // (object optional advanced) full metadata document to
                                   //     publish as is.  when used name/description/urls/
                                   //     userData are ignored
+    "psp": true                   // (optional default true) permanent storage pool(s) that
+                                  //     store the metadata.  the public pool charges
+                                  //     $1.20 USD per MB paid in DGB as an extra output on
+                                  //     the issuance.  true = public pool, false = none
+                                  //     (asset won't be recognised by most of the
+                                  //     ecosystem), an integer pool index, or an array of
+                                  //     pool indexes(see getpsp)
 }
 </pre
                 >

@@ -9,6 +9,7 @@
 #include "IPFS.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"
+#include <algorithm>
 #include <jsoncpp/json/value.h>
 #include <jsoncpp/json/writer.h>
 
@@ -22,7 +23,7 @@ namespace RPC {
         *   "name"(string required) - asset name
         *   "amount"(integer, decimal number or numeric string required) - number of assets to
         *            create in display units("1.5" with 2 decimals creates 150 of the smallest unit)
-        *   "decimals"(integer 0-8 optional default 0) - number of decimal places
+        *   "decimals"(integer 0-7 optional default 0) - number of decimal places
         *   "locked"(bool optional default true) - true means no more can ever be issued
         *   "aggregation"(string optional default "aggregable") - one of "aggregable", "hybrid", "dispersed"
         *   "description"(string optional) - description stored in the metadata
@@ -32,6 +33,16 @@ namespace RPC {
         *                                  Defaults to a new wallet address
         *   "metadata"(object optional) - advanced: full metadata object to publish as is.  When used,
         *                                 name/description/urls/userData are ignored
+        *   "psp"(optional default true) - which permanent storage pool(s) store the metadata(and any
+        *                                 IPFS urls it references).  The public pool charges $1.20 USD
+        *                                 per MB, paid in DGB at the current on-chain exchange rate as
+        *                                 an extra output on the issuance.  Accepts:
+        *                                    true - the public pool(default)
+        *                                    false - no pool.  Issuances that don't pay in to a pool
+        *                                            are not recognised by most of the ecosystem, so
+        *                                            only use if you know what you are doing
+        *                                    integer - a single pool index(see getpsp)
+        *                                    array of integers - pay in to several pools
         *
         * Note: rule encoding(royalties, approval lists, vote, expiry, etc) is not supported yet.
         *
@@ -57,8 +68,8 @@ namespace RPC {
             //optional fields
             unsigned char decimals = 0;
             if (config.isMember("decimals")) {
-                if (!config["decimals"].isInt() || (config["decimals"].asInt() < 0) || (config["decimals"].asInt() > 8)) {
-                    throw DigiByteException(RPC_INVALID_PARAMS, "decimals must be an integer from 0 to 8");
+                if (!config["decimals"].isInt() || (config["decimals"].asInt() < 0) || (config["decimals"].asInt() > 7)) {
+                    throw DigiByteException(RPC_INVALID_PARAMS, "decimals must be an integer from 0 to 7");
                 }
                 decimals = static_cast<unsigned char>(config["decimals"].asInt());
             }
@@ -94,6 +105,33 @@ namespace RPC {
                 throw DigiByteException(RPC_INVALID_PARAMS, "rule encoding is not supported yet");
             }
 
+            //permanent storage pool participation(default: the public pool.  Unstored assets aren't
+            //recognised by most of the ecosystem)
+            std::vector<unsigned int> pspPools{1}; //pool 1 = public pool
+            if (config.isMember("psp")) {
+                const Json::Value& pspVal = config["psp"];
+                pspPools.clear();
+                if (pspVal.isBool()) {
+                    if (pspVal.asBool()) pspPools.push_back(1);
+                } else if (pspVal.isUInt()) {
+                    pspPools.push_back(pspVal.asUInt());
+                } else if (pspVal.isArray()) {
+                    for (const Json::Value& v: pspVal) {
+                        if (!v.isUInt()) throw DigiByteException(RPC_INVALID_PARAMS, "psp array must contain pool indexes");
+                        pspPools.push_back(v.asUInt());
+                    }
+                } else {
+                    throw DigiByteException(RPC_INVALID_PARAMS, "psp must be a bool, a pool index or an array of pool indexes");
+                }
+                std::sort(pspPools.begin(), pspPools.end());
+                pspPools.erase(std::unique(pspPools.begin(), pspPools.end()), pspPools.end());
+                for (unsigned int poolIndex: pspPools) {
+                    if (poolIndex >= main->getPermanentStoragePoolList()->getPoolCount()) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "psp pool index out of range - see getpsp");
+                    }
+                }
+            }
+
             //where the new assets should go
             std::string toAddress;
             if (config.isMember("toAddress")) {
@@ -117,6 +155,8 @@ namespace RPC {
                 if (config.isMember("urls")) {
                     if (!config["urls"].isArray()) throw DigiByteException(RPC_INVALID_PARAMS, "urls must be an array");
                     data["urls"] = config["urls"];
+                } else {
+                    data["urls"] = Json::arrayValue; //pools require data.urls to exist to price storage
                 }
                 if (config.isMember("userData")) data["userData"] = config["userData"];
                 metadata = Json::objectValue;
@@ -143,6 +183,17 @@ namespace RPC {
             tx.setIssuance(asset);
             DigiAsset newAssets = asset; //full amount to the recipient
             tx.addDigiAssetOutput(toAddress, std::vector<DigiAsset>{newAssets});
+
+            //add the permanent storage pool payments(must be the last change to the tx before funding)
+            for (unsigned int poolIndex: pspPools) {
+                try {
+                    main->getPermanentStoragePoolList()->getPool(poolIndex)->enable(tx);
+                } catch (const DigiAsset::exceptionInvalidMetaData& e) {
+                    throw DigiByteException(RPC_INVALID_PARAMS, "metadata is not compatible with the storage pool(data.urls must be an array and all urls must be on IPFS)");
+                } catch (const PermanentStoragePool::exceptionCantEnablePSP& e) {
+                    throw DigiByteException(RPC_MISC_ERROR, "could not enable permanent storage on this issuance");
+                }
+            }
 
             //fund, sign and broadcast
             std::string signedHex;

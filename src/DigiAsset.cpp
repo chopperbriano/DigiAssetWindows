@@ -178,13 +178,13 @@ DigiAsset::DigiAsset(const getrawtransaction_t& txData, unsigned int height, uns
  * (see calculateAssetId) so it is left blank.
  * @param cid - IPFS cid of the metadata(raw mode, sha256 based - see IPFS::addFile).  "" for no metadata
  * @param count - number of assets to create in smallest divisible units
- * @param divisibility - number of decimals(0-8)
+ * @param divisibility - number of decimals(0-7, three bit field.  8 is reserved for the DigiByte pseudo asset)
  * @param locked - true if no more can ever be issued
  * @param aggregation - one of AGGREGABLE, HYBRID, DISPERSED
  */
 DigiAsset::DigiAsset(const string& cid, uint64_t count, unsigned char divisibility, bool locked,
                      unsigned char aggregation) {
-    if (divisibility > 8) throw out_of_range("divisibility must be 0 to 8");
+    if (divisibility > 7) throw out_of_range("divisibility must be 0 to 7");
     if (aggregation > DISPERSED) throw out_of_range("invalid aggregation type");
     if (count == 0) throw out_of_range("count must be at least 1");
     if (count > (uint64_t) 18014398509481983) throw out_of_range("count too large");

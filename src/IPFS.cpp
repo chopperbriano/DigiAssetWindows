@@ -477,14 +477,16 @@ bool IPFS::isPinned(const string& cid) const {
 unsigned int IPFS::getSize(const string& cid) const {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
-    string stats = _command("object/stat?arg=" + cid);
+    //files/stat handles both dag-pb(Qm…) and raw-leaves(bafkrei…) cids.  object/stat was
+    //removed in kubo 0.40 so it failed for every cid on modern nodes
+    string stats = _command("files/stat?arg=/ipfs/" + cid);
     Json::Value json;
     Json::CharReaderBuilder rbuilder;
     istringstream s(stats);
     string errs;
     if (!Json::parseFromStream(rbuilder, s, &json, &errs)) throw out_of_range("No size data found");
 
-    if (json.isMember("CumulativeSize") && json["CumulativeSize"].isInt()) {
+    if (json.isMember("CumulativeSize") && json["CumulativeSize"].isNumeric()) {
         return json["CumulativeSize"].asUInt();
     }
     // Handle error case

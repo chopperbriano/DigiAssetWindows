@@ -7,7 +7,9 @@
 #include "Database.h"
 #include "DigiByteCore.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 using namespace std;
 
@@ -149,65 +151,106 @@ namespace AssetWallet {
         createParams.append(outputs);
         string rawHex = dgb->sendcommand("createrawtransaction", createParams).asString();
 
-        //protect all wallet UTXOs that carry assets or are unconfirmed(the local database can't
-        //know about unconfirmed assets yet) so fundrawtransaction can't select them for fees
-        vector<txout_t> toLock;
-        for (const unspenttxout_t& utxo: dgb->listUnspent(0)) {
-            //skip utxos that are already explicit inputs
-            bool isInput = false;
-            for (size_t i = 0; i < tx.getInputCount(); i++) {
-                if ((tx.getInput(i).txid == utxo.txid) && (tx.getInput(i).vout == utxo.n)) {
-                    isInput = true;
-                    break;
-                }
-            }
-            if (isInput) continue;
+        //a transaction broadcast moments ago can take a beat to register in the wallet's
+        //unspent view; until then fundrawtransaction can select coins that tx already spent
+        //and the broadcast fails with a mempool conflict.  Retry funding when that happens
+        for (int attempt = 0;; attempt++) {
 
-            bool needsLock = (utxo.confirmations == 0);
-            if (!needsLock) {
-                try {
-                    needsLock = !db->getAssetUTXO(utxo.txid, utxo.n).assets.empty();
-                } catch (const Database::exceptionDataPruned& e) {
-                    needsLock = true; //can't tell so play it safe
+            //protect all wallet UTXOs that carry assets or are unconfirmed(the local database can't
+            //know about unconfirmed assets yet) so fundrawtransaction can't select them for fees
+            vector<txout_t> toLock;
+            for (const unspenttxout_t& utxo: dgb->listUnspent(0)) {
+                //skip utxos that are already explicit inputs
+                bool isInput = false;
+                for (size_t i = 0; i < tx.getInputCount(); i++) {
+                    if ((tx.getInput(i).txid == utxo.txid) && (tx.getInput(i).vout == utxo.n)) {
+                        isInput = true;
+                        break;
+                    }
                 }
-            }
-            if (needsLock) toLock.push_back(txout_t{utxo.txid, utxo.n});
-        }
+                if (isInput) continue;
 
-        string fundedHex;
-        if (!toLock.empty()) dgb->lockunspent(false, toLock);
-        try {
-            Json::Value fundOptions = Json::objectValue;
-            fundOptions["changePosition"] = static_cast<Json::UInt>(outputs.size()); //append change after all outputs
-            Json::Value fundParams = Json::arrayValue;
-            fundParams.append(rawHex);
-            fundParams.append(fundOptions);
-            fundedHex = dgb->sendcommand("fundrawtransaction", fundParams)["hex"].asString();
-        } catch (...) {
+                bool needsLock = (utxo.confirmations == 0);
+                if (!needsLock) {
+                    try {
+                        needsLock = !db->getAssetUTXO(utxo.txid, utxo.n).assets.empty();
+                    } catch (const Database::exceptionDataPruned& e) {
+                        needsLock = true; //can't tell so play it safe
+                    }
+                }
+                if (!needsLock) {
+                    //the wallet's unspent view can lag the mempool by a few seconds after a
+                    //broadcast.  gettxout is mempool aware: null means some mempool tx already
+                    //spends this coin, so selecting it would guarantee a mempool conflict
+                    Json::Value txoutParams = Json::arrayValue;
+                    txoutParams.append(utxo.txid);
+                    txoutParams.append(utxo.n);
+                    txoutParams.append(true);
+                    needsLock = dgb->sendcommand("gettxout", txoutParams).isNull();
+                }
+                if (needsLock) toLock.push_back(txout_t{utxo.txid, utxo.n});
+            }
+
+            string fundedHex;
+            if (!toLock.empty()) dgb->lockunspent(false, toLock);
+            try {
+                Json::Value fundOptions = Json::objectValue;
+                fundOptions["changePosition"] = static_cast<Json::UInt>(outputs.size()); //append change after all outputs
+                Json::Value fundParams = Json::arrayValue;
+                fundParams.append(rawHex);
+                fundParams.append(fundOptions);
+                fundedHex = dgb->sendcommand("fundrawtransaction", fundParams)["hex"].asString();
+            } catch (const DigiByteException& e) {
+                if (!toLock.empty()) dgb->lockunspent(true, toLock);
+                //when everything spendable is sitting in still-unconfirmed change(which we
+                //lock because its asset content can't be verified yet), funding fails with
+                //insufficient funds.  A confirmation fixes that, so wait out a block interval
+                bool unconfirmedLocked = false;
+                for (const txout_t& lock: toLock) {
+                    for (const unspenttxout_t& utxo: dgb->listUnspent(0)) {
+                        if ((utxo.txid == lock.txid) && (utxo.n == lock.n) && (utxo.confirmations == 0)) {
+                            unconfirmedLocked = true;
+                            break;
+                        }
+                    }
+                    if (unconfirmedLocked) break;
+                }
+                if ((e.getMessage().find("nsufficient") == string::npos) || !unconfirmedLocked || (attempt >= 4)) throw;
+                this_thread::sleep_for(chrono::seconds(5));
+                continue;
+            } catch (...) {
+                if (!toLock.empty()) dgb->lockunspent(true, toLock);
+                throw;
+            }
             if (!toLock.empty()) dgb->lockunspent(true, toLock);
-            throw;
-        }
-        if (!toLock.empty()) dgb->lockunspent(true, toLock);
 
-        //sign(signrawtransactionwithwallet on modern cores, signrawtransaction on old ones)
-        Json::Value signParams = Json::arrayValue;
-        signParams.append(fundedHex);
-        Json::Value signResult;
-        try {
-            signResult = dgb->sendcommand("signrawtransactionwithwallet", signParams);
-        } catch (const DigiByteException& e) {
-            signResult = dgb->sendcommand("signrawtransaction", signParams);
-        }
-        if (!signResult["complete"].asBool()) {
-            throw DigiByteTransaction::exception("Wallet could not fully sign the transaction.  Is the wallet unlocked?");
-        }
-        string hex = signResult["hex"].asString();
-        if (signedHex != nullptr) *signedHex = hex;
+            //sign(signrawtransactionwithwallet on modern cores, signrawtransaction on old ones)
+            Json::Value signParams = Json::arrayValue;
+            signParams.append(fundedHex);
+            Json::Value signResult;
+            try {
+                signResult = dgb->sendcommand("signrawtransactionwithwallet", signParams);
+            } catch (const DigiByteException& e) {
+                signResult = dgb->sendcommand("signrawtransaction", signParams);
+            }
+            if (!signResult["complete"].asBool()) {
+                throw DigiByteTransaction::exception("Wallet could not fully sign the transaction.  Is the wallet unlocked?");
+            }
+            string hex = signResult["hex"].asString();
+            if (signedHex != nullptr) *signedHex = hex;
 
-        //broadcast
-        Json::Value sendParams = Json::arrayValue;
-        sendParams.append(hex);
-        return dgb->sendcommand("sendrawtransaction", sendParams).asString();
+            //broadcast
+            Json::Value sendParams = Json::arrayValue;
+            sendParams.append(hex);
+            try {
+                return dgb->sendcommand("sendrawtransaction", sendParams).asString();
+            } catch (const DigiByteException& e) {
+                if ((e.getMessage().find("onflict") == string::npos) || (attempt >= 4)) throw;
+                //wait out at least one block interval - a confirmation reliably refreshes the
+                //wallet's view of which of its coins are already spent
+                this_thread::sleep_for(chrono::seconds(5));
+            }
+        }
     }
 
 } // namespace AssetWallet

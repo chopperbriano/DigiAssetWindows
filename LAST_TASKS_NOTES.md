@@ -191,21 +191,271 @@ Later in session 2 (task 4 & 5 continuation):
   re-verified after the pick. readme now has native Windows (daemon-only, VS2022+vcpkg)
   instructions with WSL as the path for CLI/web/GUI. Task 5 (docs) is now COMPLETE.
 
+### Session 4 — 2026-07-18 (live testing against remote node)
+User: "digibyte core wallet is set up on 10.0.3.50, fire it up and test your code."
+See `fable_cheat_sheet/08_remote_synced_node.md` — fully synced v8.22.2 node on
+10.0.3.50:14022 (rpcuser digiasset_remote; password in digibyte.conf on that host).
+- Node verified synced (block 23.84M, IBD false). No wallet existed on it —
+  created `digiasset_test` via createwallet (unencrypted, EMPTY, on a shared box —
+  test funds only). Receive address generated: dgb1qjdt3qlz45d5sk4kulmrnwrcu8nvv4ty2hxx4ha
+- config.cfg + bin/config.cfg pointed at 10.0.3.50 (backups: config.cfg.local,
+  bin/config.cfg.local — REVERT when going back to the local node).
+- **Replay test unblocked and running** (`DigiAssetTransaction.existingAssetTransactions`,
+  log bin/replay_test.log) — got past the old "Core Offline" death immediately.
+- **Daemon live**: bin/digiasset_core against remote node, RPC server on 14024 works
+  while chain analyzer syncs from block 1 (~19h to tip; sync NOT needed for wallet RPCs).
+- **Live-tested via rebuilt CLI**: version, getblockcount passthrough (23.8M),
+  getnewaddress passthrough, getwalletbalances (correct empty shape), issueasset +
+  sendasset param validation incl. "rules not supported" and "Use sendtoaddress" paths,
+  sendasset "Asset doesn't exist", issueasset reaches coin selection → "Insufficient funds".
+- **Bug fixed (found live): DIGIBYTE_DUST was 600 sats** — below DigiByte v8.22 dust
+  (DUST_RELAY_TX_FEE=30000 sat/kvB → ~2940 P2WPKH / ~5460 P2PKH). fundrawtransaction
+  rejected every issuance with "Transaction amount too small" before coin selection.
+  Raised to 10000 in src/DigiAssetConstants.h (decode side unaffected; KYC.cpp's 600
+  check is historical-decode only, untouched).
+- **Stale binary gotcha: bin/digiasset_core-cli was from Apr 21** (predates session-3
+  DigiByteException fix) — mangled every server error into code -1 "Error during parsing
+  of >>…<<". Rebuilt (`cmake --build build --target digiasset_core-cli`); server-side
+  errors confirmed clean via raw curl (-32602 + verbatim message).
+- STILL UNTESTED (needs funds at the address above): issueasset/sendasset happy path,
+  fundSignSend, UTXO locking, changePosition assumption, getwalletbalances with assets,
+  Qt tabs functional test.
+
+### Session 4 continued — user funded the wallet (~1989 DGB, "$10, burn what you need")
+User heading to bed; instructed to keep going autonomously and write notes here.
+- getwalletbalances live-shows the funded DGB balance correctly (1989.26592109 / sats).
+- **🎉 issueasset HAPPY PATH WORKS ON MAINNET.** First real issuance by this code:
+  - assetId `La3s8q4GXMSY78uBbK9bwoRYeu1WaiWXieiREp`
+  - txid `84c65f3ca4b4f68fb608f96778100d9394270462be88a218f6c9b7781941d5e6`
+  - metadata cid `bafkreibq35mdomkc56ppqgvblb4aqdvormcdo74jhcigzbgulwwsoz7hmy`
+    (verified retrievable via local IPFS; correct name/description JSON)
+  - tx verified on node: vout0 = 0.0001 DGB (new DIGIBYTE_DUST) to fresh wallet addr,
+    vout1 = OP_RETURN, vout2 = change → **changePosition pinned-to-end assumption
+    VERIFIED live** (change landed after all outputs, exactly as encoded).
+  - Gotcha: immediately after broadcast, node getrawtransaction returned -5 "No such
+    mempool tx" for ~30-60s (txindex/mempool propagation lag) then FOUND. Don't panic
+    on first -5; retry.
+- Daemon `getrawtransaction <txid> true` (verbose, our asset decode) on the unconfirmed
+  issuance → "Unexpected Error" (Server catch-all). Likely because local chain.db is
+  unsynced (exchange-rate/height lookups) and/or tx unconfirmed. RETEST after bootstrap
+  sync + confirmation; if still failing, debug DigiByteTransaction{txid} decode path.
+- **Bootstrap plan to unblock sendasset/getwalletbalances-with-assets tonight** (the
+  asset side needs chain.db synced past the issuance block; from-scratch sync = ~19h):
+  stopped daemon, deleted bin/chain.db (only ~100-200K blocks, regenerable), set
+  `bootstrapchainstate=1` and `dbfilename=/Volumes/external/digiasset_chain.db`
+  (root disk only had 10GB free; bootstrap is 2.57GB + growth) in bin/config.cfg.
+  Bootstrap CID QmUUpX… height 21,505,152 → ~2.33M blocks to sync after download
+  (~1.5-2h at observed ~2-3ms/block). Daemon restarted in bootstrap mode.
+- Bootstrap download took ~15 min (2.57GB via local IPFS). Daemon then entered a LONG
+  "Repairing database from shutdown" pass on the bootstrap image (sync state 2 =
+  initializing; many minutes of pure reads on the external drive — be patient, it's
+  not hung; process state U = disk I/O).
+- **Qt GUI improvements while waiting:**
+  - qt/main.cpp `startCoreProcess()` now probes rpcbind:rpcassetport with QTcpSocket
+    (500ms) and skips spawning a second daemon if one is already serving — previously
+    it would ALWAYS spawn, giving two chain analyzers writing the same sqlite DB.
+    Qt Network added to qt/CMakeLists.txt (both find_package lines + link).
+  - Same rpcbind dual-use quirk as the CLI: RPCLoader connects to rpcbind:14024, so
+    with the repo config pointed at 10.0.3.50 the GUI must be run from a directory
+    whose config.cfg has rpcbind=127.0.0.1 + the daemon's rpcuser/rpcpassword
+    (scratchpad cli_test dir used for this).
+  - GUI launched against the live daemon: spawn-guard message confirmed, no crash,
+    splash polling syncstate. Screenshot NOT possible (screen locked). Left running
+    as a soak test — it will build the real tabs when sync hits 0.
+- Replay test pace dropped to ~3.5h total ETA now that daemon shares the machine.
+  Its sqlite WAL (tests/testFiles/assetTest.db-wal) hit 2.8GB on the root disk —
+  disk-space monitor armed (alerts <3GB free).
+
+### Session 4 continued — PSP support (user's overnight instructions)
+User (before bed): first asset "may not be valid"; sent 2nd funding tx 965d1f4e (2057.84
+DGB, total ~4047 DGB); "make sure gui forces picking at least 1 PSP as part of issuance";
+"assets have a lot of variability... test everything you can works thoroughly".
+
+**Why the first asset (La3s8q…) isn't ecosystem-valid: no PSP pay-in.** Compared against
+real on-chain issuance 9ad34562… (height 17451065): valid issuances carry an extra DGB
+output paying a Permanent Storage Pool address (e.g. 8.38 DGB to dgb1qjnzadu… = the
+mctrivia pool). serializeMetaProcessor (pools/mctrivia.cpp) only marks metadata for
+permanent storage if the tx pays one of its pool addresses; fee = $1.20 USD/MB (metadata
++ all IPFS data.urls), converted via on-chain USD exchange rate. The C++ decoder accepts
+fee-less issuances (protocol-decodable) but ecosystem explorers/pools won't store or
+recognise them.
+
+**Implemented:**
+- `issueasset` new `psp` param — default true(=public pool 1). Accepts bool / pool index /
+  array of indexes (deduped, range-checked vs getPoolCount). Pool enable() called for each
+  right before fundSignSend ("last change before publishing"). data.urls now ALWAYS present
+  in auto-built metadata (empty array if none) because mctrivia::getCost throws without it.
+  Docs updated (.cpp comment + issueasset.html).
+- `mctrivia::enable()` now clamps the fee output to ≥ DIGIBYTE_DUST (a sub-dust pool fee
+  would make the whole tx unrelayable; overpay just buys more storage).
+- **GUI forces ≥1 PSP**: CreateAssetTab discovers pools via getpsp 0,1,… (name shown,
+  description as tooltip), checkbox per pool, public pool pre-checked, createAsset()
+  refuses to proceed with none selected; confirm dialog mentions the fee. Sends psp array.
+- Unit tests added to tests/RPC_Methods/issueasset.cpp (psp bad type/bad array/out of
+  range) — run when rpcTest.db exists. Same three verified LIVE via CLI: correct -32602s.
+- local pool (index 0) enable() = free, just records cid in its local db — safe to select.
+
+**Infra note: bootstrap DB sync pace.** On /Volumes/external (USB) sync ran 19-44 ms/block
+(~28h!). Moved chain.db to bin/ on the internal SSD (dbfilename=chain.db again) — root
+disk now 6GB free (guard monitor alerts <3GB; replay test WAL is another 2.8GB+ there).
+
+**Incident: replay test WAL grows unbounded — filled root disk to 2GB free.**
+assetTest.db-wal hit 7.56GB at 14% replay progress (projected ~50GB by completion).
+External `PRAGMA wal_checkpoint` succeeds (all frames copied) but the WAL NEVER shrinks
+or gets reused — the test process holds a read snapshot pinning the WAL tail, so sqlite
+can't restart the log. **Possible future code fix: have the replay loop (or Database)
+periodically finalize/reset open read statements + checkpoint.** Worked around tonight:
+killed replay at 14%, moved tests/testFiles → /Volumes/external/digiasset_testFiles with
+a symlink at tests/testFiles (original dir kept as tests/testFiles_local_backup), deleted
+stale cmake-build-release (notes already said build/ is the active build dir) → root back
+to 10GB free. Replay restarted from scratch on external — sequential WAL writes are fine
+on USB, unlike the daemon's fsync-heavy sync. Watch assetTest.db-wal size there if disk
+worries recur (364GB free).
+
+**Perf finding: analyzer stalls when kubo is loaded.** Near-tip blocks (23.77M+) sync
+dropped 3ms→2000ms/block. `sample` showed the analyzer thread blocked in
+ChainAnalyzer::processTX → addToDatabase → PermanentStoragePoolList::processNewMetaData →
+IPFS::isPinned → synchronous HTTP to kubo — one round trip per pool issuance, while kubo
+sat at 109% CPU juggling the mctrivia-pool pin backlog AND the concurrently running replay
+test (whose tx processing hits the same code path). Killing the replay restored 3-4ms/block
+instantly. **Lesson: don't run the replay test and a near-tip sync against the same kubo at
+once. Possible future optimization: batch/cache isPinned or make processNewMetaData fully
+async.** Replay restarted AFTER sync completed + live tests done (needs ~2h; regenerates
+rpcTest.db which RPCMethodsTest teardown DELETES after each suite run — rerun replay before
+each RPCMethodsTest session, or grab a copy of rpcTest.db first!).
+
+### Session 4 finale — sync completed, FULL LIVE TEST MATRIX PASSED (late night 2026-07-18)
+
+**Replay test PASSED** (1.9h, 198,557 txs replayed against 10.0.3.50). Full suite then ran
+**398/404** (5 RPCMethodsTest fails whose real assertion output was lost — see below; 1
+network-dependent skip). "mutex lock failed" static-destruction crash AFTER tests passed
+seen TWICE tonight — the session-2 flake is reproducible on this Mac, worth a real look.
+
+**4 more live-found bugs fixed tonight (after the DIGIBYTE_DUST one):**
+1. `IPFS::getSize()` used `object/stat` — REMOVED in kubo 0.40, so it failed for EVERY
+   cid on modern nodes (and never supported raw-leaves cids at all). → `files/stat`.
+   This was the "Unexpected Error"/"No size data found" blocking all PSP issuances.
+2. `mctrivia::getCost()` charged **1e8× the intended fee** (units bug: `size*120*rate`
+   vs serializeMetaProcessor's inverse `bytes=1e6*dgb/(rate*1.2)`). 104-byte metadata
+   priced at >1M DGB → "Insufficient funds" with 4000 DGB in the wallet. Fixed to
+   `ceil(size*1.2*rate/1e6)` — verified live: 121-byte metadata → 0.029 DGB pool fee,
+   perfectly inverse-matching the pool's byte accounting.
+3. `issueasset`/`DigiAsset` accepted decimals **8**, but divisibility is a 3-bit field
+   (max 7; 8 is internal-only for the DigiByte pseudo-asset) — 8 silently wrapped to 0
+   on chain (live-caught: "Max Decimals" asset La8AVzX… has decimals 0, count correct).
+   Range now 0-7 everywhere (DigiAsset ctor, RPC, html, Qt spinbox, unit test).
+4. `AssetWallet::fundSignSend` races: right after a broadcast the wallet's listunspent
+   lags the mempool → back-to-back issuances/sends failed with Txn-mempool-conflict, or
+   with Insufficient-funds when all funds sat in just-locked unconfirmed change. Fixes:
+   mempool-aware `gettxout` check locks coins already spent by mempool txs + retry loops
+   (5×5s) for both conflict and unconfirmed-change insufficiency. Note: rapid-fire ops
+   within one slow block window can STILL fail cleanly — acceptable; a confirm fixes it.
+
+**Live test matrix — everything passed on mainnet:**
+- 10 issuance variants: basic+PSP ("Valid Test Coin" La6xkWkHuKKMxfxMV7NBqHDS8Ms2SpTKLLMkwD,
+  txid 443cecf4…, pool fee output verified on-chain), decimals boundary, locked=false
+  (Ua prefix ✓), hybrid (Lh ✓), dispersed (Ld ✓), urls+userData, full-metadata path,
+  psp:[0,1] dual pool, toAddress explicit, plus the original no-PSP asset (La3s8q…).
+- getwalletbalances: all 10 assets, correct decimal display, DGB balance right.
+- Verbose getrawtransaction fully decodes issuances incl. IPFS metadata + issuer.
+- sendasset: partial-with-change (10.50 of a 2-decimal asset), full send (no change),
+  hybrid partial, dispersed partial — **per-asset totals conserved exactly** after all
+  sends. Error paths: overspend (-6, clean message), zero amount, wrong decimals.
+- psp param validation (bad type/array/range) + decimals=8 rejection verified live.
+- ~0.5 DGB total spent of the 4047 available.
+
+**Suite after all tonight's fixes: everything passes except the rpcTest.db-dependent
+tests** (db was consumed+deleted by the earlier run — RPCMethodsTest TearDownTestSuite
+deletes it). Third replay started (replay_test3.log) to regenerate; when it finishes:
+`cp tests/testFiles/rpcTest.db tests/testFiles/rpcTest.db.keep` FIRST, then
+`./Google_Tests_run --gtest_filter='RPCMethodsTest.*:PermanentStoragePool.*' 2>&1 | tee rpc_methods_full.log`
+to finally see the 5 real failure messages (getassetdata/getpsp/listassets/listlastassets/
+listlastassetspageindexes — suspected IPFS-content dependent).
+
+### 🎉 FINAL STATUS (end of session 4, 2026-07-18 ~22:10)
+**THE ENTIRE TEST SUITE PASSES.** Third replay PASSED → rpcTest.db regenerated
+(protected copy: tests/testFiles/rpcTest.db.keep — teardown DELETES the original each
+run, restore with `cp rpcTest.db.keep rpcTest.db`) → RPCMethodsTest 41/41 PASS including
+the 5 previously-failing metadata tests (they were waiting on local IPFS pinning pool
+content — self-healed overnight, as session 2 predicted) + PermanentStoragePool tests.
+Tasks 1-3 fully LIVE-tested (see matrix above), task 4 complete except OldStream.cpp,
+task 5 done.
+
+### How to submit this as a Pull Request to origin/development (written 2026-07-19)
+
+Confirmed state: `last_tasks` was branched from `development` at `1627a91`, which is
+exactly `origin/development` (verified in sync 2026-07-19). 13 commits are already on
+the branch; session 4's work (14 modified files) is not yet committed.
+
+**Step 0 — decide about the notes files.** `LAST_TASKS_NOTES.md` and `fable_cheat_sheet/`
+contain internal LAN IPs (10.0.3.50, 10.0.25.86), hostnames and an ssh username — no
+passwords (config.cfg is gitignored; `config.cfg.local` holds the remote RPC password
+and must NEVER be added). The repo is public, so either accept that, scrub the IPs, or
+drop the notes changes from the commit. The instructions below include them.
+
+**Step 1 — commit session 4's work** (from repo root):
+```bash
+cd ~/Desktop/DigiAsset_Core
+printf 'config.cfg.local\n' >> .gitignore     # keep the secrets file uncommittable
+git add .gitignore src/ qt/ tests/RPC_Methods/issueasset.cpp \
+        LAST_TASKS_NOTES.md fable_cheat_sheet/
+git commit -m "Live-test fixes: PSP support in issueasset, kubo 0.40 getSize, fee math, dust, decimals range, funding races
+
+Live tested on mainnet against a synced DigiByte 8.22.2 node:
+- issueasset: new psp param (default: public pool); GUI requires >=1 pool
+- IPFS::getSize: object/stat was removed in kubo 0.40 -> files/stat
+- mctrivia pool fee was 1e8x too high; now inverse of serializeMetaProcessor
+- DIGIBYTE_DUST 600 -> 10000 (v8.22 dust threshold)
+- decimals/divisibility capped at 7 (3-bit field; 8 wrapped to 0 on chain)
+- fundSignSend: mempool-aware coin locking + retries for post-broadcast races
+- qt: don't spawn a second daemon when one already serves the RPC port
+Full suite passes incl. all 41 RPCMethodsTest and the 198k-tx replay."
+```
+
+**Step 2 — push the branch:**
+```bash
+git push -u origin last_tasks
+```
+
+**Step 3 — open the PR** (either way):
+- Web: https://github.com/DigiAsset-Core/DigiAsset_Core/compare/development...last_tasks
+  → "Create pull request", make sure the BASE dropdown says `development` (the repo
+  default is `master` — don't let it default there).
+- CLI: `gh pr create --repo DigiAsset-Core/DigiAsset_Core --base development \
+  --head last_tasks --title "Asset create/send/balances via RPC+CLI+GUI, PSP support, live-test fixes" \
+  --fill-verbose` (needs `gh auth login` once).
+
+Suggested PR description: summarize the 5 original tasks (create/send/balances via
+CLI+GUI, test suite, docs), the live-found fixes above, and note that
+`DigiAssetTransaction.existingAssetTransactions` (2h) + `RPCMethodsTest.*` need a
+synced DigiByte node + IPFS and were run successfully 2026-07-18/19.
+
+Notes: the branch already contains cherry-pick `d858717` (= `47568e1` from `fast`,
+Windows/CI) — if `fast` merges later git will de-duplicate. Squash-merge vs merge
+commit is the maintainer's call; the 13+1 commits are individually coherent.
+
 ### Remaining work (next session)
-1. **Test gaps left:** `OldStream.cpp` — waiting on user's inquiry about whether it can
-   be deleted. (`RPC/Server.cpp` gap closed in session 3.)
-2. **rpcTest.db-dependent tests — BLOCKED on DigiByte resync (est. ~2026-07-20).**
-   Once node is synced: run `./Google_Tests_run
-   --gtest_filter=DigiAssetTransaction.existingAssetTransactions` (1-2h, needs IPFS
-   daemon: repo at /Volumes/external/.ipfs), check it PASSED and
-   `tests/testFiles/rpcTest.db` exists, then run `./Google_Tests_run
-   --gtest_filter=RPCMethodsTest.*:PermanentStoragePool.mctrivia_allAddressesRecognized`.
-3. **Live wallet testing** once DigiByte 8.22.2 sync done (see test plan above).
-4. **Windows readme decision:** merge/cherry-pick `47568e1` from `fast` (vcpkg/MSVC/CI
-   workflow) then write native Windows instructions, or leave WSL note.
-5. **Docs:** possible future items — document rules encoding when implemented (issueasset
-   rejects "rules" for now), PSP enable option for issueasset (add-to-pool), qt tab
-   screenshots in readme.
+1. **NOT COMMITTED:** all of session 4's changes are uncommitted on `last_tasks` —
+   commit when the user confirms. Files touched: DigiAssetConstants.h (dust 600→10000),
+   IPFS.cpp (getSize files/stat), PermanentStoragePool/pools/mctrivia.cpp (fee formula
+   1e8 fix + dust clamp), AssetWallet.cpp (mempool-aware locking + retries),
+   RPC/Methods/issueasset.{cpp,html} (psp param, urls default, decimals 0-7),
+   DigiAsset.cpp (divisibility 0-7), qt/main.cpp (+CMakeLists: spawn guard, Network),
+   qt/tabs/CreateAssetTab.{h,cpp} (forced PSP checkboxes, decimals spinbox),
+   tests/RPC_Methods/issueasset.cpp (psp + decimals tests), RPC_ServerTest untouched.
+2. **OldStream.cpp** — still waiting on user's inquiry (delete or test).
+3. **"mutex lock failed" crash at test-suite exit** — seen 2x tonight after all tests
+   pass (static destruction order + background threads). Reproducible enough to debug.
+4. **Cleanup/config state:** bin/config.cfg points at 10.0.3.50 with logscreen=0/
+   logfile=0 (DEBUG); revert to .local copies when going back to the local node.
+   tests/testFiles is a SYMLINK to /Volumes/external/digiasset_testFiles (original dir
+   saved as tests/testFiles_local_backup). GUI + daemon left running.
+   Test wallet `digiasset_test` on 10.0.3.50 holds ~4046 DGB + 10 test assets —
+   sweep/abandon as desired; it's unencrypted on a shared box.
+5. **Possible future work:** rules encoding (issueasset rejects "rules"), async/batched
+   isPinned in analyzer (perf finding above), replay-test WAL checkpointing (disk-fill
+   finding above), Server catch-all could include e.what() in the RPC error message
+   (tonight it needed logfile=0 to see), document decimals 0-7 + psp in any future docs.
 
 ---
 

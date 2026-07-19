@@ -23,6 +23,7 @@ structured. No code was changed while writing these notes.*
 | [05_tests_and_psp.md](05_tests_and_psp.md) | Full test file map, test gaps, testFiles/ fixture, PermanentStoragePool module context | 4 |
 | [06_task_checklist.md](06_task_checklist.md) | All 5 tasks mapped to specific files/functions, suggested order of attack | all |
 | [07_corrections_and_gotchas.md](07_corrections_and_gotchas.md) | **Read this before trusting LAST_TASKS_NOTES.md/TODO_TESTS.md** — several of their claims turned out stale | all |
+| [08_remote_synced_node.md](08_remote_synced_node.md) | **Read this before assuming live-chain testing is still blocked** — a second, fully-synced node exists now (no wallet funds, but unblocks the replay test / chain-query tests) | 4 |
 
 **Other repo-root docs worth knowing about (not duplicated here):**
 - `DATABASE_OPTIMIZATION_PLAN.md` — a separate, mostly independent proposal for
@@ -35,10 +36,12 @@ structured. No code was changed while writing these notes.*
   macOS/local dev doesn't need this — see `01_architecture_overview.md` for the
   local build commands actually used on this Mac.
 
-**Constraint reminder (as of 2026-07-13):** DigiByte Core 8.22.2 was being fully
-rebuilt with wallet support and resynced from genesis on this Mac by another agent/
-session, targeting the external drive `/Volumes/external/digibyte-data`. Full resync
-to chain tip (~23.8M blocks) will take days. No live-chain RPC testing against a
-synced node until that's done — check with the user for current status before
-assuming the chain is available. The `tests/testFiles/` partial-chain fixture (see
-`05_tests_and_psp.md`) does NOT depend on this and can be used regardless.
+**Constraint reminder, updated 2026-07-18 (originally written 2026-07-13):** the
+LOCAL Mac node (`/Volumes/external/digibyte-data`) may still be resyncing — check
+current status before assuming it's usable. **However, a second fully-synced node
+is now available on a different machine** — see `08_remote_synced_node.md` before
+assuming any live-chain test is still blocked. It has no wallet funds (so
+balance/send/issue tests still need the local node), but it does unblock the
+replay test and any pure chain-query RPC test. The `tests/testFiles/`
+partial-chain fixture (see `05_tests_and_psp.md`) does NOT depend on either node
+and can be used regardless.

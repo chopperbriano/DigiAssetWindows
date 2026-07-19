@@ -21,8 +21,8 @@ find_package(CURL REQUIRED)
 
 # --- Find Qt libraries ---
 # Works with Qt5 or Qt6 - whichever is installed
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Charts)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Charts)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Charts Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Charts Network)
 
 # --- Source files ---
 set(HEADER_FILES
@@ -88,6 +88,7 @@ target_link_libraries(digiasset_core-qt
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Charts
+        Qt${QT_VERSION_MAJOR}::Network
         )
 
 

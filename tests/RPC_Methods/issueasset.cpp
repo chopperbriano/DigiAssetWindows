@@ -80,7 +80,7 @@ TEST_F(RPCMethodsTest, issueasset) {
         Json::Value config = Json::objectValue;
         config["name"] = "Test Asset";
         config["amount"] = 100;
-        config["decimals"] = 9;
+        config["decimals"] = 8; //3 bit field - max real asset divisibility is 7
         params.append(config);
         RPC::methods[METHOD](params);
         result = false;
@@ -131,6 +131,60 @@ TEST_F(RPCMethodsTest, issueasset) {
         Json::Value config = Json::objectValue;
         config["name"] = "Test Asset";
         config["amount"] = 0;
+        params.append(config);
+        RPC::methods[METHOD](params);
+        result = false;
+    } catch (const DigiByteException& e) {
+        result = true;
+    } catch (...) {
+        result = false;
+    }
+    EXPECT_TRUE(result);
+
+    //psp wrong type
+    try {
+        Json::Value params = Json::arrayValue;
+        Json::Value config = Json::objectValue;
+        config["name"] = "Test Asset";
+        config["amount"] = 100;
+        config["psp"] = "public";
+        params.append(config);
+        RPC::methods[METHOD](params);
+        result = false;
+    } catch (const DigiByteException& e) {
+        result = true;
+    } catch (...) {
+        result = false;
+    }
+    EXPECT_TRUE(result);
+
+    //psp array with non integer entry
+    try {
+        Json::Value params = Json::arrayValue;
+        Json::Value config = Json::objectValue;
+        config["name"] = "Test Asset";
+        config["amount"] = 100;
+        Json::Value pools = Json::arrayValue;
+        pools.append(1);
+        pools.append("local");
+        config["psp"] = pools;
+        params.append(config);
+        RPC::methods[METHOD](params);
+        result = false;
+    } catch (const DigiByteException& e) {
+        result = true;
+    } catch (...) {
+        result = false;
+    }
+    EXPECT_TRUE(result);
+
+    //psp pool index out of range
+    try {
+        Json::Value params = Json::arrayValue;
+        Json::Value config = Json::objectValue;
+        config["name"] = "Test Asset";
+        config["amount"] = 100;
+        config["psp"] = 99;
         params.append(config);
         RPC::methods[METHOD](params);
         result = false;

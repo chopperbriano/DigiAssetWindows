@@ -14,3 +14,4 @@ tests/testFiles/assetTest.*
 tests/testFiles/rpcTest.*
 !*/.gitkeep
 .DS_Store
+config.cfg.local
