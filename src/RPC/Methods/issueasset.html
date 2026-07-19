@@ -46,6 +46,10 @@ http://opensource.org/licenses/MIT. -->
     "metadata": {},               // (object optional advanced) full metadata document to
                                   //     publish as is.  when used name/description/urls/
                                   //     userData are ignored
+    "dryrun": false,              // (bool optional) build and price the issuance
+                                  //     without broadcasting.  returns the cost
+                                  //     breakdown (pspFee, ruleOutputs, assetOutputs,
+                                  //     estimatedMinerFee, estimatedTotal) instead
     "psp": true                   // (optional default true) permanent storage pool(s) that
                                   //     store the metadata.  the public pool charges
                                   //     $1.20 USD per MB paid in DGB as an extra output on

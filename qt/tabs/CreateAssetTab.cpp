@@ -95,15 +95,6 @@ void CreateAssetTab::createAsset() {
         return;
     }
 
-    //confirm - issuance can not be undone
-    QString lockedText = _lockedCheck->isChecked() ? "locked(supply can never change)" : "unlocked";
-    if (QMessageBox::question(this, "Confirm Create Asset",
-                              QString("Create %1 of \"%2\" (%3)?\nA storage pool fee($1.20 USD per MB, paid in DGB) "
-                                      "is added to the transaction.\nThis writes to the blockchain and can not be undone.")
-                                      .arg(amount, name, lockedText)) != QMessageBox::Yes) {
-        return;
-    }
-
     try {
         Json::Value config = Json::objectValue;
         config["name"] = name.toStdString();
@@ -116,6 +107,27 @@ void CreateAssetTab::createAsset() {
         QString toAddress = _toAddressEdit->text().trimmed();
         if (!toAddress.isEmpty()) config["toAddress"] = toAddress.toStdString();
         config["psp"] = pspArray;
+
+        //price the issuance first so the user confirms real numbers
+        QString costText = "Costs could not be estimated.";
+        try {
+            Json::Value dryConfig = config;
+            dryConfig["dryrun"] = true;
+            Json::Value dryArgs = Json::arrayValue;
+            dryArgs.append(dryConfig);
+            Json::Value costs = _dgbCore.sendcommand("issueasset", dryArgs);
+            costText = QString("Storage pool fee: %1 DGB\nEstimated total cost: %2 DGB")
+                               .arg(QString::fromStdString(costs["pspFee"].asString()),
+                                    QString::fromStdString(costs["estimatedTotal"].asString()));
+        } catch (const DigiByteException&) {} //fall back to generic text
+
+        //confirm - issuance can not be undone
+        QString lockedText = _lockedCheck->isChecked() ? "locked(supply can never change)" : "unlocked";
+        if (QMessageBox::question(this, "Confirm Create Asset",
+                                  QString("Create %1 of \"%2\" (%3)?\n%4\nThis writes to the blockchain and can not be undone.")
+                                          .arg(amount, name, lockedText, costText)) != QMessageBox::Yes) {
+            return;
+        }
 
         Json::Value args = Json::arrayValue;
         args.append(config);

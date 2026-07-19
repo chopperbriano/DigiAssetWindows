@@ -65,10 +65,18 @@ namespace RPC {
         *                   the asset can no longer be transferred.  With voting = vote cutoff
         *      "deflation"(integer) - base units that must be burned with every transfer
         *
+        *   "dryrun"(bool optional default false) - build everything and return the cost
+        *                                 breakdown WITHOUT broadcasting.  The metadata is
+        *                                 published to the local IPFS node(needed to price
+        *                                 storage) but nothing touches the chain
+        *
         * @return object:
         *   "txid"(string) - txid of the issuance transaction
         *   "assetId"(string) - id of the newly created asset
         *   "cid"(string) - IPFS cid of the published metadata
+        * or when dryrun is set:
+        *   "cid", "assetOutputs", "ruleOutputs", "pspFee", "estimatedMinerFee",
+        *   "estimatedTotal"(strings, DGB) and "sats"(object) with the same in sats
         */
         extern const Response issueasset(const Json::Value& params) {
             if ((params.size() != 1) || !params[0].isObject()) {
@@ -306,6 +314,13 @@ namespace RPC {
                 }
             }
 
+            //dry run: build everything and report the costs without broadcasting
+            bool dryrun = false;
+            if (config.isMember("dryrun")) {
+                if (!config["dryrun"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "dryrun must be a bool");
+                dryrun = config["dryrun"].asBool();
+            }
+
             //where the new assets should go
             std::string toAddress;
             if (config.isMember("toAddress")) {
@@ -363,11 +378,13 @@ namespace RPC {
             tx.setIssuance(asset);
             DigiAsset newAssets = asset; //full amount to the recipient
             tx.addDigiAssetOutput(toAddress, std::vector<DigiAsset>{newAssets});
+            unsigned int assetOutputsEnd = tx.getOutputCount();
             try {
                 tx.addRuleOutputs(); //signer/royalty/custom-vote outputs(no-op without rules)
             } catch (const DigiAssetRules::exception& e) {
                 throw DigiByteException(RPC_INVALID_PARAMS, e.what());
             }
+            unsigned int ruleOutputsEnd = tx.getOutputCount();
 
             //add the permanent storage pool payments(must be the last change to the tx before funding)
             for (unsigned int poolIndex: pspPools) {
@@ -378,6 +395,56 @@ namespace RPC {
                 } catch (const PermanentStoragePool::exceptionCantEnablePSP& e) {
                     throw DigiByteException(RPC_MISC_ERROR, "could not enable permanent storage on this issuance");
                 }
+            }
+
+            //dry run stops here: report what the issuance would cost without broadcasting.
+            //(the metadata HAS been published to the local IPFS node so its size could be
+            //priced - nothing has touched the chain)
+            if (dryrun) {
+                uint64_t assetOutputsSats = 0;
+                uint64_t ruleOutputsSats = 0;
+                uint64_t pspFeeSats = 0;
+                for (unsigned int i = 0; i < tx.getOutputCount(); i++) {
+                    uint64_t sats = tx.getOutput(i).digibyte;
+                    if (i < assetOutputsEnd) {
+                        assetOutputsSats += sats;
+                    } else if (i < ruleOutputsEnd) {
+                        ruleOutputsSats += sats;
+                    } else {
+                        pspFeeSats += sats;
+                    }
+                }
+
+                //rough miner fee: relay fee rate over an estimated funded size(base + op_return
+                //+ outputs + funding input + change).  DigiByte fees are tiny so rough is fine
+                uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
+                try {
+                    Json::Value feeParams = Json::arrayValue;
+                    feeParams.append(6);
+                    Json::Value est = main->getDigiByteCore()->sendcommand("estimatesmartfee", feeParams);
+                    if (est.isMember("feerate") && est["feerate"].isNumeric() && (est["feerate"].asDouble() > 0)) {
+                        feeRate = static_cast<uint64_t>(est["feerate"].asDouble() * 100000000);
+                    }
+                } catch (...) {} //fallback rate already set
+                size_t estimatedVSize = 200 + (tx.encodeAssetOpReturn().length() / 2) + (tx.getOutputCount() * 35) + 150;
+                uint64_t minerFeeSats = feeRate * estimatedVSize / 1000;
+
+                Json::Value result = Json::objectValue;
+                result["cid"] = cid;
+                result["assetOutputs"] = AssetWallet::satsToDecimal(assetOutputsSats);
+                result["ruleOutputs"] = AssetWallet::satsToDecimal(ruleOutputsSats);
+                result["pspFee"] = AssetWallet::satsToDecimal(pspFeeSats);
+                result["estimatedMinerFee"] = AssetWallet::satsToDecimal(minerFeeSats);
+                result["estimatedTotal"] = AssetWallet::satsToDecimal(assetOutputsSats + ruleOutputsSats + pspFeeSats + minerFeeSats);
+                result["sats"] = Json::objectValue;
+                result["sats"]["assetOutputs"] = static_cast<Json::UInt64>(assetOutputsSats);
+                result["sats"]["ruleOutputs"] = static_cast<Json::UInt64>(ruleOutputsSats);
+                result["sats"]["pspFee"] = static_cast<Json::UInt64>(pspFeeSats);
+                result["sats"]["estimatedMinerFee"] = static_cast<Json::UInt64>(minerFeeSats);
+                Response response;
+                response.setResult(result);
+                response.setBlocksGoodFor(-1); //do not cache
+                return response;
             }
 
             //fund, sign and broadcast

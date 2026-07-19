@@ -7,6 +7,7 @@
 #include "tabs/BalancesTab.h"
 #include "tabs/CreateAssetTab.h"
 #include "tabs/SendAssetTab.h"
+#include "tabs/HistoryTab.h"
 #include "tabs/SyncTab.h"
 #include <QApplication>
 #include <QDebug>
@@ -175,6 +176,7 @@ void updateLoadingProgress(QTimer *timer, QWidget &splash) {
             tabWidget->addTab(new BalancesTab(), "Balances");
             tabWidget->addTab(new SendAssetTab(), "Send Asset");
             tabWidget->addTab(new CreateAssetTab(), "Create Asset");
+            tabWidget->addTab(new HistoryTab(), "History");
             tabWidget->resize(800, 600);
             tabWidget->show();
         }

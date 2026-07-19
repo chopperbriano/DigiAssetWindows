@@ -32,6 +32,7 @@ set(HEADER_FILES
         tabs/BalancesTab.h
         tabs/SendAssetTab.h
         tabs/CreateAssetTab.h
+        tabs/HistoryTab.h
         ../src/Config.h
         ../src/DigiByteCore.h
         ../src/DigiAssetConstants.h
@@ -45,6 +46,7 @@ set(SOURCE_FILES
         tabs/BalancesTab.cpp
         tabs/SendAssetTab.cpp
         tabs/CreateAssetTab.cpp
+        tabs/HistoryTab.cpp
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
         ../src/utils.cpp
