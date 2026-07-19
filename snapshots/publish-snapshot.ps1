@@ -3,7 +3,7 @@
     One command to refresh the fast-sync snapshot: build the DigiByte blockchain +
     DigiAsset chain.db archives, upload them to Cloudflare R2, rebuild + upload
     snapshot.json, verify it's live, and prune old local copies. Can register
-    itself as a WEEKLY scheduled task.
+    itself as a WEEKLY or DAILY scheduled task.
 
 .DESCRIPTION
     Run on the always-on box that has BOTH a fully-synced DigiByte wallet and a
@@ -20,6 +20,9 @@
 
     # register a weekly job (Sundays 03:00) - runs while you're logged on (Autologon)
     powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule
+
+    # register a DAILY job (every day at 03:00)
+    powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule -Cadence Daily
 
     # also delete superseded archives from R2 so the bucket doesn't grow forever
     powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -PruneRemote
@@ -38,13 +41,14 @@ param(
     [int]   $KeepLocal    = 1,        # keep newest N local .tar.gz of each kind
     [switch]$PruneRemote,             # delete superseded archives from R2 too
     [switch]$NoManifest,              # upload the archive(s) only; do NOT rebuild/replace snapshot.json
-    [switch]$Schedule,                # register a weekly task instead of running now
-    [string]$ScheduleDay  = 'Sunday',
+    [switch]$Schedule,                # register a scheduled task instead of running now
+    [ValidateSet('Weekly','Daily')][string]$Cadence = 'Weekly',
+    [string]$ScheduleDay  = 'Sunday', # weekly cadence only: which day to run
     [string]$ScheduleTime = '03:00'
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.2.0'
+$SCRIPT_VERSION = '1.3.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 function Step($n,$m){ Write-Host ''; Write-Host "[$n] $m" -ForegroundColor Cyan }
 $here     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -72,7 +76,7 @@ if (-not $admin) {
         $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
         if ($NoManifest)  { $fwd += ' -NoManifest' }
-        if ($Schedule)    { $fwd += " -Schedule -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
+        if ($Schedule)    { $fwd += " -Schedule -Cadence $Cadence -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; return
     } else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
@@ -82,14 +86,23 @@ if ($Schedule) {
     $selfArg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -KeepLocal $KeepLocal"
     if ($PruneRemote) { $selfArg += ' -PruneRemote' }
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $selfArg
-    $t = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $ScheduleDay -At $ScheduleTime
+    # Daily or weekly trigger. Each run snapshots the SAME height-consistent pair
+    # (both DBs together), so cadence is purely how fresh new nodes' starting point
+    # is - NOT a way to snapshot chain.db more often than the DigiByte chain (that
+    # would put chain.db ahead of the wallet, which the manifest step rejects).
+    $t = if ($Cadence -eq 'Daily') {
+        New-ScheduledTaskTrigger -Daily -At $ScheduleTime
+    } else {
+        New-ScheduledTaskTrigger -Weekly -DaysOfWeek $ScheduleDay -At $ScheduleTime
+    }
     $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6)
     Register-ScheduledTask -TaskName 'DigiAssetSnapshotPublish' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
-    Say "Weekly snapshot task 'DigiAssetSnapshotPublish' registered: $ScheduleDay at $ScheduleTime." 'Green'
-    Say "Runs as $u while logged on (use Autologon on an always-on box)." 'White'
-    Say "It snapshots both DBs, uploads to $remote, refreshes snapshot.json, and verifies." 'White'
+    $when = if ($Cadence -eq 'Daily') { "every day at $ScheduleTime" } else { "$ScheduleDay at $ScheduleTime" }
+    Say "Snapshot task 'DigiAssetSnapshotPublish' registered ($Cadence): $when." 'Green'
+    Say "Component: $Component. Runs as $u while logged on (use Autologon on an always-on box)." 'White'
+    Say "Each run briefly stops DigiByte + the node, snapshots both, restarts them, uploads to $remote, and refreshes snapshot.json." 'White'
     return
 }
 

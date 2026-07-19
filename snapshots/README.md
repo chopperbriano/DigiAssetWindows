@@ -53,13 +53,32 @@ It stops DigiByte + the node briefly for a clean, **in-sync** snapshot (chain.db
 can't drift ahead of the blockchain because both are captured together), restarts
 them, uploads everything, refreshes `snapshot.json`, and verifies it's live.
 
-## Schedule it weekly
+## Schedule it (weekly or daily)
 ```powershell
+# weekly (default: Sundays 03:00)
 powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule
+
+# daily (every day at 03:00)
+powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -Schedule -Cadence Daily
 ```
-Registers the **`DigiAssetSnapshotPublish`** task (default: **Sundays 03:00**),
-running as you while logged on — pair with **Autologon** on an always-on box.
-Change timing with `-ScheduleDay Saturday -ScheduleTime 02:30`. Add `-PruneRemote`
+Registers the **`DigiAssetSnapshotPublish`** task, running as you while logged on
+— pair with **Autologon** on an always-on box.
+
+**Keep the apps running between snapshots.** The DigiByte wallet + node stay up
+24/7 via the installer's autostart tasks (that's what keeps them synced); this job
+only *briefly* stops them to take a consistent snapshot, then restarts them. So you
+don't run a separate "keep syncing" step — normal autostart is it.
+
+**Cadence is whole-pair only.** Every run snapshots **both** DBs together at the
+same height, so daily vs weekly is just how fresh a new node's starting point is.
+You **cannot** refresh `chain.db` more often than the DigiByte chain — that would
+put `chain.db` ahead of the wallet, which the manifest step rejects as unsafe.
+DigiByte is ~30 GB (20–60 min to compress, during which the wallet is down), so
+**weekly is the practical sweet spot**; use **daily** only if you want the freshest
+possible starting point and don't mind the daily compress window + re-upload.
+
+Change weekly timing with `-ScheduleDay Saturday -ScheduleTime 02:30`
+(`-ScheduleDay` is ignored for `-Cadence Daily`). Add `-PruneRemote`
 to also delete superseded archives from R2 so the bucket doesn't grow every week.
 
 ## Useful options

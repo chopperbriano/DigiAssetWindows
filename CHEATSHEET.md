@@ -59,6 +59,7 @@ Pick your role below — you only need the scripts in your section.
 | **Publish a fresh snapshot** (build + upload + manifest) | `snapshots\publish-snapshot.ps1` |
 | Publish ONLY the DigiByte chain (no chain.db on this box) | `snapshots\publish-snapshot.ps1 -Component digibyte` |
 | Schedule it weekly (Sun 3am) | `snapshots\publish-snapshot.ps1 -Schedule` |
+| Schedule it **daily** (3am) | `snapshots\publish-snapshot.ps1 -Schedule -Cadence Daily` |
 | **Seed a DigiByte wallet** from the published snapshot (prompts for + validates the target folder) | `snapshots\seed-digibyte.ps1` |
 | Copy a synced data dir across your own LAN | `snapshots\snapshot-digibyte-datadir.ps1 -Mode Snapshot` / `-Mode Restore` |
 
