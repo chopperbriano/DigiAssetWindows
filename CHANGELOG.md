@@ -20,7 +20,21 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.101 (current) — getdomainaddress reports burned domains
+## 0.3.3-win.102 (current) — accurate sync auto-recovery diagnostics
+
+The auto-recovery log line could report **"block 0 … Cause: unknown error"**
+when the exception was thrown from the recovery preamble (the
+`getBlockHeight` / `getBlockHash` / `clearBlocksAboveHeight` calls) rather than
+from `phaseSync` — e.g. a `Database Exception: SQL command failed`. That path
+never set `_lastError`/`_lastErrorHeight`, so the real cause was lost and you had
+to correlate it with the separate framework CRITICAL line. `mainFunction()` now
+wraps its **entire** body in the capture try/catch (plus a `catch(...)` and a
+`typeid` fallback for an empty `what()`), so every recovery names the **real
+cause and a real block height**. No behavior change to recovery itself.
+
+---
+
+## 0.3.3-win.101 — getdomainaddress reports burned domains
 
 `getdomainaddress` now reports a burned domain (registered, but its controlling
 asset has no holders — swept by a non-DigiAsset-aware wallet) as **"Domain

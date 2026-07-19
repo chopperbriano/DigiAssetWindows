@@ -28,6 +28,7 @@
 #include <fstream>
 #include <iomanip>
 #include <thread>
+#include <typeinfo>
 
 using namespace std;
 
@@ -297,62 +298,75 @@ void ChainAnalyzer::startupFunction() {
 void ChainAnalyzer::mainFunction() {
     Log* log = Log::GetInstance();
 
-    // On the first call after startupFunction(), state is already correct.
-    // On subsequent calls (after an exception), re-read from DB to recover.
-    if (_hasRunOnce) {
-        _errorCount++;
-        AppMain* main = AppMain::GetInstance();
-        Database* db = main->getDatabase();
-        DigiByteCore* dgb = main->getDigiByteCore();
-        _height = db->getBlockHeight();          // last fully-committed block (good)
-        _nextHash = dgb->getBlockHash(_height);
-        db->clearBlocksAboveHeight(_height);     // discard the partially-written failed block
-        // Explain WHAT failed, WHY, and HOW we recovered - "Recovered from error"
-        // alone tells the operator nothing. These errors are usually transient
-        // (an RPC/network hiccup, or a block that changed under us near the tip)
-        // and clear on the next attempt.
-        std::string cause = _lastError.empty() ? "unknown error" : _lastError;
-        log->addMessage(
-            "Auto-recovered from a sync error at block " + std::to_string(_lastErrorHeight) +
-            " (attempt " + std::to_string(_errorCount) + "). Cause: " + cause +
-            ". Action: discarded the incomplete block, re-read the chain back to block " +
-            std::to_string(_height) + ", and am retrying. Usually a transient RPC/tip hiccup.",
-            Log::WARNING);
-
-        // If we keep failing at the same block, wait before retrying
-        if (_errorCount >= 3) {
-            log->addMessage("  still failing at block " + std::to_string(_lastErrorHeight) +
-                " after " + std::to_string(_errorCount) + " tries - waiting 10s before the next retry.", Log::WARNING);
-            std::this_thread::sleep_for(std::chrono::seconds(10));
-        }
-        if (_errorCount >= 10) {
-            log->addMessage("Giving up at block " + std::to_string(_lastErrorHeight) +
-                " after 10 attempts. Last error: " + cause +
-                ". Sync stopped - restart the node to try again, and please report this block + error.", Log::CRITICAL);
-            _state = STOPPED;
-            // Sleep forever until stop is requested — prevents Threaded from retrying
-            while (!stopRequested()) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-            return;
-        }
-    }
-    _hasRunOnce = true;
-
+    // The ENTIRE body runs under one try/catch so we capture the real cause no
+    // matter which step threw. Previously only phaseRewind/phaseSync were wrapped,
+    // so an exception from the recovery preamble below (getBlockHeight /
+    // getBlockHash / clearBlocksAboveHeight - e.g. a "Database ... SQL command
+    // failed") escaped WITHOUT setting _lastError/_lastErrorHeight, and the next
+    // recovery line then reported the useless "block 0 ... Cause: unknown error".
     try {
+        // On the first call after startupFunction(), state is already correct.
+        // On subsequent calls (after an exception), re-read from DB to recover.
+        if (_hasRunOnce) {
+            _errorCount++;
+            AppMain* main = AppMain::GetInstance();
+            Database* db = main->getDatabase();
+            DigiByteCore* dgb = main->getDigiByteCore();
+            // Explain WHAT failed, WHY, and HOW we recovered - "Recovered from
+            // error" alone tells the operator nothing. Log this BEFORE the recovery
+            // DB/RPC calls so that if THOSE throw (a persistent DB/RPC fault) the
+            // cause from the last failure is still surfaced, not swallowed.
+            std::string cause = _lastError.empty() ? "unknown error" : _lastError;
+            log->addMessage(
+                "Auto-recovered from a sync error at block " + std::to_string(_lastErrorHeight) +
+                " (attempt " + std::to_string(_errorCount) + "). Cause: " + cause +
+                ". Action: discarding the incomplete block and re-reading the chain, then retrying." +
+                " Usually a transient RPC/tip hiccup.",
+                Log::WARNING);
+
+            // If we keep failing, wait before retrying
+            if (_errorCount >= 3) {
+                log->addMessage("  still failing at block " + std::to_string(_lastErrorHeight) +
+                    " after " + std::to_string(_errorCount) + " tries - waiting 10s before the next retry.", Log::WARNING);
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+            }
+            if (_errorCount >= 10) {
+                log->addMessage("Giving up at block " + std::to_string(_lastErrorHeight) +
+                    " after 10 attempts. Last error: " + cause +
+                    ". Sync stopped - restart the node to try again, and please report this block + error.", Log::CRITICAL);
+                _state = STOPPED;
+                // Sleep forever until stop is requested — prevents Threaded from retrying
+                while (!stopRequested()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+                return;
+            }
+
+            _height = db->getBlockHeight();          // last fully-committed block (good)
+            _nextHash = dgb->getBlockHash(_height);
+            db->clearBlocksAboveHeight(_height);     // discard the partially-written failed block
+        }
+        _hasRunOnce = true;
+
         phaseRewind();
         phaseSync();
         _errorCount = 0;      // reset on success
         _lastError.clear();
     } catch (const std::exception& e) {
-        // Capture the details; the human-friendly "what/why/how" line is logged on
-        // recovery (top of mainFunction) so we don't double-log every hiccup. A
-        // DEBUG breadcrumb here still records it if we happen not to re-enter.
+        // Capture the real cause + block for the recovery line logged on re-entry.
         _lastError = e.what();
+        if (_lastError.empty()) _lastError = std::string("unlabeled exception (") + typeid(e).name() + ")";
         _lastErrorHeight = _height + 1;   // the block we were processing when it threw
         log->addMessage("Sync interrupted at block " + std::to_string(_lastErrorHeight) +
             ": " + _lastError, Log::DEBUG);
         throw; // re-throw so the Threaded framework re-enters mainFunction() to recover
+    } catch (...) {
+        // Non-std::exception failure - still record something useful, never "unknown".
+        _lastError = "non-standard (non-std::exception) failure";
+        _lastErrorHeight = _height + 1;
+        log->addMessage("Sync interrupted at block " + std::to_string(_lastErrorHeight) +
+            ": non-standard exception", Log::DEBUG);
+        throw;
     }
 }
 
