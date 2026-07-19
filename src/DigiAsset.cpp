@@ -183,7 +183,7 @@ DigiAsset::DigiAsset(const getrawtransaction_t& txData, unsigned int height, uns
  * @param aggregation - one of AGGREGABLE, HYBRID, DISPERSED
  */
 DigiAsset::DigiAsset(const string& cid, uint64_t count, unsigned char divisibility, bool locked,
-                     unsigned char aggregation) {
+                     unsigned char aggregation, const DigiAssetRules& rules) {
     if (divisibility > 7) throw out_of_range("divisibility must be 0 to 7");
     if (aggregation > DISPERSED) throw out_of_range("invalid aggregation type");
     if (count == 0) throw out_of_range("count must be at least 1");
@@ -197,7 +197,8 @@ DigiAsset::DigiAsset(const string& cid, uint64_t count, unsigned char divisibili
     _heightUpdated = 0;
     _existingAsset = false;
     _enableWrite = true;
-    if (locked) _rules.lock();
+    _rules = rules;
+    if (locked) _rules.lock(); //locked assets can never have rewritable rules
 }
 
 /**

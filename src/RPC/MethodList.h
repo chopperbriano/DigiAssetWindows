@@ -15,6 +15,7 @@ namespace RPC {
         extern const Response asyncclear(const Json::Value& params);
         extern const Response asyncget(const Json::Value& params);
         extern const Response asyncstart(const Json::Value& params);
+        extern const Response burnasset(const Json::Value& params);
         extern const Response debugwaittimes(const Json::Value& params);
         extern const Response getaddressholdings(const Json::Value& params);
         extern const Response getaddresskyc(const Json::Value& params);
@@ -40,10 +41,12 @@ namespace RPC {
         extern const Response listlastassetspageindexes(const Json::Value& params);
         extern const Response listlastblocks(const Json::Value& params);
         extern const Response listunspent(const Json::Value& params);
+        extern const Response reissueasset(const Json::Value& params);
         extern const Response resyncmetadata(const Json::Value& params);
         extern const Response send(const Json::Value& params);
         extern const Response sendasset(const Json::Value& params);
         extern const Response sendmany(const Json::Value& params);
+        extern const Response sendmanyassets(const Json::Value& params);
         extern const Response sendtoaddress(const Json::Value& params);
         extern const Response shutdown(const Json::Value& params);
         extern const Response syncstate(const Json::Value& params);

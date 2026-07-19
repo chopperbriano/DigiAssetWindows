@@ -881,6 +881,43 @@ void DigiByteTransaction::setIssuance(const DigiAsset& asset) {
 }
 
 /**
+ * Marks amounts of assets on the inputs to be destroyed by this transaction.  The burn
+ * travels as a transfer instruction targeting output 31, exactly what decodeAssetTransfer
+ * treats as a burn.  Anything on the inputs that is neither burned nor assigned to an
+ * asset output still needs an explicit change output.
+ */
+void DigiByteTransaction::addAssetBurn(const std::vector<DigiAsset>& assets) {
+    checkWritable();
+    if (!_assetFound) throw exception("Add the asset bearing inputs before declaring burns");
+    if (_txType == DIGIASSET_ISSUANCE) throw exception("Issuances can not burn assets");
+    for (const DigiAsset& asset: assets) {
+        if (asset.getCount() == 0) throw exception("Can not burn 0 of an asset");
+        _burns.push_back(asset);
+    }
+    _txType = DIGIASSET_BURN;
+}
+
+/**
+ * Adds the outputs required by the issued asset's rules(signer/royalty/custom vote
+ * address outputs - see DigiAssetRules::getRequiredOutputs).  Must be called AFTER all
+ * asset outputs(the rules bitstream references these outputs by their final vout index)
+ * and BEFORE any other extra outputs like storage pool fees.  No-op when the asset has
+ * no rules or no outputs are needed.
+ */
+void DigiByteTransaction::addRuleOutputs() {
+    checkWritable();
+    if (_txType != DIGIASSET_ISSUANCE) throw exception("Rule outputs only apply to issuances");
+    if (_ruleOutputsAdded) throw exception("Rule outputs already added");
+
+    std::vector<DigiAssetRules::RuleOutput> required = _newAsset.getRules().getRequiredOutputs();
+    _ruleOutputsStart = _outputs.size();
+    _ruleOutputsAdded = true;
+    for (const DigiAssetRules::RuleOutput& output: required) {
+        addDigiByteOutput(output.address, output.sats);
+    }
+}
+
+/**
  * Adds a DigiByte only output to the transaction being built.
  * Warning: fee and balance checks are not done here.  They are handled when the transaction
  * is funded by the wallet(fundrawtransaction will fail if the wallet lacks funds).
@@ -944,6 +981,9 @@ void DigiByteTransaction::buildTransferInstructions(BitIO& data) const {
     desired.reserve(_outputs.size());
     for (const AssetUTXO& vout: _outputs) desired.push_back(vout.assets);
 
+    //copy of the burn amounts we can count down the same way
+    vector<DigiAsset> burns = _burns;
+
     //walk input chunks in consumption order and route them to outputs
     for (vector<DigiAsset>& chunkList: inputs) {
         for (DigiAsset& chunk: chunkList) {
@@ -956,6 +996,7 @@ void DigiByteTransaction::buildTransferInstructions(BitIO& data) const {
 
                     //encode instruction: skip=0, range=0, percent=0, 5 bit output, fixed precision amount
                     if (o > 31) throw exception("Asset outputs must be within the first 32 outputs");
+                    if ((o == 31) && (_txType == DIGIASSET_BURN)) throw exception("Output 31 is reserved for the burn marker in burn transactions");
                     data.appendBits(0, 3);
                     data.appendBits(o, 5);
                     BitIO amount = BitIO::makeFixedPrecision(take);
@@ -966,6 +1007,20 @@ void DigiByteTransaction::buildTransferInstructions(BitIO& data) const {
                     if (remaining == 0) break;
                 }
             }
+
+            //anything declared for burning is routed to the burn marker(output 31)
+            for (DigiAsset& burn: burns) {
+                if (remaining == 0) break;
+                if (burn.getCount() == 0) continue;
+                if (burn.getAssetIndex(true) != chunk.getAssetIndex(true)) continue;
+                uint64_t take = min(remaining, burn.getCount());
+                data.appendBits(0, 3);
+                data.appendBits(31, 5); //burn instruction
+                BitIO amount = BitIO::makeFixedPrecision(take);
+                data.appendBits(amount);
+                burn.setCount(burn.getCount() - take);
+                remaining -= take;
+            }
             if (remaining > 0) throw exception("Input assets not fully assigned to outputs.  Add an asset change output");
         }
     }
@@ -975,6 +1030,9 @@ void DigiByteTransaction::buildTransferInstructions(BitIO& data) const {
         for (const DigiAsset& want: vout) {
             if (want.getCount() > 0) throw exception("Output requests more assets than inputs provide");
         }
+    }
+    for (const DigiAsset& burn: burns) {
+        if (burn.getCount() > 0) throw exception("Burn requests more assets than inputs provide");
     }
 }
 
@@ -993,11 +1051,18 @@ string DigiByteTransaction::encodeAssetOpReturn() const {
     data.appendBits(3, 8);       //version 3
 
     if (_txType == DIGIASSET_ISSUANCE) {
-        if (!_newAsset.getRules().empty()) throw exception("Encoding of assets with rules is not yet supported");
-
-        //opcode depends on whether there is metadata
+        DigiAssetRules rules = _newAsset.getRules();
         bool hasMetaData = !_newAsset.getCID().empty();
-        data.appendBits(hasMetaData ? 0x01 : 0x05, 8);
+
+        //opcode: 1 = metadata no rules, 5 = no metadata no rules,
+        //        3 = metadata + rewritable rules, 4 = metadata + locked rules
+        if (rules.empty()) {
+            data.appendBits(hasMetaData ? 0x01 : 0x05, 8);
+        } else {
+            if (!hasMetaData) throw exception("Assets with rules require metadata(rule op codes 3 and 4 always carry a metadata hash)");
+            if (!_ruleOutputsAdded) throw exception("Call addRuleOutputs() before encoding an issuance with rules");
+            data.appendBits(rules.isRewritable() ? 0x03 : 0x04, 8);
+        }
 
         //32 byte sha256 of the metadata(derived from the raw mode cid)
         if (hasMetaData) {
@@ -1009,7 +1074,8 @@ string DigiByteTransaction::encodeAssetOpReturn() const {
         BitIO count = BitIO::makeFixedPrecision(_newAsset.getCount());
         data.appendBits(count);
 
-        //no rules section(opcode 1 and 5 never have rules)
+        //rules section(only op codes 3 and 4)
+        if (!rules.empty()) rules.encode(data, _ruleOutputsStart);
 
         //transfer instructions assigning the new assets to outputs
         buildTransferInstructions(data);

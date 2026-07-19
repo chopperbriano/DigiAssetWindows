@@ -29,6 +29,7 @@ set(TESTS
         DigiAssetRulesTest.cpp
         DigiAssetTransactionTest.cpp
         DigiByteTransactionBuilderTest.cpp
+        DigiAssetRulesEncodeTest.cpp
         PermanentStoragePoolTest.cpp
         PermanentStoragePoolListTest.cpp
         ConfigTest.cpp

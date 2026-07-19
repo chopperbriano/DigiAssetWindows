@@ -239,6 +239,17 @@ namespace AssetWallet {
             string hex = signResult["hex"].asString();
             if (signedHex != nullptr) *signedHex = hex;
 
+            //make sure funding didn't displace our first input.  Asset transfer instructions
+            //assume input consumption order, and reissuances derive the assetId from vin[0],
+            //so a reordered input list would corrupt the asset side of the transaction
+            if (tx.getInputCount() > 0) {
+                decoderawtransaction_t decoded = dgb->decoderawtransaction(hex);
+                if ((decoded.vin[0].txid != tx.getInput(0).txid) ||
+                    (decoded.vin[0].n != tx.getInput(0).vout)) {
+                    throw DigiByteTransaction::exception("Wallet changed the transaction input order while funding");
+                }
+            }
+
             //broadcast
             Json::Value sendParams = Json::arrayValue;
             sendParams.append(hex);

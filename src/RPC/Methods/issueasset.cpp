@@ -4,6 +4,7 @@
 
 #include "AppMain.h"
 #include "AssetWallet.h"
+#include "DigiAssetConstants.h"
 #include "DigiByteDomain.h"
 #include "DigiByteTransaction.h"
 #include "IPFS.h"
@@ -44,7 +45,25 @@ namespace RPC {
         *                                    integer - a single pool index(see getpsp)
         *                                    array of integers - pay in to several pools
         *
-        * Note: rule encoding(royalties, approval lists, vote, expiry, etc) is not supported yet.
+        *   "rules"(object optional) - restrictions encoded permanently with the asset(locked
+        *            assets) or changeable later(unlocked assets issued with "changeable":true):
+        *      "changeable"(bool default false) - rules may be rewritten by a later issuance.
+        *                   Requires "locked":false.  Can not be combined with voting/expiry
+        *      "approval": {"required":weight,"approvers":{address:weight,..}} - transfers must
+        *                   be approved by signers totalling the required weight
+        *      "royalty": {"units":"USD"(or standard rate index, optional),
+        *                  "addresses":{address:amount,..}} - every transfer must pay these
+        *                   royalties.  Amounts are DGB sats, or units*100000000 when units set
+        *      "kyc"(bool) - true means only KYC verified addresses may hold the asset
+        *      "geofence": {"allowed":["CAN",..]} or {"denied":[..]} - country restrictions
+        *                   (ISO 3166-1 alpha-3, implies KYC)
+        *      "voting": {"options":["label",..] or [{"address":..,"label":..},..],
+        *                 "restricted":bool} - vote asset.  Label-only options use the standard
+        *                   vote addresses(tallied automatically).  restricted:true means the
+        *                   asset may ONLY be sent to vote addresses
+        *      "expiry"(integer) - block height(<1577836800000) or ms epoch time after which
+        *                   the asset can no longer be transferred.  With voting = vote cutoff
+        *      "deflation"(integer) - base units that must be burned with every transfer
         *
         * @return object:
         *   "txid"(string) - txid of the issuance transaction
@@ -100,9 +119,164 @@ namespace RPC {
                 throw DigiByteException(RPC_INVALID_PARAMS, e.what());
             }
 
-            //rules are not supported yet - fail loudly instead of silently ignoring them
+            //parse the rules(same shape getassetdata returns them in)
+            DigiAssetRules rules;
+            Json::Value votesForMetadata = Json::nullValue; //vote labels that must be published in the metadata
             if (config.isMember("rules")) {
-                throw DigiByteException(RPC_INVALID_PARAMS, "rule encoding is not supported yet");
+                if (!config["rules"].isObject()) throw DigiByteException(RPC_INVALID_PARAMS, "rules must be an object");
+                const Json::Value& rulesJson = config["rules"];
+
+                //reject unknown keys so typos fail loudly instead of issuing a permanent asset without the intended rule
+                for (const std::string& key: rulesJson.getMemberNames()) {
+                    if ((key != "changeable") && (key != "approval") && (key != "royalty") &&
+                        (key != "geofence") && (key != "kyc") && (key != "voting") &&
+                        (key != "expiry") && (key != "deflation")) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "unknown rule \"" + key + "\" - valid rules are changeable, approval, royalty, geofence, kyc, voting, expiry, deflation");
+                    }
+                }
+
+                //changeable(rewritable rules) - only possible on unlocked assets
+                if (rulesJson.isMember("changeable")) {
+                    if (!rulesJson["changeable"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "rules.changeable must be a bool");
+                    if (rulesJson["changeable"].asBool()) {
+                        if (locked) throw DigiByteException(RPC_INVALID_PARAMS, "changeable rules require \"locked\":false");
+                        rules.setRewritable(true);
+                    }
+                }
+
+                //approval(signers that must approve every transfer)
+                if (rulesJson.isMember("approval")) {
+                    const Json::Value& approval = rulesJson["approval"];
+                    if (!approval.isObject() || !approval.isMember("required") || !approval["required"].isUInt64() ||
+                        !approval.isMember("approvers") || !approval["approvers"].isObject() || approval["approvers"].empty()) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.approval needs {\"required\":weight,\"approvers\":{address:weight,...}}");
+                    }
+                    std::vector<Signer> signers;
+                    for (const std::string& address: approval["approvers"].getMemberNames()) {
+                        if (!approval["approvers"][address].isUInt64() || (approval["approvers"][address].asUInt64() == 0)) {
+                            throw DigiByteException(RPC_INVALID_PARAMS, "approver weights must be positive integers");
+                        }
+                        signers.push_back(Signer{address, approval["approvers"][address].asUInt64()});
+                    }
+                    rules.setRequireSigners(approval["required"].asUInt64(), signers);
+                }
+
+                //royalty(amounts are in DGB sats, or in units*100000000 when units are given)
+                if (rulesJson.isMember("royalty")) {
+                    const Json::Value& royalty = rulesJson["royalty"];
+                    if (!royalty.isObject() || !royalty.isMember("addresses") || !royalty["addresses"].isObject() ||
+                        royalty["addresses"].empty()) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.royalty needs {\"addresses\":{address:amount,...}} and optional \"units\"");
+                    }
+                    ExchangeRate rate{};
+                    if (royalty.isMember("units")) {
+                        const Json::Value& units = royalty["units"];
+                        bool found = false;
+                        for (size_t i = 0; i < DigiAssetConstants::standardExchangeRatesCount; i++) {
+                            if ((units.isString() && (DigiAssetConstants::standardExchangeRates[i].name == units.asString())) ||
+                                (units.isUInt() && (units.asUInt() == i))) {
+                                rate = DigiAssetConstants::standardExchangeRates[i];
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) throw DigiByteException(RPC_INVALID_PARAMS, "rules.royalty.units must be a standard currency code(e.g. \"USD\") or standard exchange rate index");
+                    }
+                    std::vector<Royalty> royalties;
+                    for (const std::string& address: royalty["addresses"].getMemberNames()) {
+                        if (!royalty["addresses"][address].isUInt64() || (royalty["addresses"][address].asUInt64() == 0)) {
+                            throw DigiByteException(RPC_INVALID_PARAMS, "royalty amounts must be positive integers(sats, or units*100000000 when units set)");
+                        }
+                        royalties.push_back(Royalty{address, royalty["addresses"][address].asUInt64()});
+                    }
+                    rules.setRoyalties(royalties, rate);
+                }
+
+                //kyc / geofence
+                if (rulesJson.isMember("kyc")) {
+                    if (!rulesJson["kyc"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "rules.kyc must be a bool");
+                    if (rulesJson["kyc"].asBool()) rules.setRequireKYC(); //any KYCd country
+                }
+                if (rulesJson.isMember("geofence")) {
+                    const Json::Value& geofence = rulesJson["geofence"];
+                    bool allowed = geofence.isMember("allowed");
+                    bool denied = geofence.isMember("denied");
+                    if (!geofence.isObject() || (allowed == denied)) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.geofence needs exactly one of \"allowed\" or \"denied\" as an array of ISO 3166-1 alpha-3 country codes");
+                    }
+                    const Json::Value& list = allowed ? geofence["allowed"] : geofence["denied"];
+                    if (!list.isArray()) throw DigiByteException(RPC_INVALID_PARAMS, "geofence country list must be an array");
+                    std::vector<std::string> countries;
+                    for (const Json::Value& country: list) {
+                        if (!country.isString() || (country.asString().length() != 3)) {
+                            throw DigiByteException(RPC_INVALID_PARAMS, "country codes must be ISO 3166-1 alpha-3(3 letters)");
+                        }
+                        countries.push_back(country.asString());
+                    }
+                    if (countries.empty()) {
+                        if (allowed) throw DigiByteException(RPC_INVALID_PARAMS, "geofence.allowed can not be empty(nobody could hold the asset)");
+                        rules.setRequireKYC(); //empty deny list = KYC required, any country
+                    } else {
+                        rules.setRequireKYC(countries, denied);
+                    }
+                }
+
+                //expiry(block height if below 1577836800000, otherwise ms since epoch)
+                uint64_t expiry = DigiAssetRules::EXPIRE_NEVER;
+                if (rulesJson.isMember("expiry")) {
+                    if (!rulesJson["expiry"].isUInt64() || (rulesJson["expiry"].asUInt64() == 0) ||
+                        (rulesJson["expiry"].asUInt64() > (uint64_t) 18014398509481983)) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.expiry must be a block height or a ms epoch time");
+                    }
+                    expiry = rulesJson["expiry"].asUInt64();
+                }
+
+                //voting(labels get published in the metadata, addresses on chain)
+                if (rulesJson.isMember("voting")) {
+                    const Json::Value& voting = rulesJson["voting"];
+                    if (!voting.isObject() || !voting.isMember("options") || !voting["options"].isArray() ||
+                        voting["options"].empty() || (voting["options"].size() > 127)) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.voting needs {\"options\":[...1 to 127 entries...]} of label strings(standard vote addresses) or {\"address\":..,\"label\":..} objects");
+                    }
+                    bool movable = true;
+                    if (voting.isMember("restricted")) {
+                        if (!voting["restricted"].isBool()) throw DigiByteException(RPC_INVALID_PARAMS, "voting.restricted must be a bool");
+                        movable = !voting["restricted"].asBool();
+                    }
+                    bool stringForm = voting["options"][0].isString();
+                    if (stringForm && (voting["options"].size() > DigiAssetConstants::standardVoteCount)) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "at most " + std::to_string(DigiAssetConstants::standardVoteCount) + " label-only vote options(use {address,label} objects for more)");
+                    }
+                    std::vector<VoteOption> options;
+                    votesForMetadata = Json::arrayValue;
+                    for (Json::ArrayIndex i = 0; i < voting["options"].size(); i++) {
+                        const Json::Value& option = voting["options"][i];
+                        if (stringForm) {
+                            if (!option.isString()) throw DigiByteException(RPC_INVALID_PARAMS, "vote options must be all strings or all objects");
+                            options.push_back(VoteOption{DigiAssetConstants::standardVoteAddresses[i], option.asString()});
+                        } else {
+                            if (!option.isObject() || !option.isMember("address") || !option["address"].isString() ||
+                                !option.isMember("label") || !option["label"].isString()) {
+                                throw DigiByteException(RPC_INVALID_PARAMS, "object vote options need address and label strings");
+                            }
+                            options.push_back(VoteOption{option["address"].asString(), option["label"].asString()});
+                        }
+                        votesForMetadata.append(option);
+                    }
+                    rules.setVote(options, expiry, movable);
+                } else if (expiry != DigiAssetRules::EXPIRE_NEVER) {
+                    rules.setExpiry(expiry);
+                }
+
+                //deflation(assets that must be burned per transfer, in base units)
+                if (rulesJson.isMember("deflation")) {
+                    if (!rulesJson["deflation"].isUInt64() || (rulesJson["deflation"].asUInt64() == 0)) {
+                        throw DigiByteException(RPC_INVALID_PARAMS, "rules.deflation must be a positive integer(base units burned per transfer)");
+                    }
+                    rules.setDeflationary(rulesJson["deflation"].asUInt64());
+                }
+
+                if (rules.empty()) throw DigiByteException(RPC_INVALID_PARAMS, "rules object contains no rules");
             }
 
             //permanent storage pool participation(default: the public pool.  Unstored assets aren't
@@ -148,6 +322,9 @@ namespace RPC {
             if (config.isMember("metadata")) {
                 if (!config["metadata"].isObject()) throw DigiByteException(RPC_INVALID_PARAMS, "metadata must be an object");
                 metadata = config["metadata"];
+                if (!votesForMetadata.isNull() && !metadata.isMember("votes")) {
+                    throw DigiByteException(RPC_INVALID_PARAMS, "voting rules require a \"votes\" array in the supplied metadata(matching rules.voting.options)");
+                }
             } else {
                 Json::Value data = Json::objectValue;
                 data["assetName"] = config["name"];
@@ -161,6 +338,9 @@ namespace RPC {
                 if (config.isMember("userData")) data["userData"] = config["userData"];
                 metadata = Json::objectValue;
                 metadata["data"] = data;
+                //vote labels live in the metadata(root level) and are validated against the
+                //on-chain addresses by DigiAssetRules::getVoteOptions
+                if (!votesForMetadata.isNull()) metadata["votes"] = votesForMetadata;
             }
 
             //publish the metadata to IPFS
@@ -175,7 +355,7 @@ namespace RPC {
             //build the issuance transaction
             DigiAsset asset;
             try {
-                asset = DigiAsset(cid, amount, decimals, locked, aggregation);
+                asset = DigiAsset(cid, amount, decimals, locked, aggregation, rules);
             } catch (const std::out_of_range& e) {
                 throw DigiByteException(RPC_INVALID_PARAMS, e.what());
             }
@@ -183,6 +363,11 @@ namespace RPC {
             tx.setIssuance(asset);
             DigiAsset newAssets = asset; //full amount to the recipient
             tx.addDigiAssetOutput(toAddress, std::vector<DigiAsset>{newAssets});
+            try {
+                tx.addRuleOutputs(); //signer/royalty/custom-vote outputs(no-op without rules)
+            } catch (const DigiAssetRules::exception& e) {
+                throw DigiByteException(RPC_INVALID_PARAMS, e.what());
+            }
 
             //add the permanent storage pool payments(must be the last change to the tx before funding)
             for (unsigned int poolIndex: pspPools) {

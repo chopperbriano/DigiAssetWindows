@@ -434,6 +434,76 @@ Notes: the branch already contains cherry-pick `d858717` (= `47568e1` from `fast
 Windows/CI) — if `fast` merges later git will de-duplicate. Squash-merge vs merge
 commit is the maintainer's call; the 13+1 commits are individually coherent.
 
+## Session 5 — 2026-07-19: feature list (user approved all 9, in order; test every 3)
+
+Branch **`asset_features`** (created off last_tasks AFTER committing session 4 as 5d308af).
+The 9 features in priority order: 1 rules encoding, 2 reissue+burn RPCs, 3 sendmanyassets,
+4 issuance cost preview, 5 GUI asset icons, 6 GUI history tab, 7 e.what() in RPC errors,
+8 async/batched isPinned, 9 event push(ZMQ/websocket).  Checkpoint = test after every 3.
+
+### Items 1-3 DONE and live-verified (checkpoint 1 passed)
+
+**1. Rules encoding** (the big one):
+- `DigiAssetRules::encode(BitIO&, firstRuleOutput)` + `getRequiredOutputs()` — exact
+  inverse of the chain-decode ctor.  Signer outputs carry address only(weight travels in
+  bitstream, per-output form); royalty outputs' VALUE is the price(validated ≥ dust);
+  custom vote addresses get dust outputs; standard vote list + standard exchange rates
+  encode inline with no outputs.  Custom exchange-rate addresses REJECTED(protocol wants
+  600+index sat outputs = unrelayable dust on v8.22).  Ends 0xF nibble + 1-padding.
+- `DigiByteTransaction::addRuleOutputs()` (call after asset outputs, before PSP fee) +
+  issuance op codes 3(changeable)/4(locked rules) in encodeAssetOpReturn.  Rules require
+  metadata(op 3/4 always carry a hash).
+- `issueasset` "rules" param — same JSON shape getassetdata returns: changeable, approval
+  {required,approvers}, royalty{units,addresses}, kyc, geofence{allowed|denied}, voting
+  {options,restricted}, expiry, deflation.  Unknown keys rejected loudly.  Vote labels
+  auto-published in metadata["votes"] (root level, validated by getVoteOptions).
+- Found+fixed pre-existing bug: `getVoteOptions()` condition was INVERTED(downloaded the
+  EMPTY cid after processing, skipped fetch when one was pending) — same bug class as
+  session-2 localExists.
+- `setVote()` gained a `movable` param(restricted votes were unencodable before).
+- 19 round-trip unit tests(tests/DigiAssetRulesEncodeTest.cpp) — encode → REAL chain
+  decoder → operator== compare.  All pass.
+- LIVE: "Royalty Rule Coin" La9Gkic3uWxSSm6n9fHJVQgAmPsJL63JkYY8UD (tx a233be9d…, asset
+  index 5356): royalty 0.5 DGB + expiry 30M + deflation 1.  Chain analyzer decoded ALL
+  rules back perfectly in getassetdata, psp:[1] recognised.
+
+**2. reissueasset + burnasset RPCs:**
+- `DigiByteTransaction::addAssetBurn()` — burn = transfer instruction to output 31
+  (matches decoder); output 31 reserved in burn txs; unbalanced still throws.  3 new
+  round-trip tests in DigiByteTransactionBuilderTest(friend-listed in the header).
+- `fundSignSend` now verifies vin[0] keeps its place after funding(input order matters
+  for instructions; reissuance derives assetId from vin[0]).
+- reissueasset: unlocked assets only; requires a DGB-only UTXO ON the issuer address
+  (assetId = hash of first input's script; error tells user to send DGB there if none);
+  reuses cid/decimals/aggregation; encodes NO rules so chain keeps old ones
+  (handleRulesConflict).  LIVE: funded issuer address, reissued 250 of Unlocked Coin
+  Ua4zrz… (tx ce01e812…) — SAME assetId derived, balance 500→750 ✓.
+- burnasset: mirror of sendasset.  LIVE: burned 100 of Valid Test Coin(tx ce90c2ed…),
+  balance 1000→900 ✓.
+- GOTCHA: new RPC .cpp files need a CMAKE RECONFIGURE(cmake -B build -S .) — 
+  MethodList.cpp is generated at configure time; build alone → "Method not found".
+
+**3. sendmanyassets RPC:** array of {address,asset,amount}(≤31), per-asset input
+  selection with UTXO dedupe, one change output.  GOTCHA found live: the wallet's
+  createrawtransaction REJECTS DUPLICATE ADDRESSES across outputs → sends are grouped
+  by recipient into one multi-asset output each.  LIVE: 3 entries/2 assets/2 recipients
+  in one tx(87884bc4…), dispersed asset conserved 300 ✓.
+
+All .html docs written + linked in web/index.html.  Balances after checkpoint 1:
+5345:100.00, 5347:900, 5348:500000001, 5349:750, 5350:300, 5351:200, 5352:50, 5353:25,
+5354:10, 5355:77, 5356:100, DGB ~4046.39.
+
+### Items 4-9 remaining (plan)
+4. Cost preview: issueasset {"dryrun":true} → {pspFee, estimated tx cost} without
+   broadcasting(compute after building tx, before fundSignSend; getCost per pool).
+   GUI confirm dialog should show the real DGB amounts.
+5. GUI BalancesTab icons: metadata data.urls entry name=="icon" → fetch via local IPFS
+   gateway(http://localhost:5001 api /cat), QPixmap in the table.
+6. GUI history tab: listaddresshistory RPC per wallet address(or listtransactions merge).
+7. Server.cpp catch-all: include e.what() in the RPC error message(not just log).
+8. Batch/cache IPFS::isPinned(analyzer stall finding, session 4 perf note).
+9. Event push: likely a lightweight websocket broadcasting new-block/sync/balance events.
+
 ### Remaining work (next session)
 1. **NOT COMMITTED:** all of session 4's changes are uncommitted on `last_tasks` —
    commit when the user confirms. Files touched: DigiAssetConstants.h (dust 600→10000),

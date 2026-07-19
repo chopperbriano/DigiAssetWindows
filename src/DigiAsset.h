@@ -76,7 +76,7 @@ public:
 
     //constructor for building a brand new asset that is not yet on chain(see DigiByteTransaction::setIssuance)
     DigiAsset(const std::string& cid, uint64_t count, unsigned char divisibility, bool locked,
-              unsigned char aggregation);
+              unsigned char aggregation, const DigiAssetRules& rules = DigiAssetRules());
 
     //helper functions for preprocessing asset
     static void decodeAssetTxHeader(const getrawtransaction_t& txData, unsigned char& version, unsigned char& opcode,

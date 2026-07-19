@@ -267,3 +267,81 @@ TEST(IPFSHelper, cidToSha256Errors) {
     EXPECT_THROW(IPFS::cidToSha256(""), IPFS::exceptionInvalidCID);
     EXPECT_THROW(IPFS::cidToSha256("b1234"), IPFS::exceptionInvalidCID); //too short
 }
+
+TEST(DigiByteTransactionBuilder, burnRoundTrip) {
+    //100 units on one input: burn 40, change 60.  Burn instructions target output 31
+    DigiAsset asset = makeTestAsset(5, 100);
+    AssetUTXO input = makeInput("aa11", 0, {asset});
+
+    DigiByteTransaction tx;
+    tx.addInput(input);
+    DigiAsset changePart = asset;
+    changePart.setCount(60);
+    tx.addDigiAssetOutput("dgb1qchange", {changePart});
+    DigiAsset burnPart = asset;
+    burnPart.setCount(40);
+    tx.addAssetBurn({burnPart});
+
+    string hex = tx.encodeAssetOpReturn();
+    EXPECT_EQ(hex.substr(0, 8), "44410325"); //DA v3 burn op code
+
+    //replay through the decoder
+    DigiByteTransaction rx;
+    rx._height = 20000000;
+    rx._assetTransactionVersion = 3;
+    rx._inputs.push_back(input);
+    AssetUTXO out0;
+    out0.address = "dgb1qchange";
+    out0.digibyte = 600;
+    rx._outputs = {out0};
+
+    BitIO stream = BitIO::makeHexString(hex);
+    stream.movePositionTo(32);
+    rx.decodeAssetTransfer(stream, rx._inputs, 3 /*DIGIASSET_BURN*/);
+
+    //change kept 60, the other 40 went nowhere(burned)
+    ASSERT_EQ(rx._outputs[0].assets.size(), (size_t) 1);
+    EXPECT_EQ(rx._outputs[0].assets[0].getCount(), (uint64_t) 60);
+}
+
+TEST(DigiByteTransactionBuilder, burnAllRoundTrip) {
+    //burning the full input needs no asset outputs at all
+    DigiAsset asset = makeTestAsset(5, 25);
+    AssetUTXO input = makeInput("aa11", 0, {asset});
+
+    DigiByteTransaction tx;
+    tx.addInput(input);
+    DigiAsset burnPart = asset;
+    burnPart.setCount(25);
+    tx.addAssetBurn({burnPart});
+
+    string hex = tx.encodeAssetOpReturn();
+    EXPECT_EQ(hex.substr(0, 8), "44410325");
+
+    DigiByteTransaction rx;
+    rx._height = 20000000;
+    rx._assetTransactionVersion = 3;
+    rx._inputs.push_back(input);
+    AssetUTXO out0;
+    out0.address = "dgb1qanything";
+    out0.digibyte = 600;
+    rx._outputs = {out0};
+
+    BitIO stream = BitIO::makeHexString(hex);
+    stream.movePositionTo(32);
+    rx.decodeAssetTransfer(stream, rx._inputs, 3 /*DIGIASSET_BURN*/);
+    EXPECT_TRUE(rx._outputs[0].assets.empty()); //everything burned
+}
+
+TEST(DigiByteTransactionBuilder, burnUnbalancedThrows) {
+    //burn + change that don't cover the inputs must be rejected
+    DigiAsset asset = makeTestAsset(5, 100);
+    AssetUTXO input = makeInput("aa11", 0, {asset});
+
+    DigiByteTransaction tx;
+    tx.addInput(input);
+    DigiAsset burnPart = asset;
+    burnPart.setCount(40); //60 units unaccounted for
+    tx.addAssetBurn({burnPart});
+    EXPECT_THROW(tx.encodeAssetOpReturn(), DigiByteTransaction::exception);
+}
