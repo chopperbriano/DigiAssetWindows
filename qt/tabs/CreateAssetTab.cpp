@@ -59,6 +59,25 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _descriptionEdit->setMaximumHeight(80);
     form->addRow("Description:", _descriptionEdit);
 
+    //royalty rule: every transfer of the asset must pay this address.  More rule types
+    //exist on the RPC side(rules param of issueasset) - the GUI covers the common one
+    _royaltyCheck = new QCheckBox("Every transfer must pay a royalty");
+    _royaltyAddressEdit = new QLineEdit();
+    _royaltyAddressEdit->setPlaceholderText("Address royalties are paid to");
+    _royaltyAddressEdit->setEnabled(false);
+    _royaltyAmountEdit = new QLineEdit();
+    _royaltyAmountEdit->setPlaceholderText("DGB per transfer(min 0.0001)");
+    _royaltyAmountEdit->setEnabled(false);
+    connect(_royaltyCheck, &QCheckBox::toggled, this, [this](bool on) {
+        _royaltyAddressEdit->setEnabled(on);
+        _royaltyAmountEdit->setEnabled(on);
+    });
+    QVBoxLayout *royaltyLayout = new QVBoxLayout();
+    royaltyLayout->addWidget(_royaltyCheck);
+    royaltyLayout->addWidget(_royaltyAddressEdit);
+    royaltyLayout->addWidget(_royaltyAmountEdit);
+    form->addRow("Royalty:", royaltyLayout);
+
     _toAddressEdit = new QLineEdit();
     _toAddressEdit->setPlaceholderText("Optional - defaults to a new wallet address");
     form->addRow("Send To:", _toAddressEdit);
@@ -107,6 +126,24 @@ void CreateAssetTab::createAsset() {
         QString toAddress = _toAddressEdit->text().trimmed();
         if (!toAddress.isEmpty()) config["toAddress"] = toAddress.toStdString();
         config["psp"] = pspArray;
+
+        //royalty rule
+        if (_royaltyCheck->isChecked()) {
+            QString royaltyAddress = _royaltyAddressEdit->text().trimmed();
+            bool amountOk = false;
+            double royaltyDgb = _royaltyAmountEdit->text().trimmed().toDouble(&amountOk);
+            if (royaltyAddress.isEmpty() || !amountOk || (royaltyDgb < 0.0001)) {
+                _statusLabel->setText("Royalty needs an address and a DGB amount of at least 0.0001.");
+                return;
+            }
+            Json::Value addresses = Json::objectValue;
+            addresses[royaltyAddress.toStdString()] =
+                    static_cast<Json::UInt64>(royaltyDgb * 100000000.0 + 0.5); //DGB -> sats
+            Json::Value rules = Json::objectValue;
+            rules["royalty"] = Json::objectValue;
+            rules["royalty"]["addresses"] = addresses;
+            config["rules"] = rules;
+        }
 
         //price the issuance first so the user confirms real numbers
         QString costText = "Costs could not be estimated.";

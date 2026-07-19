@@ -13,7 +13,7 @@ Building this project produces up to 4 binaries (all placed in `bin/`):
 | `digiasset_core` | The main daemon.  Syncs against DigiByte Core and serves the JSON-RPC api (default port 14024) |
 | `digiasset_core-cli` | Command line interface to the daemon.  Any RPC method (including all DigiByte wallet methods) can be called: `./digiasset_core-cli getwalletbalances` |
 | `digiasset_core-web` | Documentation web server (default port 8090) |
-| `digiasset_core-qt` | Graphical interface (sync status, balances, sending assets, creating assets) |
+| `digiasset_core-qt` | Graphical interface (sync status, balances, sending assets, creating assets with optional royalty rules, burning/reissuing, wallet history) |
 
 ## Table of Contents
 1. [Requirements](#requirements)
@@ -24,8 +24,9 @@ Building this project produces up to 4 binaries (all placed in `bin/`):
 6. [Set DigiAsset Core to Run at Boot](#set-digiasset-core-to-run-at-boot)
 7. [Upgrading DigiAsset Core](#upgrading-digiasset-core)
 8. [Documentation](#documentation)
-9. [Other Notes](#other-notes)
-10. [Special Thanks](#special-thanks)
+9. [Event Stream](#event-stream)
+10. [Other Notes](#other-notes)
+11. [Special Thanks](#special-thanks)
 
 ## Requirements
 
@@ -389,9 +390,36 @@ To access documentation run the digiasset_core-web application then go to http:/
 
 Highlights:
 - Every RPC method has its own documentation page, including the DigiAsset specific
-  methods (`issueasset`, `sendasset`, `getwalletbalances`, `getassetdata`, `listassets`, ...).
+  methods (`issueasset`, `reissueasset`, `sendasset`, `sendmanyassets`, `burnasset`,
+  `getwalletbalances`, `getassetdata`, `listassets`, ...).
+- `issueasset` supports the full DigiAsset v3 rule set (royalties, KYC, geofencing,
+  voting, expiry, deflation, signer approval) via its `rules` parameter.
+- `issueasset`, `reissueasset`, `sendasset` and `burnasset` all take a `dryrun` option
+  that builds the transaction and returns a full cost breakdown (outputs, storage pool
+  fee, estimated miner fee) without broadcasting anything.
 - Any method the daemon doesn't recognize is transparently forwarded to the DigiByte Core
   wallet, so the standard DigiByte/Bitcoin RPC api is available through the same port too.
+
+## Event Stream
+
+The daemon pushes events to any TCP client as newline delimited JSON (default port
+14025, config keys `eventport`/`eventbind`, see `example.cfg`).  Try it with
+`nc 127.0.0.1 14025`:
+
+```
+{"event":"newBlock","height":23843354,"blocksBehind":1}
+{"event":"assetTransfer","assetIds":["La6xk..."],"txid":"d44d...","height":23843354}
+{"event":"balanceChanged","addresses":["dgb1q..."],"txid":"d44d...","height":23843354}
+```
+
+Event types: `newBlock` (near chain tip only), `assetIssued`, `assetTransfer`,
+`assetBurn` and `balanceChanged`.  Writes never block the daemon — clients that fall
+behind are disconnected, so treat the stream as a wake-up signal and re-query the RPC
+api for authoritative state.  The stream has no authentication and therefore only
+listens on localhost unless you explicitly set `eventbind`.
+
+The daemon shuts down cleanly on `ctrl+c`, SIGTERM or the `shutdown` RPC method
+(database flushed and closed before exit).
 
 ## Other Notes
 

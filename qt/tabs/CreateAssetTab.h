@@ -35,6 +35,9 @@ private:
     QCheckBox * _lockedCheck;
     QComboBox * _aggregationCombo;
     QTextEdit * _descriptionEdit;
+    QCheckBox * _royaltyCheck;
+    QLineEdit * _royaltyAddressEdit;
+    QLineEdit * _royaltyAmountEdit;
     QLineEdit * _toAddressEdit;
     QPushButton * _createButton;
     QLabel * _statusLabel;

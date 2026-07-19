@@ -747,7 +747,38 @@ unfunded-issuer error. NEW TEST FILES tests/RPC_Methods/{burnasset,reissueasset}
 (param validation incl. dryrun type; these had NO rpc-level tests before) + dryrun test
 in sendasset.cpp — all RPCMethodsTest fixture, need rpcTest.db to actually run.
 
-### C. Backlog (approved 2026-07-19; items 1-4 above done, 5-10 below)
+### Items 8-11 (backlog second half)
+
+**8. Royalty rule in GUI CreateAssetTab — DONE.** Checkbox + address + DGB amount
+(min 0.0001 = dust) → issueasset rules.royalty.addresses{addr: sats}. Fields disabled
+until the checkbox is on. Dryrun-priced confirm dialog unchanged (it prices rules too).
+
+**9. Burn/Reissue GUI + History upgrades — DONE.** New qt/tabs/ManageAssetTab
+("Burn / Reissue" tab): shared wallet-asset picker, Burn group and Reissue group, both
+confirm with a dryrun-priced dialog (reissue dryrun also surfaces locked-asset/
+unfunded-issuer errors BEFORE the confirm). HistoryTab: text filter box (hides
+non-matching rows, any column), Address column added, Newer/Older paging via
+listtransactions skip (auto-refresh only on page 1 so it doesn't yank the user around).
+
+**10. README refresh — DONE.** New "Event Stream" section (event types, nc example,
+localhost-only note, clean shutdown note), documented dryrun + full rules support +
+all new RPC methods, GUI binary description updated.
+
+**11. Icon test — asset issued, GUI restarted on new build.** "Icon Test Coin"
+La3CH7TYQcykmeqoFzouXUj2VYXPtCiAskjvaG (txid d1a88695…, 21 units, decimals 0) carries
+data.urls [{name:"icon",url:"ipfs://QmPRw44RfCAkeyx1p47m2Df9H7bC4nNRTy1uj5kQX5WtoQ",
+mimeType:"image/png"}] — a real 369-byte 64x64 PNG (blue rim, orange face, white bar),
+generated + pinned on the local kubo. Screen is LOCKED so no screenshot; the icon
+pipeline verified programmatically after confirmation instead, step by step exactly as
+BalancesTab does it: (1) getassetdata returns the urls entry with name "icon" and the
+ipfs:// url ✓ (2) POST <ipfspath>cat?arg=<cid> returns bytes IDENTICAL to the original
+PNG ✓ (3) the fetched file decodes as a valid 64x64 PNG ✓ (QPixmap::loadFromData
+loads any valid PNG). GUI (new build, 6 tabs incl. Burn/Reissue) left running against
+the live daemon from the session-4 cli_test scratch dir with Icon Test Coin in the
+wallet — the icon should be VISIBLE in Balances when the screen gets unlocked
+(config quirk: GUI must run from a dir whose config.cfg has rpcbind=127.0.0.1).
+
+### C. Backlog (approved 2026-07-19; ALL 10 ITEMS DONE — see session 7 above)
 
 Pre-PR candidates (recommended, small):
 1. Graceful shutdown: SIGINT/SIGTERM handler in src/main.cpp replacing the
