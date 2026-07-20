@@ -133,13 +133,23 @@ public:
 
         /* Remove JSON prefix */
         std::string strJson = removePrefix(in, "INTERNAL_ERROR: : ");
-        std::string ret = "Error during parsing of >>" + strJson + "<<";
+
+        /* Default: pass the message through unchanged. RPC method handlers throw
+         * DigiByteException with a PLAIN human message (e.g. "Domain Burned"),
+         * which is not a JSON error payload. Wrapping such a message in
+         * "Error during parsing of >>...<<" — and again when the CLI re-parses
+         * the response — produced the confusing doubly-nested message. Only emit
+         * that diagnostic when the input actually looks like a JSON payload that
+         * failed to parse. */
+        std::string ret = strJson;
 
         /* Parse error message */
         bool parsingSuccessful = reader.parse(strJson.c_str(), root);
-        if (parsingSuccessful) {
+        if (parsingSuccessful && root.isMember("error")) {
             ret = removePrefix(root["error"]["message"].asString(), "Error: ");
-            ret[0] = toupper(ret[0]);
+            if (!ret.empty()) ret[0] = toupper(ret[0]);
+        } else if (!strJson.empty() && strJson[0] == '{') {
+            ret = "Error during parsing of >>" + strJson + "<<";
         }
 
         return ret;
