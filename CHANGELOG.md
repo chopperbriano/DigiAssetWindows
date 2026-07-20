@@ -20,7 +20,21 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.102 (current) — accurate sync auto-recovery diagnostics
+## 0.3.3-win.103 (current) — clean RPC error messages (no double-wrapping)
+
+`DigiByteException::parseMessage()` wrapped every thrown message in
+`Error during parsing of >>…<<`, even plain human strings that RPC handlers
+throw (e.g. `Domain Burned`). The CLI then re-parsed the response and wrapped it
+again, producing the nested
+`Error during parsing of >>Error during parsing of >>Domain Burned<<<<`.
+`parseMessage()` now passes a non-JSON message through unchanged and only emits
+the "Error during parsing of" diagnostic when the input actually looks like a
+JSON payload (`{…`) that failed to parse. Also guards a latent `ret[0]` crash on
+an empty message. Cleans up **all** RPC error messages, not just the domain one.
+
+---
+
+## 0.3.3-win.102 — accurate sync auto-recovery diagnostics
 
 The auto-recovery log line could report **"block 0 … Cause: unknown error"**
 when the exception was thrown from the recovery preamble (the
