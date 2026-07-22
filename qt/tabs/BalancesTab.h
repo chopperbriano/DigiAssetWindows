@@ -29,7 +29,9 @@ private slots:
 
 private:
     void applyIcon(uint64_t assetIndex);
+    void setDgbIcon();
 
+    QLabel * _dgbIconLabel;
     QLabel * _digibyteLabel;
     QLabel * _statusLabel;
     QPushButton * _refreshButton;

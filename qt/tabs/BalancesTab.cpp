@@ -1,8 +1,6 @@
 #include "BalancesTab.h"
-#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QPixmap>
 #include <QVBoxLayout>
 
 BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
@@ -13,15 +11,12 @@ BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
 
     QVBoxLayout *layout = new QVBoxLayout(this);
 
-    //DigiByte balance + refresh button on one row, with the DigiByte logo alongside it
+    //DigiByte balance + refresh button on one row, with DigiByte's own icon alongside it.
+    //DigiByte is asset index 1 in the metadata(see Database.cpp), so its icon is fetched
+    //through the same provider as any other asset.
     QHBoxLayout *topRow = new QHBoxLayout();
-    QLabel *dgbIcon = new QLabel();
-    QPixmap logo(QCoreApplication::applicationDirPath() + "/images/app_icon.png");
-    if (!logo.isNull()) {
-        int s = _icons->iconSize();
-        dgbIcon->setPixmap(logo.scaled(s, s, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    }
-    topRow->addWidget(dgbIcon);
+    _dgbIconLabel = new QLabel();
+    topRow->addWidget(_dgbIconLabel);
     _digibyteLabel = new QLabel("DigiByte: Loading...");
     topRow->addWidget(_digibyteLabel);
     topRow->addStretch();
@@ -46,11 +41,24 @@ BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     connect(_timer, &QTimer::timeout, this, &BalancesTab::updateBalances);
     _timer->start(30000); //update every 30 seconds
 
+    setDgbIcon(); //request DigiByte's icon(index 1); fills in when its download finishes
     updateBalances();
+}
+
+///shows DigiByte's icon(asset index 1) next to the balance once the download completes
+void BalancesTab::setDgbIcon() {
+    QIcon icon = _icons->icon(1);
+    if (icon.isNull()) return;
+    int s = _icons->iconSize();
+    _dgbIconLabel->setPixmap(icon.pixmap(s, s));
 }
 
 ///sets the cached icon on whichever row currently shows the asset
 void BalancesTab::applyIcon(uint64_t assetIndex) {
+    if (assetIndex == 1) { //DigiByte native coin - shown next to the balance, not in the table
+        setDgbIcon();
+        return;
+    }
     QIcon icon = _icons->icon(assetIndex);
     if (icon.isNull()) return;
     for (int row = 0; row < _assetTable->rowCount(); row++) {
