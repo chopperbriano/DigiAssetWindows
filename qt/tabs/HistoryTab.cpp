@@ -3,10 +3,13 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QVBoxLayout>
+#include <cmath>
 
 HistoryTab::HistoryTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _dgbCore.setFileName("config.cfg", true);
     _dgbCore.makeConnection();
+    _icons = new AssetIconProvider(this);
+    connect(_icons, &AssetIconProvider::iconReady, this, &HistoryTab::applyIcon);
 
     QVBoxLayout *layout = new QVBoxLayout(this);
 
@@ -22,11 +25,13 @@ HistoryTab::HistoryTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     topRow->addWidget(_refreshButton);
     layout->addLayout(topRow);
 
-    _txTable = new QTableWidget(0, 6, this);
-    _txTable->setHorizontalHeaderLabels({"Time", "Type", "Amount (DGB)", "Confirmations", "Address", "Transaction ID"});
-    _txTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+    _txTable = new QTableWidget(0, COL_COUNT, this);
+    _txTable->setHorizontalHeaderLabels(
+            {"Time", "Type", "Amount (DGB)", "Asset", "Confirmations", "Address", "Transaction ID"});
+    _txTable->horizontalHeader()->setSectionResizeMode(COL_TXID, QHeaderView::Stretch);
     _txTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     _txTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    _txTable->setIconSize(QSize(_icons->iconSize(), _icons->iconSize()));
     layout->addWidget(_txTable);
 
     QHBoxLayout *pageRow = new QHBoxLayout();
@@ -68,13 +73,40 @@ void HistoryTab::updateHistory() {
         int row = 0;
         for (int i = static_cast<int>(result.size()) - 1; i >= 0; i--) {
             const Json::Value &tx = result[i];
+            std::string txid = tx["txid"].asString();
+            std::string address = tx["address"].asString();
+            QString category = QString::fromStdString(tx["category"].asString());
+
+            //decode the transaction to see if a DigiAsset moved to this row's output
+            QString assetText;
+            const std::map<std::string, AssetMove> &byAddress = txAssets(txid);
+            auto it = byAddress.find(address);
+            bool isAsset = (it != byAddress.end());
+            if (isAsset) {
+                const AssetMove &move = it->second;
+                double amount = static_cast<double>(move.count) / std::pow(10.0, move.decimals);
+                QString name = _icons->name(move.assetIndex);
+                if (name.isEmpty()) name = "asset " + QString::number(move.assetIndex);
+                assetText = name + "  " + QString::number(amount, 'f', move.decimals);
+                category = "asset " + category; //e.g. "asset receive", "asset send"
+            }
+
             QString when = QDateTime::fromSecsSinceEpoch(tx["time"].asInt64()).toString("yyyy-MM-dd hh:mm");
-            _txTable->setItem(row, 0, new QTableWidgetItem(when));
-            _txTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(tx["category"].asString())));
-            _txTable->setItem(row, 2, new QTableWidgetItem(QString::number(tx["amount"].asDouble(), 'f', 8)));
-            _txTable->setItem(row, 3, new QTableWidgetItem(QString::number(tx["confirmations"].asInt())));
-            _txTable->setItem(row, 4, new QTableWidgetItem(QString::fromStdString(tx["address"].asString())));
-            _txTable->setItem(row, 5, new QTableWidgetItem(QString::fromStdString(tx["txid"].asString())));
+            _txTable->setItem(row, COL_TIME, new QTableWidgetItem(when));
+            _txTable->setItem(row, COL_TYPE, new QTableWidgetItem(category));
+            _txTable->setItem(row, COL_DGB, new QTableWidgetItem(QString::number(tx["amount"].asDouble(), 'f', 8)));
+
+            QTableWidgetItem *assetItem = new QTableWidgetItem(assetText);
+            if (isAsset) {
+                assetItem->setData(Qt::UserRole, (qulonglong) it->second.assetIndex); //for applyIcon()
+                QIcon icon = _icons->icon(it->second.assetIndex);
+                if (!icon.isNull()) assetItem->setIcon(icon);
+            }
+            _txTable->setItem(row, COL_ASSET, assetItem);
+
+            _txTable->setItem(row, COL_CONF, new QTableWidgetItem(QString::number(tx["confirmations"].asInt())));
+            _txTable->setItem(row, COL_ADDRESS, new QTableWidgetItem(QString::fromStdString(address)));
+            _txTable->setItem(row, COL_TXID, new QTableWidgetItem(QString::fromStdString(txid)));
             row++;
         }
         //a successful fetch clears any earlier error message
@@ -104,6 +136,56 @@ void HistoryTab::applyFilter() {
             if ((item != nullptr) && item->text().contains(needle, Qt::CaseInsensitive)) match = true;
         }
         _txTable->setRowHidden(row, !match);
+    }
+}
+
+/**
+ * Decodes a transaction(getrawtransaction verbose) once and caches, keyed by receiving address,
+ * the DigiAsset that moved to each output.  Lets updateHistory() label a wallet transaction as an
+ * asset movement and show which asset and how much moved to the wallet's address.
+ */
+const std::map<std::string, HistoryTab::AssetMove> &HistoryTab::txAssets(const std::string &txid) {
+    auto cached = _txAssetCache.find(txid);
+    if (cached != _txAssetCache.end()) return cached->second;
+
+    std::map<std::string, AssetMove> byAddress;
+    try {
+        Json::Value args = Json::arrayValue;
+        args.append(txid);
+        args.append(true); //verbose - includes DigiAssets data
+        Json::Value tx = _dgbCore.sendcommand("getrawtransaction", args);
+        for (const auto &vout: tx["vout"]) {
+            if (!vout.isMember("assets") || !vout["assets"].isArray() || vout["assets"].empty()) continue;
+            const Json::Value &spk = vout["scriptPubKey"];
+            //take the first asset on the output(outputs carry a single asset in practice)
+            const Json::Value &asset = vout["assets"][0];
+            AssetMove move;
+            move.assetIndex = asset["assetIndex"].asUInt64();
+            move.count = asset["count"].asUInt64();
+            move.decimals = asset["decimals"].asUInt();
+            //index by every address on the output so it matches the listtransactions row address
+            if (spk.isMember("address")) {
+                byAddress[spk["address"].asString()] = move;
+            }
+            if (spk.isMember("addresses") && spk["addresses"].isArray()) {
+                for (const auto &a: spk["addresses"]) byAddress[a.asString()] = move;
+            }
+        }
+    } catch (const DigiByteException &) {
+        //couldn't decode(e.g. pruned) - treat as a plain DGB transaction; cache the empty result
+    }
+    return _txAssetCache.emplace(txid, std::move(byAddress)).first->second;
+}
+
+///sets the icon on the Asset cell of every row showing the asset once its download finishes
+void HistoryTab::applyIcon(quint64 assetIndex) {
+    QIcon icon = _icons->icon(assetIndex);
+    if (icon.isNull()) return;
+    for (int row = 0; row < _txTable->rowCount(); row++) {
+        QTableWidgetItem *item = _txTable->item(row, COL_ASSET);
+        if ((item != nullptr) && (item->data(Qt::UserRole).toULongLong() == assetIndex)) {
+            item->setIcon(icon);
+        }
     }
 }
 
