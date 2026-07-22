@@ -138,6 +138,14 @@ void DigiByteCore::makeConnection() {
 }
 
 /**
+ * Overrides the http timeout set from config.cfg's rpctimeout(ms)
+ */
+void DigiByteCore::setTimeout(unsigned int milliseconds) {
+    if (httpClient == nullptr) throw exceptionDigiByteCoreNotConnected();
+    httpClient->SetTimeout(milliseconds);
+}
+
+/**
  * Gets the name of the config file
  * @return
  */

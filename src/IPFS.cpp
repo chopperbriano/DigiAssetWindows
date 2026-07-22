@@ -582,7 +582,19 @@ string IPFS::addFile(const string& content, bool pinFile) const {
     if (!reader.parse(response, root) || !root.isObject() || !root.isMember("Hash")) {
         throw exception("Unexpected response from IPFS add: " + response);
     }
-    return root["Hash"].asString();
+    string cid = root["Hash"].asString();
+
+    //mark as pinned in the cache immediately - without this, isPinned(cid) for content we
+    //just added ourselves incorrectly returns false(the cache doesn't know about it until the
+    //next full pin/ls reload, which may never happen again once loaded), so every caller that
+    //checks isPinned first(eg a storage pool costing its own just-published metadata) takes the
+    //slow path: queuing a download job behind whatever the async job queue is already working
+    //through, which can be tied up for a very long time on unrelated historical content
+    if (pinFile) {
+        std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+        _pinnedCache.insert(cid);
+    }
+    return cid;
 }
 
 /**

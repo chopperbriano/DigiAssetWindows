@@ -1,5 +1,6 @@
 #include "CreateAssetTab.h"
 #include "Config.h"
+#include <QApplication>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
@@ -24,12 +25,17 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     try {
         Config config("config.cfg");
         _ipfsApi = QString::fromStdString(config.getString("ipfspath", "http://localhost:5001/api/v0/"));
+        _defaultTimeoutMs = static_cast<unsigned int>(config.getInteger("rpctimeout", 50000));
     } catch (...) {
         _ipfsApi = "http://localhost:5001/api/v0/";
     }
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     QFormLayout *form = new QFormLayout();
+    //some styles(eg macOS) default to leaving fields at their size hint instead of growing them
+    //with the window, which makes every field look tiny on a wide window
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setRowWrapPolicy(QFormLayout::DontWrapRows);
 
     _nameEdit = new QLineEdit();
     _nameEdit->setPlaceholderText("My Asset");
@@ -66,6 +72,11 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
         } catch (const DigiByteException &) {
             break; //no more pools
         }
+        //pool 0 is "Local Storage"(this node only) - metadata stored only there is lost if this
+        //node goes offline, so it's hidden from the default GUI to avoid accidental use.
+        //Delete the next line to offer it again as an option.
+        if (i == 0) continue;
+
         QCheckBox *check = new QCheckBox(QString::fromStdString(pool["name"].asString()));
         check->setToolTip(QString::fromStdString(pool["description"].asString()));
         check->setChecked(i == 1); //public pool on by default
@@ -89,7 +100,7 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     QPushButton *iconBrowse = new QPushButton("Browse...");
     connect(iconBrowse, &QPushButton::clicked, this, [this]() { chooseImage(_iconPathEdit, "Choose Icon"); });
     QHBoxLayout *iconRow = new QHBoxLayout();
-    iconRow->addWidget(_iconPathEdit);
+    iconRow->addWidget(_iconPathEdit, 1);
     iconRow->addWidget(iconBrowse);
     form->addRow("Icon:", iconRow);
 
@@ -99,7 +110,7 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     QPushButton *imageBrowse = new QPushButton("Browse...");
     connect(imageBrowse, &QPushButton::clicked, this, [this]() { chooseImage(_imagePathEdit, "Choose Cover Image"); });
     QHBoxLayout *imageRow = new QHBoxLayout();
-    imageRow->addWidget(_imagePathEdit);
+    imageRow->addWidget(_imagePathEdit, 1);
     imageRow->addWidget(imageBrowse);
     form->addRow("Cover Image:", imageRow);
 
@@ -107,7 +118,7 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     //exist on the RPC side(rules param of issueasset) - the GUI covers the common one
     _royaltyCheck = new QCheckBox("Every transfer must pay a royalty");
     _royaltyAddressEdit = new QLineEdit();
-    _royaltyAddressEdit->setPlaceholderText("Address royalties are paid to");
+    _royaltyAddressEdit->setPlaceholderText("Optional - defaults to a new wallet address");
     _royaltyAddressEdit->setEnabled(false);
     _royaltyAmountEdit = new QLineEdit();
     _royaltyAmountEdit->setPlaceholderText("DGB per transfer(min 0.0001)");
@@ -180,6 +191,7 @@ void CreateAssetTab::createAsset() {
             if (path.isEmpty()) continue;
             _statusLabel->setText(QString("Uploading %1 to IPFS...").arg(image.urlName));
             _statusLabel->repaint();
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
             QString ipfsUrl, mimeType, uploadError;
             if (!uploadImage(path, ipfsUrl, mimeType, uploadError)) {
                 _statusLabel->setText(QString("Could not upload %1: %2").arg(image.urlName, uploadError));
@@ -202,9 +214,20 @@ void CreateAssetTab::createAsset() {
             QString royaltyAddress = _royaltyAddressEdit->text().trimmed();
             bool amountOk = false;
             double royaltyDgb = _royaltyAmountEdit->text().trimmed().toDouble(&amountOk);
-            if (royaltyAddress.isEmpty() || !amountOk || (royaltyDgb < 0.0001)) {
-                _statusLabel->setText("Royalty needs an address and a DGB amount of at least 0.0001.");
+            if (!amountOk || (royaltyDgb < 0.0001)) {
+                _statusLabel->setText("Royalty needs a DGB amount of at least 0.0001.");
                 return;
+            }
+            //left blank - default to a new wallet address, same as the "Send To" field
+            if (royaltyAddress.isEmpty()) {
+                try {
+                    Json::Value result = _dgbCore.sendcommand("getnewaddress", Json::arrayValue);
+                    royaltyAddress = QString::fromStdString(result.asString());
+                    _royaltyAddressEdit->setText(royaltyAddress);
+                } catch (const DigiByteException& e) {
+                    _statusLabel->setText("Could not get a wallet address for the royalty: " + QString::fromStdString(e.getMessage()));
+                    return;
+                }
             }
             Json::Value addresses = Json::objectValue;
             addresses[royaltyAddress.toStdString()] =
@@ -215,7 +238,11 @@ void CreateAssetTab::createAsset() {
             config["rules"] = rules;
         }
 
-        //price the issuance first so the user confirms real numbers
+        //price the issuance first so the user confirms real numbers.  Replaces any leftover
+        //"Uploading ... to IPFS" text so the status line doesn't look stuck on a finished step
+        _statusLabel->setText("Estimating cost...");
+        _statusLabel->repaint();
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
         QString costText = "Costs could not be estimated.";
         try {
             Json::Value dryConfig = config;
@@ -228,17 +255,44 @@ void CreateAssetTab::createAsset() {
                                     QString::fromStdString(costs["estimatedTotal"].asString()));
         } catch (const DigiByteException&) {} //fall back to generic text
 
-        //confirm - issuance can not be undone
+        //confirm - issuance can not be undone.  Built as an instance(rather than the static
+        //QMessageBox::question helper) so it can be raised/activated - on some platforms a
+        //dialog opened right after a long blocking call can otherwise appear behind the
+        //main window, making it look like nothing happened
         QString lockedText = _lockedCheck->isChecked() ? "locked(supply can never change)" : "unlocked";
-        if (QMessageBox::question(this, "Confirm Create Asset",
-                                  QString("Create %1 of \"%2\" (%3)?\n%4\nThis writes to the blockchain and can not be undone.")
-                                          .arg(amount, name, lockedText, costText)) != QMessageBox::Yes) {
+        QMessageBox confirmBox(QMessageBox::Question, "Confirm Create Asset",
+                               QString("Create %1 of \"%2\" (%3)?\n%4\nThis writes to the blockchain and can not be undone.")
+                                       .arg(amount, name, lockedText, costText),
+                               QMessageBox::Yes | QMessageBox::No, this);
+        confirmBox.raise();
+        confirmBox.activateWindow();
+        if (confirmBox.exec() != QMessageBox::Yes) {
             return;
         }
 
+        //funding can legitimately retry for tens of seconds(eg waiting for a just-broadcast
+        //change output to confirm) - use a longer timeout than normal calls so the GUI doesn't
+        //give up before the daemon does, and show that we're still working rather than
+        //appearing to freeze.  processEvents() here matters: without it, closing the dialog
+        //and this status update just sit in the queue while the blocking RPC call below
+        //freezes the event loop, so the old dialog area never repaints and looks stuck
+        _statusLabel->setText("Creating asset... this can take up to a couple of minutes.");
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        _statusLabel->repaint();
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        _dgbCore.setTimeout(std::max(_defaultTimeoutMs, 180000u));
         Json::Value args = Json::arrayValue;
         args.append(config);
-        Json::Value result = _dgbCore.sendcommand("issueasset", args);
+        Json::Value result;
+        try {
+            result = _dgbCore.sendcommand("issueasset", args);
+        } catch (...) {
+            _dgbCore.setTimeout(_defaultTimeoutMs);
+            QApplication::restoreOverrideCursor();
+            throw;
+        }
+        _dgbCore.setTimeout(_defaultTimeoutMs);
+        QApplication::restoreOverrideCursor();
         _statusLabel->setText("Asset created!\ntxid: " + QString::fromStdString(result["txid"].asString()) +
                               "\nassetId: " + QString::fromStdString(result["assetId"].asString()) +
                               "\nmetadata cid: " + QString::fromStdString(result["cid"].asString()));

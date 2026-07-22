@@ -79,7 +79,8 @@ void HistoryTab::updateHistory() {
 
             //decode the transaction to see if a DigiAsset moved to this row's output
             QString assetText;
-            const std::map<std::string, AssetMove> &byAddress = txAssets(txid);
+            int confirmations = tx["confirmations"].asInt();
+            const std::map<std::string, AssetMove> byAddress = txAssets(txid, confirmations);
             auto it = byAddress.find(address);
             bool isAsset = (it != byAddress.end());
             if (isAsset) {
@@ -144,11 +145,12 @@ void HistoryTab::applyFilter() {
  * the DigiAsset that moved to each output.  Lets updateHistory() label a wallet transaction as an
  * asset movement and show which asset and how much moved to the wallet's address.
  */
-const std::map<std::string, HistoryTab::AssetMove> &HistoryTab::txAssets(const std::string &txid) {
+std::map<std::string, HistoryTab::AssetMove> HistoryTab::txAssets(const std::string &txid, int confirmations) {
     auto cached = _txAssetCache.find(txid);
     if (cached != _txAssetCache.end()) return cached->second;
 
     std::map<std::string, AssetMove> byAddress;
+    bool decodeFailed = false;
     try {
         Json::Value args = Json::arrayValue;
         args.append(txid);
@@ -172,9 +174,18 @@ const std::map<std::string, HistoryTab::AssetMove> &HistoryTab::txAssets(const s
             }
         }
     } catch (const DigiByteException &) {
-        //couldn't decode(e.g. pruned) - treat as a plain DGB transaction; cache the empty result
+        //an unconfirmed transaction has no blockhash yet, so the daemon can't decode its
+        //assets and this call fails - treat as a plain DGB transaction for now, but(below)
+        //don't cache that verdict so it gets re-checked once the transaction confirms
+        decodeFailed = true;
     }
-    return _txAssetCache.emplace(txid, std::move(byAddress)).first->second;
+
+    //only cache once confirmed: a 0-conf tx that decoded as "no assets" may just be too new
+    //for the daemon's chain-indexed asset lookup to see yet, not actually a plain transaction
+    if ((confirmations > 0) && !decodeFailed) {
+        _txAssetCache.emplace(txid, byAddress);
+    }
+    return byAddress;
 }
 
 ///sets the icon on the Asset cell of every row showing the asset once its download finishes

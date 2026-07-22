@@ -43,8 +43,11 @@ private:
         uint64_t count = 0;   //amount in the smallest unit
         unsigned int decimals = 0;
     };
-    ///decodes a transaction once and caches, per receiving address, the asset moved to it
-    const std::map<std::string, AssetMove> &txAssets(const std::string &txid);
+    ///decodes a transaction and returns, per receiving address, the asset moved to it.  Only
+    ///cached once the transaction has a confirmation - an unconfirmed transaction has no
+    ///blockhash yet, so the daemon can't decode its assets and looks identical to a plain
+    ///transaction; caching that would permanently mislabel it even after it confirms
+    std::map<std::string, AssetMove> txAssets(const std::string &txid, int confirmations);
 
     QLabel * _statusLabel;
     QLabel * _pageLabel;

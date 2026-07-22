@@ -85,6 +85,10 @@ public:
     //functions that create connection
     void makeConnection(); //will throw an error if we can't connect
 
+    //overrides the http timeout set from config.cfg's rpctimeout(ms).  Useful for individual
+    //calls that are known to legitimately run long(eg issueasset's funding retries)
+    void setTimeout(unsigned int milliseconds);
+
     //config based getter
     std::string getFileName();
 

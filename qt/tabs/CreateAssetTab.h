@@ -54,6 +54,7 @@ private:
     std::vector<unsigned int> _pspIndexes;      //pool indexes for the psp param of issueasset
     QNetworkAccessManager * _net;               //used to upload icon/image bytes to the IPFS node
     QString _ipfsApi;                           //e.g. http://localhost:5001/api/v0/
+    unsigned int _defaultTimeoutMs = 50000;     //rpctimeout from config.cfg, restored after issueasset
     DigiByteCore _dgbCore;
 };
 
