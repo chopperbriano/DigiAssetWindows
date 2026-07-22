@@ -6,6 +6,7 @@ bin/cache/*
 bin/stream/*
 build
 build/*
+build-*/
 src/Version.h
 config.cfg
 debug.log
