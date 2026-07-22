@@ -77,7 +77,12 @@ void HistoryTab::updateHistory() {
             _txTable->setItem(row, 5, new QTableWidgetItem(QString::fromStdString(tx["txid"].asString())));
             row++;
         }
-        if (result.empty() && (_page == 0)) _statusLabel->setText("No wallet transactions yet.");
+        //a successful fetch clears any earlier error message
+        if (result.empty() && (_page == 0)) {
+            _statusLabel->setText("No wallet transactions yet.");
+        } else {
+            _statusLabel->setText("Select a row and copy the transaction id to inspect it with getrawtransaction.");
+        }
 
         _pageLabel->setText(QString("page %1").arg(_page + 1));
         _newerButton->setEnabled(_page > 0);

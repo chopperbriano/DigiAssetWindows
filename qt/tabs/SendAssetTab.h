@@ -22,6 +22,9 @@ class SendAssetTab : public QWidget {
 public:
     explicit SendAssetTab(QWidget *parent = nullptr);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private slots:
     void refreshAssets();
     void sendAsset();

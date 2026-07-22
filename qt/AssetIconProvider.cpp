@@ -32,7 +32,8 @@ QIcon AssetIconProvider::icon(uint64_t assetIndex) {
     return (it != _icons.end()) ? it->second : QIcon();
 }
 
-QString AssetIconProvider::name(uint64_t assetIndex) const {
+QString AssetIconProvider::name(uint64_t assetIndex) {
+    loadAssetInfo(assetIndex);
     auto it = _names.find(assetIndex);
     return (it != _names.end()) ? it->second : QString();
 }
@@ -56,6 +57,12 @@ void AssetIconProvider::loadAssetInfo(uint64_t assetIndex) {
             for (const auto &url: meta["urls"]) {
                 if (!url.isObject() || !url.isMember("name") || !url.isMember("url")) continue;
                 if (url["name"].asString() != "icon") continue;
+                //some test assets point "icon" at non-image data(e.g. application/json) - those
+                //can't be shown as an icon, so skip anything not declared as an image
+                if (url.isMember("mimeType") && url["mimeType"].isString() &&
+                    url["mimeType"].asString().rfind("image/", 0) != 0) {
+                    break;
+                }
                 std::string target = url["url"].asString();
                 if (target.rfind("ipfs://", 0) == 0) {
                     fetchIcon(assetIndex, QString::fromStdString(target.substr(7)));

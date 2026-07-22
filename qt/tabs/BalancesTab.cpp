@@ -1,6 +1,8 @@
 #include "BalancesTab.h"
+#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QPixmap>
 #include <QVBoxLayout>
 
 BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
@@ -11,8 +13,15 @@ BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
 
     QVBoxLayout *layout = new QVBoxLayout(this);
 
-    //DigiByte balance + refresh button on one row
+    //DigiByte balance + refresh button on one row, with the DigiByte logo alongside it
     QHBoxLayout *topRow = new QHBoxLayout();
+    QLabel *dgbIcon = new QLabel();
+    QPixmap logo(QCoreApplication::applicationDirPath() + "/images/app_icon.png");
+    if (!logo.isNull()) {
+        int s = _icons->iconSize();
+        dgbIcon->setPixmap(logo.scaled(s, s, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    topRow->addWidget(dgbIcon);
     _digibyteLabel = new QLabel("DigiByte: Loading...");
     topRow->addWidget(_digibyteLabel);
     topRow->addStretch();

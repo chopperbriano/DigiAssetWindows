@@ -35,8 +35,9 @@ public:
     ///icon fetch the first time an asset is requested.
     QIcon icon(uint64_t assetIndex);
 
-    ///cached display name from the asset metadata(empty if not known yet)
-    QString name(uint64_t assetIndex) const;
+    ///display name from the asset metadata(empty if the metadata can't be read yet).  Loads the
+    ///metadata on first request so the name is available immediately to callers.
+    QString name(uint64_t assetIndex);
 
     ///icon height in pixels(config: guiasseticonsize, default 16), clamped to a sane range
     int iconSize() const { return _iconSize; }

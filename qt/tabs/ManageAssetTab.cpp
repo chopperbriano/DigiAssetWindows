@@ -3,6 +3,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMessageBox>
+#include <QShowEvent>
 #include <QVBoxLayout>
 
 ManageAssetTab::ManageAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
@@ -60,11 +61,19 @@ ManageAssetTab::ManageAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     refreshAssets();
 }
 
+///refreshes the dropdown whenever the tab is shown so it recovers from an earlier error
+///(e.g. the wallet was not loaded yet) without needing a manual Refresh click
+void ManageAssetTab::showEvent(QShowEvent *event) {
+    QWidget::showEvent(event);
+    if (_assetCombo->count() == 0) refreshAssets();
+}
+
 ///reloads the asset dropdown from the wallet's holdings
 void ManageAssetTab::refreshAssets() {
     try {
         Json::Value args = Json::arrayValue;
         Json::Value result = _dgbCore.sendcommand("getwalletbalances", args);
+        _statusLabel->clear(); //a successful fetch clears any earlier error message
         _assetCombo->clear();
         for (const auto &asset: result["assets"]) {
             uint64_t assetIndex = asset["assetIndex"].asUInt64();
