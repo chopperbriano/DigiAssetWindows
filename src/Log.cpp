@@ -13,7 +13,10 @@
 #include <iomanip>
 #include <sstream>
 
-std::mutex Log::_mutex;
+std::mutex& Log::getLock() {
+    static std::mutex* mutex = new std::mutex; //intentionally leaked - see header
+    return *mutex;
+}
 Log* Log::_pinstance = nullptr;
 
 // Current local time as "YYYY-MM-DD HH:MM:SS" for log-file / console lines.
@@ -32,7 +35,7 @@ static std::string logStamp() {
 
 // Return the singleton instance, lazily constructing it under lock on first use.
 Log* Log::GetInstance() {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::mutex> lock(getLock());
     if (_pinstance == nullptr) {
         _pinstance = new Log();
     }
@@ -41,7 +44,7 @@ Log* Log::GetInstance() {
 
 // Return the singleton (constructing it if needed) and open fileName as its log file.
 Log* Log::GetInstance(const string& fileName) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::mutex> lock(getLock());
     if (_pinstance == nullptr) {
         _pinstance = new Log();
     }
@@ -73,7 +76,7 @@ void Log::setDashboard(ConsoleDashboard* dashboard) {
 // or std::cout if it meets the screen threshold, and append it to the file if open and
 // it meets the file threshold.
 void Log::addMessage(const string& message, LogLevel level) {
-    lock_guard<mutex> lock(_mutex);
+    lock_guard<mutex> lock(getLock());
 
     string logLevelStr;
     switch (level) {

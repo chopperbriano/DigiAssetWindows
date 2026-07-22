@@ -38,8 +38,8 @@ protected:
 public:
     bool stopRequested();                   // true once stop() has requested shutdown; poll from mainFunction() to exit early
     void start();                           // spawn the worker thread (no-op if already running)
-    void stop();                            // request shutdown and block until the worker thread has fully exited
-    ~Threaded();
+    virtual void stop();                    // request shutdown and block until the worker thread has fully exited
+    virtual ~Threaded();
 };
 
 

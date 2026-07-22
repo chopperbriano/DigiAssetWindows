@@ -26,6 +26,7 @@
 #define RPC_PARSE_ERROR (-32700)
 #define RPC_FORBIDDEN_BY_SAFE_MODE (-2)
 #define RPC_MISC_ERROR (-1)
+#define RPC_WALLET_INSUFFICIENT_FUNDS (-6) //same value DigiByte core uses
 
 // Macro definition in a common header or the RPC server file
 #define REGISTER_RPC_METHOD(methodName) registerMethod(#methodName, &std::methodName)
@@ -77,9 +78,12 @@ namespace RPC {
         int8_t _allowRPCDefault = -1; //unknown
         bool _showParamsOnError = false;
 
+        std::atomic<bool> _stopRequested{false};
+        std::thread _acceptThread;
+
         //functions to handle requests
         Value parseRequest(tcp::socket& socket);                                                        // read HTTP request off socket, auth-check, parse JSON body to a Value
-        [[noreturn]] void accept();                                                                     // blocking accept loop: post each connection to the io_context pool
+        void accept();                                                                                  // accept loop: post each connection to the io_context pool; exits on stop()
         void handleConnection(std::shared_ptr<tcp::socket> socket, uint64_t callNumber);                // service one connection end-to-end (parse, dispatch, reply, close)
         Value handleRpcRequest(const Value& request);                                                   // pull method/params/id from a request and route to executeCall
         static Value createErrorResponse(int code, const std::string& message, const Value& request);   // build a JSON-RPC error response object
@@ -92,7 +96,8 @@ namespace RPC {
         explicit Server(const std::string& fileName = "config.cfg");    // load config, open listening socket, start worker pool
         ~Server();
 
-        void start();                                                   // run the blocking accept loop until the socket closes
+        void start();                                                   // run the accept loop until the socket closes (blocking; call on its own thread)
+        void stop();                                                    // signal shutdown, unblock accept(), drain the worker pool and join all threads
         unsigned int getPort();
         bool isRPCAllowed(const string& method);                        // check method against the rpcallow list (with "*" wildcard default)
         Value executeCall(const std::string& methodName, const Json::Value& params, const Json::Value& id = 1);  // dispatch one call (cache/custom handler/Core pass-through) and return its JSON result

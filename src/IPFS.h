@@ -23,6 +23,7 @@
 #include <future>
 #include <mutex>
 #include <sqlite3.h>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -44,6 +45,13 @@ class IPFS : public Threaded {
 private:
     const static std::vector<std::string> _knownLostCID;
     std::string _nodePrefix = "http://localhost:5001/api/v0/";
+
+    //cache of cids pinned on the node so isPinned never blocks the callers(the chain
+    //analyzer asks for every pool issuance it processes - one HTTP round trip each was
+    //enough to stall sync 400x when the ipfs daemon was busy)
+    mutable std::set<std::string> _pinnedCache;
+    mutable std::mutex _pinnedCacheMutex;
+    mutable bool _pinnedCacheLoaded = false;
 
     ///timeout times are in seconds
     unsigned int _timeoutPin = 1200;
@@ -81,6 +89,13 @@ public:
     // Loads IPFS settings from configFile and, unless runStart is false, starts
     // the worker thread.
     IPFS(const std::string& configFile, bool runStart = true);
+    ~IPFS() override;
+
+    ///aborts in flight http requests to the ipfs node before joining the job threads -
+    ///a pin or download can legitimately block for many minutes and shutdown shouldn't
+    ///wait for them.  Aborted jobs look like timeouts so they stay queued in the
+    ///database and resume on next start.
+    void stop() override;
 
     //helpers
     // Converts a 256-bit SHA256 hash into the base32 CIDv1 of raw data encoded
@@ -88,6 +103,8 @@ public:
     static std::string sha256ToCID(BitIO& hash);
     // Same as above but takes the hash as a hex string.
     static std::string sha256ToCID(const std::string& hash);
+    // Converts a CID back into the hex SHA256 hash it encodes.
+    static std::string cidToSha256(const std::string& cid);
     // True if url starts (case-insensitively) with "ipfs://" and the remainder
     // is a valid CID.
     static bool isIPFSurl(const std::string& url);
@@ -129,6 +146,9 @@ public:
     // Blocking download of a CID to filePath; optionally pins it first (used for
     // startup files that must be present).
     void downloadFile(const std::string& cid, const std::string& filePath, bool pinAlso = false);
+    // Adds content to the local IPFS node (optionally pinning it) and returns
+    // the resulting CID.
+    std::string addFile(const std::string& content, bool pinFile = true) const;
     // Returns this node's dialable multiaddr (peerId) for the pool server, using
     // getIP + the /id response filtered to addresses that are actually ours.
     std::string getPeerId() const;

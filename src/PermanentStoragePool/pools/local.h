@@ -49,6 +49,7 @@ protected:
 
 public:
     local() = default;
+    ~local() override;
 
     //called by Node Operators that subscribe to PSP
     std::string serializeMetaProcessor(const DigiByteTransaction& tx) override;                                              //if tx is part of PSP returns serialized data for processing metadata if not returns empty

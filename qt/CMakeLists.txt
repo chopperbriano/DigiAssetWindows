@@ -20,18 +20,21 @@ find_package(JSONRPCCPP REQUIRED)
 find_package(CURL REQUIRED)
 
 # --- Find Qt libraries ---
-# Adjust the COMPONENTS list as necessary. Commonly used are:
-# Core, Gui, Widgets, Network, Charts, etc.
-find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Charts)
-
-# If you’re on Qt6, you might use:
-# find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Charts)
+# Works with Qt5 or Qt6 - whichever is installed
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Charts Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Charts Network)
 
 # --- Source files ---
 set(HEADER_FILES
         PlotManager.h
         RPCLoader.h
+        AssetIconProvider.h
         tabs/SyncTab.h
+        tabs/BalancesTab.h
+        tabs/SendAssetTab.h
+        tabs/CreateAssetTab.h
+        tabs/HistoryTab.h
+        tabs/ManageAssetTab.h
         ../src/Config.h
         ../src/DigiByteCore.h
         ../src/DigiAssetConstants.h
@@ -41,7 +44,13 @@ set(HEADER_FILES
 set(SOURCE_FILES
         PlotManager.cpp
         RPCLoader.cpp
+        AssetIconProvider.cpp
         tabs/SyncTab.cpp
+        tabs/BalancesTab.cpp
+        tabs/SendAssetTab.cpp
+        tabs/CreateAssetTab.cpp
+        tabs/HistoryTab.cpp
+        tabs/ManageAssetTab.cpp
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
         ../src/utils.cpp
@@ -59,13 +68,18 @@ set(APP_ICON_RESOURCE ../bin/images/app_icon.rc)
 target_sources(digiasset_core-qt PRIVATE ${APP_ICON_RESOURCE})
 
 # --- Link system libraries (curl, ssl, crypto, pthread) ---
+find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 target_link_libraries(digiasset_core-qt PRIVATE CURL::libcurl)
-target_link_libraries(digiasset_core-qt PRIVATE ssl)
-target_link_libraries(digiasset_core-qt PRIVATE crypto)
-target_link_libraries(digiasset_core-qt PRIVATE pthread)
+target_link_libraries(digiasset_core-qt PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 
 # --- Link JSON libraries ---
-target_link_libraries(digiasset_core-qt PRIVATE /lib/x86_64-linux-gnu/libjsoncpp.so)
+target_include_directories(digiasset_core-qt PRIVATE ${JSONCPP_INCLUDE_DIRS})
+if(JSONCPP_LIBRARIES)
+    target_link_libraries(digiasset_core-qt PRIVATE ${JSONCPP_LIBRARIES})
+else()
+    target_link_libraries(digiasset_core-qt PRIVATE jsoncpp)
+endif()
 target_link_libraries(digiasset_core-qt PRIVATE jsonrpccpp-common)
 target_link_libraries(digiasset_core-qt PRIVATE jsonrpccpp-client)
 
@@ -73,24 +87,15 @@ target_link_libraries(digiasset_core-qt PRIVATE jsonrpccpp-client)
 # target_link_libraries(digiasset_core-qt PUBLIC sqlite3)
 # If you have a static library for sqlite3, set it up similarly.
 
-# --- Link Qt libraries ---
-# If you’re using Qt5:
+# --- Link Qt libraries (Qt5 or Qt6, whichever find_package found above) ---
 target_link_libraries(digiasset_core-qt
         PRIVATE
-        Qt5::Core
-        Qt5::Gui
-        Qt5::Widgets
-        Qt5::Charts
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Charts
+        Qt${QT_VERSION_MAJOR}::Network
         )
-
-# For Qt6, it would look like:
-# target_link_libraries(digiasset_core-qt
-#     PRIVATE
-#         Qt6::Core
-#         Qt6::Gui
-#         Qt6::Widgets
-#         Qt6::Charts
-# )
 
 
 
