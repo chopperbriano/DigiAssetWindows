@@ -53,9 +53,11 @@ signals:
 private:
     void loadAssetInfo(uint64_t assetIndex);
     void fetchIcon(uint64_t assetIndex, const QString &cid);
+    QString cachePath(const QString &cid) const;
 
     QNetworkAccessManager *_net;
-    QString _ipfsApi; //e.g. http://localhost:5001/api/v0/
+    QString _ipfsApi;   //e.g. http://localhost:5001/api/v0/
+    QString _cacheDir;  //on-disk icon cache(<appdir>/cache/icons), keyed by cid
     int _iconSize;
     std::map<uint64_t, QString> _names;  //assetIndex -> asset name(from metadata)
     std::map<uint64_t, QIcon> _icons;    //assetIndex -> fetched icon

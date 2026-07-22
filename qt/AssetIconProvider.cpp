@@ -5,9 +5,16 @@
 #include "AssetIconProvider.h"
 #include "Config.h"
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPixmap>
+
+//kubo(the IPFS node) rejects requests whose User-Agent starts with "Mozilla" as CSRF
+//protection, and Qt's default UA is Mozilla-like - so every IPFS request must override it
+static const char *IPFS_USER_AGENT = "DigiAssetCore-GUI";
 
 AssetIconProvider::AssetIconProvider(QObject *parent) : QObject(parent), _iconSize(16), _dgbCore() {
     _dgbCore.setFileName("config.cfg", true);
@@ -24,6 +31,15 @@ AssetIconProvider::AssetIconProvider(QObject *parent) : QObject(parent), _iconSi
     }
     if (_iconSize < 8) _iconSize = 8; //keep it visible but sane
     if (_iconSize > 64) _iconSize = 64;
+
+    //icons are cached on disk(keyed by their content-addressed cid) so they survive restarts
+    //and don't get re-downloaded from IPFS every launch
+    _cacheDir = QCoreApplication::applicationDirPath() + "/cache/icons";
+    QDir().mkpath(_cacheDir);
+}
+
+QString AssetIconProvider::cachePath(const QString &cid) const {
+    return _cacheDir + "/" + cid;
 }
 
 QIcon AssetIconProvider::icon(uint64_t assetIndex) {
@@ -76,18 +92,37 @@ void AssetIconProvider::loadAssetInfo(uint64_t assetIndex) {
     }
 }
 
-///downloads the icon bytes from the IPFS node(api "cat" call) and caches them as a QIcon
+///provides the icon from the on-disk cache if present, otherwise downloads it from the IPFS
+///node(api "cat" call), writes the bytes to the cache and hands back a QIcon
 void AssetIconProvider::fetchIcon(uint64_t assetIndex, const QString &cid) {
     if (_iconInFlight.count(assetIndex) || _icons.count(assetIndex)) return;
+
+    //disk cache hit: load straight from the file, no network needed
+    QPixmap cached;
+    if (cached.load(cachePath(cid))) {
+        _icons[assetIndex] = QIcon(cached);
+        emit iconReady((quint64) assetIndex);
+        return;
+    }
+
+    //cache miss: download the bytes from the IPFS node
     _iconInFlight.insert(assetIndex);
     QNetworkRequest request(QUrl(_ipfsApi + "cat?arg=" + cid));
+    request.setHeader(QNetworkRequest::UserAgentHeader, IPFS_USER_AGENT);
     QNetworkReply *reply = _net->post(request, QByteArray());
-    connect(reply, &QNetworkReply::finished, this, [this, assetIndex, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, assetIndex, cid, reply]() {
         _iconInFlight.erase(assetIndex);
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) return;
+        QByteArray bytes = reply->readAll();
         QPixmap pixmap;
-        if (!pixmap.loadFromData(reply->readAll())) return;
+        if (!pixmap.loadFromData(bytes)) return;
+        //write to the disk cache(best effort - a failed write just means we fetch again later)
+        QFile file(cachePath(cid));
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(bytes);
+            file.close();
+        }
         _icons[assetIndex] = QIcon(pixmap);
         emit iconReady((quint64) assetIndex);
     });

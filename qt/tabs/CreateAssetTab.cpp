@@ -288,6 +288,8 @@ bool CreateAssetTab::uploadImage(const QString &filePath, QString &ipfsUrlOut, Q
 
     QUrl url(_ipfsApi + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2096896&pin=true");
     QNetworkRequest request(url);
+    //kubo rejects browser-like(Mozilla) User-Agents as CSRF protection; Qt's default is one
+    request.setHeader(QNetworkRequest::UserAgentHeader, "DigiAssetCore-GUI");
     QNetworkReply *reply = _net->post(request, multiPart);
     multiPart->setParent(reply); //deleted with the reply
 
