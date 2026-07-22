@@ -28,6 +28,7 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Charts N
 set(HEADER_FILES
         PlotManager.h
         RPCLoader.h
+        AssetIconProvider.h
         tabs/SyncTab.h
         tabs/BalancesTab.h
         tabs/SendAssetTab.h
@@ -43,6 +44,7 @@ set(HEADER_FILES
 set(SOURCE_FILES
         PlotManager.cpp
         RPCLoader.cpp
+        AssetIconProvider.cpp
         tabs/SyncTab.cpp
         tabs/BalancesTab.cpp
         tabs/SendAssetTab.cpp

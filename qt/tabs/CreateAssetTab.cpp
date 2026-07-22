@@ -1,11 +1,32 @@
 #include "CreateAssetTab.h"
+#include "Config.h"
+#include <QEventLoop>
+#include <QFile>
+#include <QFileDialog>
 #include <QFormLayout>
+#include <QHBoxLayout>
+#include <QHttpMultiPart>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMessageBox>
+#include <QMimeDatabase>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QUrl>
 #include <QVBoxLayout>
 
 CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _dgbCore.setFileName("config.cfg", true);
     _dgbCore.makeConnection();
+    _net = new QNetworkAccessManager(this);
+
+    //icons/images are uploaded to the same IPFS node the daemon uses before issuing
+    try {
+        Config config("config.cfg");
+        _ipfsApi = QString::fromStdString(config.getString("ipfspath", "http://localhost:5001/api/v0/"));
+    } catch (...) {
+        _ipfsApi = "http://localhost:5001/api/v0/";
+    }
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     QFormLayout *form = new QFormLayout();
@@ -58,6 +79,29 @@ CreateAssetTab::CreateAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _descriptionEdit->setPlaceholderText("Optional description stored in the asset's metadata");
     _descriptionEdit->setMaximumHeight(80);
     form->addRow("Description:", _descriptionEdit);
+
+    //icon + cover image.  Standard DigiAsset metadata stores these as data.urls entries
+    //named "icon"(the small thumbnail shown in wallets/lists) and "image"(a larger picture).
+    //The chosen file is uploaded to the IPFS node when the asset is created.
+    _iconPathEdit = new QLineEdit();
+    _iconPathEdit->setReadOnly(true);
+    _iconPathEdit->setPlaceholderText("Optional - small icon shown in wallet lists (PNG/JPG/GIF/SVG)");
+    QPushButton *iconBrowse = new QPushButton("Browse...");
+    connect(iconBrowse, &QPushButton::clicked, this, [this]() { chooseImage(_iconPathEdit, "Choose Icon"); });
+    QHBoxLayout *iconRow = new QHBoxLayout();
+    iconRow->addWidget(_iconPathEdit);
+    iconRow->addWidget(iconBrowse);
+    form->addRow("Icon:", iconRow);
+
+    _imagePathEdit = new QLineEdit();
+    _imagePathEdit->setReadOnly(true);
+    _imagePathEdit->setPlaceholderText("Optional - larger cover image (PNG/JPG/GIF/SVG)");
+    QPushButton *imageBrowse = new QPushButton("Browse...");
+    connect(imageBrowse, &QPushButton::clicked, this, [this]() { chooseImage(_imagePathEdit, "Choose Cover Image"); });
+    QHBoxLayout *imageRow = new QHBoxLayout();
+    imageRow->addWidget(_imagePathEdit);
+    imageRow->addWidget(imageBrowse);
+    form->addRow("Cover Image:", imageRow);
 
     //royalty rule: every transfer of the asset must pay this address.  More rule types
     //exist on the RPC side(rules param of issueasset) - the GUI covers the common one
@@ -123,6 +167,32 @@ void CreateAssetTab::createAsset() {
         config["aggregation"] = _aggregationCombo->currentText().toStdString();
         QString description = _descriptionEdit->toPlainText().trimmed();
         if (!description.isEmpty()) config["description"] = description.toStdString();
+
+        //upload the icon/cover image to IPFS and reference them in data.urls.  Done before the
+        //dryrun so the estimated cost includes the storage-pool fee for the image bytes.
+        Json::Value urls = Json::arrayValue;
+        struct { QLineEdit *edit; const char *urlName; } images[] = {
+                {_iconPathEdit, "icon"},
+                {_imagePathEdit, "image"},
+        };
+        for (const auto &image: images) {
+            QString path = image.edit->text().trimmed();
+            if (path.isEmpty()) continue;
+            _statusLabel->setText(QString("Uploading %1 to IPFS...").arg(image.urlName));
+            _statusLabel->repaint();
+            QString ipfsUrl, mimeType, uploadError;
+            if (!uploadImage(path, ipfsUrl, mimeType, uploadError)) {
+                _statusLabel->setText(QString("Could not upload %1: %2").arg(image.urlName, uploadError));
+                return;
+            }
+            Json::Value entry = Json::objectValue;
+            entry["name"] = image.urlName;
+            entry["url"] = ipfsUrl.toStdString();
+            entry["mimeType"] = mimeType.toStdString();
+            urls.append(entry);
+        }
+        if (!urls.empty()) config["urls"] = urls;
+
         QString toAddress = _toAddressEdit->text().trimmed();
         if (!toAddress.isEmpty()) config["toAddress"] = toAddress.toStdString();
         config["psp"] = pspArray;
@@ -175,4 +245,73 @@ void CreateAssetTab::createAsset() {
     } catch (const DigiByteException &e) {
         _statusLabel->setText("Create failed: " + QString::fromStdString(e.getMessage()));
     }
+}
+
+///opens a file dialog and stores the chosen image path in pathEdit
+void CreateAssetTab::chooseImage(QLineEdit *pathEdit, const QString &title) {
+    QString path = QFileDialog::getOpenFileName(this, title, QString(),
+                                                "Images (*.png *.jpg *.jpeg *.gif *.svg *.webp);;All files (*)");
+    if (!path.isEmpty()) pathEdit->setText(path);
+}
+
+/**
+ * Uploads a local image to the IPFS node and returns its ipfs:// url and mime type.
+ * Uses the same add parameters the daemon uses(raw single block, CIDv1) so the resulting
+ * cid matches what the storage pool expects.  Blocks on a local event loop until done.
+ */
+bool CreateAssetTab::uploadImage(const QString &filePath, QString &ipfsUrlOut, QString &mimeTypeOut,
+                                 QString &errorOut) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        errorOut = "could not open file";
+        return false;
+    }
+    QByteArray bytes = file.readAll();
+    file.close();
+    //the daemon's raw single-block add mode caps content at ~2MB - keep icons/images under it
+    if (bytes.size() > 2096896) {
+        errorOut = "file is larger than 2MB";
+        return false;
+    }
+
+    QString mimeType = QMimeDatabase().mimeTypeForFile(filePath).name();
+    if (mimeType.isEmpty()) mimeType = "application/octet-stream";
+
+    //multipart form upload, matching IPFS::addFile(raw leaves, CIDv1, single block, pinned)
+    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QHttpPart filePart;
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("application/octet-stream"));
+    filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                       QVariant("form-data; name=\"file\"; filename=\"file\""));
+    filePart.setBody(bytes);
+    multiPart->append(filePart);
+
+    QUrl url(_ipfsApi + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2096896&pin=true");
+    QNetworkRequest request(url);
+    QNetworkReply *reply = _net->post(request, multiPart);
+    multiPart->setParent(reply); //deleted with the reply
+
+    //block until the upload completes so createAsset() can stay synchronous
+    QEventLoop loop;
+    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    QByteArray response = reply->readAll();
+    bool ok = (reply->error() == QNetworkReply::NoError);
+    QString netError = reply->errorString();
+    reply->deleteLater();
+
+    if (!ok) {
+        errorOut = netError.isEmpty() ? "network error" : netError;
+        return false;
+    }
+    QJsonObject obj = QJsonDocument::fromJson(response).object();
+    QString hash = obj.value("Hash").toString();
+    if (hash.isEmpty()) {
+        errorOut = "unexpected response from IPFS node";
+        return false;
+    }
+    ipfsUrlOut = "ipfs://" + hash;
+    mimeTypeOut = mimeType;
+    return true;
 }

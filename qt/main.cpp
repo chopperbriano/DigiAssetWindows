@@ -47,7 +47,9 @@ void startCoreProcess() {
     try {
         Config config("config.cfg");
         QTcpSocket probe;
-        probe.connectToHost(QString::fromStdString(config.getString("rpcbind", "127.0.0.1")),
+        //the asset daemon(this project) is reached via rpcassetbind, not rpcbind(which points at
+        //the DigiByte Core node).  Probing the wrong host would spawn a duplicate local daemon.
+        probe.connectToHost(QString::fromStdString(config.getString("rpcassetbind", "127.0.0.1")),
                             static_cast<quint16>(config.getInteger("rpcassetport", 14024)));
         if (probe.waitForConnected(500)) {
             probe.disconnectFromHost();

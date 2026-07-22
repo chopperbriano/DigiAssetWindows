@@ -5,6 +5,7 @@
 #ifndef SENDASSETTAB_H
 #define SENDASSETTAB_H
 
+#include "AssetIconProvider.h"
 #include "DigiByteCore.h"
 #include <QComboBox>
 #include <QLabel>
@@ -32,6 +33,7 @@ private:
     QPushButton * _sendButton;
     QPushButton * _refreshButton;
     QLabel * _statusLabel;
+    AssetIconProvider * _icons;
     DigiByteCore _dgbCore;
 };
 

@@ -110,13 +110,21 @@ void DigiByteCore::makeConnection() {
 
     Config config = Config(_configFileName);
 
+    //the asset port(rpcassetport) is served by the DigiAsset Core daemon(this project), which
+    //normally runs locally, while rpcbind/rpcport point at the DigiByte Core node(which can be
+    //remote).  They are different hosts, so the asset connection has its own rpcassetbind key
+    //(defaulting to localhost) rather than reusing rpcbind.
+    std::string host = _useAssetPort
+                               ? config.getString("rpcassetbind", "127.0.0.1")
+                               : config.getString("rpcbind", "127.0.0.1");
+    int port = _useAssetPort ? config.getInteger("rpcassetport", 14024)
+                             : config.getInteger("rpcport", 14022);
+
     //see if core is online and config if valid
     try {
         httpClient.reset(new jsonrpc::HttpClient(
                 "http://" + urlEncode(config.getString("rpcuser")) + ":" +
-                urlEncode(config.getString("rpcpassword")) + "@" +
-                config.getString("rpcbind", "127.0.0.1") + ":" +
-                std::to_string(_useAssetPort ? config.getInteger("rpcassetport", 14024) : config.getInteger("rpcport", 14022))));
+                urlEncode(config.getString("rpcpassword")) + "@" + host + ":" + std::to_string(port)));
         client.reset(new jsonrpc::Client(*httpClient, jsonrpc::JSONRPC_CLIENT_V1));
         httpClient->SetTimeout(config.getInteger("rpctimeout", 50000));
         if (!_useAssetPort) getblockcount();

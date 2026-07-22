@@ -7,6 +7,10 @@
 SendAssetTab::SendAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     _dgbCore.setFileName("config.cfg", true);
     _dgbCore.makeConnection();
+    _icons = new AssetIconProvider(this);
+    connect(_icons, &AssetIconProvider::iconReady, this, [this](quint64 assetIndex) {
+        AssetIconProvider::applyToCombo(_assetCombo, assetIndex, _icons->icon(assetIndex));
+    });
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     QFormLayout *form = new QFormLayout();
@@ -17,6 +21,7 @@ SendAssetTab::SendAssetTab(QWidget *parent) : QWidget(parent), _dgbCore() {
 
     QHBoxLayout *assetRow = new QHBoxLayout();
     _assetCombo = new QComboBox();
+    _assetCombo->setIconSize(QSize(_icons->iconSize(), _icons->iconSize()));
     assetRow->addWidget(_assetCombo, 1);
     _refreshButton = new QPushButton("Refresh");
     connect(_refreshButton, &QPushButton::clicked, this, &SendAssetTab::refreshAssets);
@@ -49,10 +54,15 @@ void SendAssetTab::refreshAssets() {
         Json::Value result = _dgbCore.sendcommand("getwalletbalances", args);
         _assetCombo->clear();
         for (const auto &asset: result["assets"]) {
-            QString label = QString::fromStdString(asset["assetId"].asString()) +
-                            " (index " + QString::number(asset["assetIndex"].asUInt64()) +
+            uint64_t assetIndex = asset["assetIndex"].asUInt64();
+            QString name = _icons->name(assetIndex);
+            QString label = (name.isEmpty() ? QString() : name + " - ") +
+                            QString::fromStdString(asset["assetId"].asString()) +
+                            " (index " + QString::number(assetIndex) +
                             ", balance " + QString::fromStdString(asset["amount"].asString()) + ")";
-            _assetCombo->addItem(label, QVariant::fromValue((qulonglong) asset["assetIndex"].asUInt64()));
+            _assetCombo->addItem(label, QVariant::fromValue((qulonglong) assetIndex));
+            QIcon icon = _icons->icon(assetIndex);
+            if (!icon.isNull()) _assetCombo->setItemIcon(_assetCombo->count() - 1, icon);
         }
         if (_assetCombo->count() == 0) {
             _statusLabel->setText("No assets in wallet.");

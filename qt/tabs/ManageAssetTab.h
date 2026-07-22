@@ -5,6 +5,7 @@
 #ifndef MANAGEASSETTAB_H
 #define MANAGEASSETTAB_H
 
+#include "AssetIconProvider.h"
 #include "DigiByteCore.h"
 #include <QComboBox>
 #include <QLabel>
@@ -36,6 +37,7 @@ private:
     QLineEdit * _reissueToEdit;
     QPushButton * _reissueButton;
     QLabel * _statusLabel;
+    AssetIconProvider * _icons;
     DigiByteCore _dgbCore;
 };
 
