@@ -209,12 +209,12 @@ void curl_slist_free_all(struct curl_slist *list);                              
 CURLcode curl_global_init(long flags);                                           /* process-wide init */
 void curl_global_cleanup(void);                                                  /* process-wide teardown */
 
-/* --- Windows-fork stub additions for asset_features (PR26) ------------------
+/* --- Windows-fork additions for asset_features (PR26) -----------------------
  * Upstream's postFile()/progress code uses libcurl's mime (multipart upload)
- * and xferinfo APIs. This stub curl is winhttp-backed and does NOT yet
- * implement multipart upload, so these are declared here (and given no-op
- * bodies in curl_stubs.cpp) purely so the tree compiles on MSVC.
- * TODO(windows): wire curl_mime* into the winhttp POST so postFile() uploads. */
+ * and xferinfo APIs. curl_mime_* are IMPLEMENTED over WinHTTP in curl_stubs.cpp
+ * (they build a real multipart/form-data body that curl_easy_perform() POSTs).
+ * The xferinfo progress/abort callback (CURLOPT_XFERINFOFUNCTION) is accepted
+ * but not wired into WinHTTP, so mid-transfer abort is a no-op on Windows. */
 typedef long long curl_off_t;
 typedef struct curl_mime curl_mime;
 typedef struct curl_mimepart curl_mimepart;
