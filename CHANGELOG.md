@@ -20,7 +20,26 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.104 (current) — upstream asset_features (PR26) + chain-split regression tests
+## 0.3.3-win.105 (current) — CRITICAL: fix win.104 crash (CurlHandler use-after-free)
+
+win.104 crashed both the node (heap corruption, `0xc0000374`) and the pool
+(access violation, `0xc0000005`) after running a while. Root cause: the
+asset_features merge added `curl_easy_cleanup()` calls in `CurlHandler`'s `get`,
+`post`, `getDownload`, `postDownload` — but those use a **reused thread-local
+handle** (`tl_curl`). Cleaning it up without nulling `tl_curl` left a dangling
+pointer that the next HTTP call reused via `curl_easy_reset()` → use-after-free.
+`post()` did it on **every** call (success path too); the others on
+timeout/abort. Both node and pool make constant HTTP calls, so both corrupted
+their heap; the delay is because a POST or a timeout has to happen first.
+
+Fix: a `discardHandle()` helper that cleans up **and nulls** `tl_curl`, used on
+the error/timeout paths; successful transfers keep the handle for reuse (as
+before win.104). Also freed a `postFile` handle leak. **Anyone on win.104 should
+update immediately.**
+
+---
+
+## 0.3.3-win.104 — upstream asset_features (PR26) + chain-split regression tests
 
 Folds the tested upstream **asset_features** work (DigiAsset Core's v1.0.0 branch,
 PR #26) into master, plus the Windows fixes and new tests it needed:

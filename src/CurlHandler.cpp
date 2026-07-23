@@ -42,6 +42,21 @@ namespace CurlHandler {
             return tl_curl;
         }
 
+        // Discard this thread's reusable handle so the next acquireHandle() makes
+        // a fresh one. This MUST be used instead of a bare curl_easy_cleanup() on
+        // an acquireHandle() handle: cleaning the handle up without nulling
+        // tl_curl leaves a DANGLING thread-local pointer that the very next call
+        // reuses via curl_easy_reset() -> use-after-free -> heap corruption. That
+        // was the win.104 crash. Only call after an error/timeout where the
+        // handle's state is suspect; a successful transfer keeps the handle for
+        // connection reuse.
+        void discardHandle() {
+            if (tl_curl) {
+                curl_easy_cleanup(tl_curl);
+                tl_curl = nullptr;
+            }
+        }
+
         /**
          * Private callback function for curl to build a string with returned data
          */
@@ -99,13 +114,14 @@ namespace CurlHandler {
         applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            curl_easy_cleanup(curl);
+            discardHandle();
             throw exceptionTimeout();
         }
         if (res != CURLE_OK) {
+            discardHandle();
             throw runtime_error(curl_easy_strerror(res));
         }
-        return readBuffer;
+        return readBuffer;   // success: keep the thread-local handle for reuse
     }
 
     // Blocking HTTP POST. Builds an "&"-joined key=value body from data, sends
@@ -137,15 +153,14 @@ namespace CurlHandler {
         applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            curl_easy_cleanup(curl);
+            discardHandle();
             throw exceptionTimeout();
         }
         if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
+            discardHandle();
             throw runtime_error(curl_easy_strerror(res));
         }
-        curl_easy_cleanup(curl);
-        return readBuffer;
+        return readBuffer;   // success: keep the thread-local handle for reuse
     }
 
     /**
@@ -182,8 +197,10 @@ namespace CurlHandler {
             throw exceptionTimeout();
         }
         if (res != CURLE_OK) {
+            curl_easy_cleanup(curl);
             throw runtime_error(curl_easy_strerror(res));
         }
+        curl_easy_cleanup(curl);
         return readBuffer;
     }
 
@@ -258,7 +275,7 @@ namespace CurlHandler {
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            curl_easy_cleanup(curl);
+            discardHandle();
             throw exceptionTimeout();
         }
         if (res != CURLE_OK) {
@@ -308,7 +325,7 @@ namespace CurlHandler {
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            curl_easy_cleanup(curl);
+            discardHandle();
             throw exceptionTimeout();
         }
         if (res != CURLE_OK) {
