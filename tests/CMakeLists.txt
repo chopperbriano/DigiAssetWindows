@@ -112,7 +112,8 @@ set(UNIT_TESTS
     DatabaseUnitTests.cpp
     DatabaseFunctionalTests.cpp
     VersionTests.cpp
-    Base58Tests.cpp)
+    Base58Tests.cpp
+    ChainSplitFixtureTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)

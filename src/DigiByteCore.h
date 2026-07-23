@@ -185,6 +185,16 @@ public:
     getrawtransaction_t getRawTransaction(const std::string& txid);
     blockinfo_t getBlockVerbose(const std::string& hash); // getblock with verbosity 2 — loads TX cache
 
+    // --- Static, pure parsers (unit-testable with captured-block fixtures) ---
+    // Extract output addresses from a scriptPubKey across DigiByte Core versions:
+    // v7.17.x emits a plural "addresses"[]; the v8/8.22+ Bitcoin rebase emits a
+    // singular "address". Reads both. See tests/fixtures/chain-split-2026.
+    static void extractScriptPubKeyAddresses(const Json::Value& scriptPubKey,
+                                             std::vector<std::string>& out);
+    // Test hook: parse a verbosity-2 getblock JSON into a blockinfo_t with no live
+    // Core, so a captured block (e.g. a Groestl 0x00000400 block) can be replayed.
+    static blockinfo_t parseVerboseBlockForTest(const Json::Value& result);
+
     // --- Block prefetch pipeline (opt-in via config pipelinesync) ---
     // startPrefetch: launch the producer thread walking the chain from startHash.
     // getNextPrefetchedBlock: pop the next block in order (blocks until one is

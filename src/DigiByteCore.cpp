@@ -308,17 +308,7 @@ static blockinfo_t parseVerboseBlockResult(const Value& result,
             output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
             output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
             output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
-            for (auto addrIt = val["scriptPubKey"]["addresses"].begin();
-                 addrIt != val["scriptPubKey"]["addresses"].end(); addrIt++) {
-                output.scriptPubKey.addresses.push_back((*addrIt).asString());
-            }
-            auto& addr = val["scriptPubKey"]["address"];
-            if (addr) {
-                std::string addrStr = addr.asString();
-                if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
-                    output.scriptPubKey.addresses.push_back(addrStr);
-                }
-            }
+            DigiByteCore::extractScriptPubKeyAddresses(val["scriptPubKey"], output.scriptPubKey.addresses);
             tx.vout.push_back(output);
         }
         tx.blockhash = ret.hash;
@@ -329,6 +319,31 @@ static blockinfo_t parseVerboseBlockResult(const Value& result,
         txOut[txid] = std::move(tx);
     }
     return ret;
+}
+
+// Extract output addresses from a scriptPubKey across DigiByte Core versions.
+// v7.17.x emits a plural "addresses"[]; the v8/8.22+ Bitcoin rebase emits a
+// singular "address". Read both (deduped) so the indexer works on either. This
+// lived inline in parseVerboseBlockResult; pulled out so it is unit-testable.
+void DigiByteCore::extractScriptPubKeyAddresses(const Value& scriptPubKey, std::vector<std::string>& out) {
+    for (auto addrIt = scriptPubKey["addresses"].begin();
+         addrIt != scriptPubKey["addresses"].end(); ++addrIt) {
+        out.push_back((*addrIt).asString());
+    }
+    const Value& addr = scriptPubKey["address"];
+    if (addr) {
+        std::string addrStr = addr.asString();
+        if (std::find(out.begin(), out.end(), addrStr) == out.end()) {
+            out.push_back(addrStr);
+        }
+    }
+}
+
+// Test hook so parseVerboseBlockResult (file-static) can be exercised on a
+// captured block fixture without a live Core connection.
+blockinfo_t DigiByteCore::parseVerboseBlockForTest(const Value& result) {
+    std::map<std::string, getrawtransaction_t> txOut;
+    return parseVerboseBlockResult(result, txOut);
 }
 
 blockinfo_t DigiByteCore::getBlockVerbose(const string& hash) {
