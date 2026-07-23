@@ -993,7 +993,9 @@ function Write-NodeConfig($rpc) {
             # ForEach-Object block would set it in a child scope only.
             $rebuilt = @()
             foreach ($ln in $existing) {
-                if ($ln -match '^\s*psp1payout\s*=(.*)$') {
+                if ($ln -match '^\s*psp2payout\s*=(.*)$') {
+                    if ($Matches[1].Trim() -ne $PayoutAddress) { $ln = "psp2payout=$PayoutAddress"; $changed = $true }
+                } elseif ($ln -match '^\s*psp1payout\s*=(.*)$') {
                     if ($Matches[1].Trim() -ne $PayoutAddress) { $ln = "psp1payout=$PayoutAddress"; $changed = $true }
                 } elseif ($ln -match '^\s*psp0payout\s*=(.*)$') {
                     if ($Matches[1].Trim() -ne $PayoutAddress) { $ln = "psp0payout=$PayoutAddress"; $changed = $true }
@@ -1045,20 +1047,23 @@ function Write-NodeConfig($rpc) {
         '#   Local IPFS/Kubo HTTP API the node uses to pin and serve asset content.',
         'ipfspath=http://localhost:5001/api/v0/',
         '',
-        '# --- The pool this node joins (psp1) -----------------------------------------',
-        '#   psp1server = the pool your node registers with and hosts files for.',
+        '# --- The pool this node joins (psp2 = DigiStamp Pool) ------------------------',
+        '#   psp2server = the pool your node registers with and hosts files for.',
         '#   IMPORTANT: on a REMOTE node this must be the pool PUBLIC https address',
         '#   (e.g. https://pool.digistamp.co). Do NOT use http://127.0.0.1:14028 - that',
         '#   only works ON the pool server itself; on a node it shows "Pool unreachable".',
-        "psp1server=$PoolServer",
-        'psp1subscribe=1',
-        '#   psp1payout = the DGB address the pool pays your hosting earnings to.',
-        "psp1payout=$PayoutAddress",
-        '#   psp1secret is auto-generated on first run (this node identity). Never copy',
+        "psp2server=$PoolServer",
+        'psp2subscribe=1',
+        '#   psp2payout = the DGB address the pool pays your hosting earnings to.',
+        "psp2payout=$PayoutAddress",
+        '#   psp2secret is auto-generated on first run (this node identity). Never copy',
         '#   it from another node - each node must have its own unique secret.',
+        '#   Pool 1 (legacy MCTrivia PSP) is deprecated; kept OFF so this node does not',
+        '#   double-register on the same server (psp1 and psp2 share pool.digistamp.co).',
+        'psp1subscribe=0',
         '',
         '# --- Local pool (psp0) - your own private pin list ---------------------------',
-        '#   Pool 0 is your own local pin list; pool 1 (above) is the pool you join.',
+        '#   Pool 0 is your own local pin list; pool 2 (above) is the pool you join.',
         'psp0subscribe=1',
         "psp0payout=$PayoutAddress",
         '',
@@ -1552,10 +1557,10 @@ function Invoke-Install {
     Write-Host 'YOUR SETTINGS (all in one documented file; edit then restart the node):' -ForegroundColor Cyan
     Write-Host "  * Config file : $NodeConfig" -ForegroundColor Gray
     Write-Host '                  (open in Notepad - every setting has a # comment explaining it)' -ForegroundColor DarkGray
-    Write-Host "  * Pool joined : $PoolServer   (key: psp1server)" -ForegroundColor Gray
-    Write-Host "  * Payout addr : $PayoutAddress   (key: psp1payout; re-run this installer to change)" -ForegroundColor Gray
+    Write-Host "  * Pool joined : $PoolServer   (key: psp2server - DigiStamp Pool)" -ForegroundColor Gray
+    Write-Host "  * Payout addr : $PayoutAddress   (key: psp2payout; re-run this installer to change)" -ForegroundColor Gray
     Write-Host '  * In the node window, the "PSP Pool" line reads "reachable" once it connects to' -ForegroundColor Gray
-    Write-Host '    the pool. If it says "unreachable", double-check psp1server is the pool PUBLIC' -ForegroundColor Gray
+    Write-Host '    the pool. If it says "unreachable", double-check psp2server is the pool PUBLIC' -ForegroundColor Gray
     Write-Host '    https URL (not 127.0.0.1) and that the pool is online.' -ForegroundColor Gray
     Write-Host ''
     Write-Host 'HANDY COMMANDS (Administrator PowerShell):' -ForegroundColor Cyan
