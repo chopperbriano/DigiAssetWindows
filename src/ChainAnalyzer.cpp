@@ -11,6 +11,7 @@
 //
 
 #include "ChainAnalyzer.h"
+#include "EventBroadcaster.h"
 #include "AppMain.h"
 #include "BitIO.h"
 #include "Config.h"
@@ -493,6 +494,13 @@ void ChainAnalyzer::phaseSync() {
             db->endTransaction();
         }
 
+        if (!fastMode) {
+            //near the tip: let event stream subscribers know a block was processed
+            EventBroadcaster::GetInstance()->broadcast(
+                    "{\"event\":\"newBlock\",\"height\":" + to_string(_height) +
+                    ",\"blocksBehind\":" + to_string(0 - _state) + "}");
+        }
+
         //show run time stats
         totalProcessed++;
         // Log profiling every 500 blocks
@@ -537,6 +545,10 @@ void ChainAnalyzer::phaseSync() {
 
         //if fully synced pause until new block
         while (blockData.nextblockhash.empty()) {
+            //a new block can be minutes away - don't hold up shutdown waiting for one
+            if (stopRequested()) return;
+
+            //see if any performance indexes need to be added(do before marking as synced will set state to BUSY if there is anything to do)
             db->executePerformanceIndex(_state);
             // Reached the tip. If the operator wants durable writes, restore them
             // now that the fast catch-up is done - but only after the deferred
@@ -755,6 +767,43 @@ void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
         duration = std::chrono::steady_clock::now() - startTime;
         _clearAddressCacheRunTime += std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
         _clearAddressCacheRunCount++;
+
+        //let event stream subscribers know about asset activity.  Only asset bearing
+        //transactions get events so there is no firehose during initial sync
+        if (tx.isIssuance() || tx.isTransfer(true) || tx.isBurn(true)) {
+            EventBroadcaster* events = EventBroadcaster::GetInstance();
+
+            //unique list of asset ids involved(inputs too - a full burn has no asset outputs)
+            vector<string> assetIds;
+            for (size_t i = 0; i < inputCount; i++) {
+                for (const DigiAsset& asset: tx.getInput(i).assets) assetIds.emplace_back(asset.getAssetId());
+            }
+            for (size_t i = 0; i < outputCount; i++) {
+                for (const DigiAsset& asset: tx.getOutput(i).assets) assetIds.emplace_back(asset.getAssetId());
+            }
+            sort(assetIds.begin(), assetIds.end());
+            assetIds.erase(unique(assetIds.begin(), assetIds.end()), assetIds.end());
+            string assetIdJson;
+            for (const string& id: assetIds) {
+                if (!assetIdJson.empty()) assetIdJson += ",";
+                assetIdJson += "\"" + id + "\"";
+            }
+
+            string type = tx.isIssuance() ? "assetIssued" : (tx.isBurn(true) ? "assetBurn" : "assetTransfer");
+            events->broadcast("{\"event\":\"" + type + "\",\"assetIds\":[" + assetIdJson +
+                              "],\"txid\":\"" + txid + "\",\"height\":" + to_string(height) + "}");
+
+            //addresses whose holdings changed(list deduped above; asset ids and addresses
+            //are base58/bech32 so no json escaping needed)
+            string addressJson;
+            for (const string& address: addresses) {
+                if (address.empty()) continue;
+                if (!addressJson.empty()) addressJson += ",";
+                addressJson += "\"" + address + "\"";
+            }
+            events->broadcast("{\"event\":\"balanceChanged\",\"addresses\":[" + addressJson +
+                              "],\"txid\":\"" + txid + "\",\"height\":" + to_string(height) + "}");
+        }
     }
 }
 

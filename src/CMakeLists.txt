@@ -123,7 +123,8 @@ set(HEADER_FILES
         NodeStats.h
         WebServer.h
         Version.h
-        OldStream.h
+        AssetWallet.h
+        EventBroadcaster.h
         UniqueTaskQueue.h
         Database_Statement.h
         Database_LockedStatement.h
@@ -167,7 +168,8 @@ set(SOURCE_FILES
         ConsoleDashboard.cpp
         NodeStats.cpp
         WebServer.cpp
-        OldStream.cpp
+        AssetWallet.cpp
+        EventBroadcaster.cpp
         UniqueTaskQueue.cpp
         Database_Statement.cpp
         Database_LockedStatement.cpp

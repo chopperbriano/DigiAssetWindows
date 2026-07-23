@@ -67,8 +67,6 @@ class DigiAsset {
     bool
     processIssuance(const getrawtransaction_t& txData, unsigned int height, unsigned char version, unsigned char opcode,
                     BitIO& dataStream);
-    // Derives the base58 assetId from the issuing transaction's first input and the issuance flags.
-    std::string calculateAssetId(const vin_t& firstVin, uint8_t issuanceFlags) const;
     // Reconstructs the simplified scriptPubKey used to hash unlocked-asset ids from a transaction input.
     static std::vector<uint8_t> calcSimpleScriptPubKey(const vin_t& vinData);
     // Writes ripemd160(sha256(data)) (20 bytes) into result starting at startIndex. Two overloads for
@@ -96,6 +94,10 @@ public:
     // transaction does not describe a valid issuance.
     DigiAsset(const getrawtransaction_t& txData, unsigned int height, unsigned char version,
               unsigned char opcode, BitIO& dataStream);
+
+    //constructor for building a brand new asset that is not yet on chain(see DigiByteTransaction::setIssuance)
+    DigiAsset(const std::string& cid, uint64_t count, unsigned char divisibility, bool locked,
+              unsigned char aggregation, const DigiAssetRules& rules = DigiAssetRules());
 
     //helper functions for preprocessing asset
     // Inspects a transaction's OP_RETURN output for a DigiAsset header; outputs the version, opcode
@@ -141,6 +143,10 @@ public:
     bool isAggregable() const;
     bool isDispersed() const;
     bool isLocked() const;
+
+    //issuance encoding helpers(used when building new issuance transactions)
+    unsigned char getIssuanceFlags() const;
+    std::string calculateAssetId(const vin_t& firstVin, uint8_t issuanceFlags) const;
 
     //functions that can only be used on assets we own and can be edited(or new assets not on chain)
     void setOwned();

@@ -55,7 +55,10 @@ using Json::Value;
 using Json::ValueIterator;
 using namespace std;
 
-mutex DigiByteCore::_mutex;
+mutex& DigiByteCore::getLock() {
+    static mutex* m = new mutex; //intentionally leaked - see header
+    return *m;
+}
 
 // Destructor: releases the JSON-RPC connection if one is open.
 DigiByteCore::~DigiByteCore() {
@@ -119,6 +122,16 @@ void DigiByteCore::makeConnection() {
 
     Config config = Config(_configFileName);
 
+    //the asset port(rpcassetport) is served by the DigiAsset Core daemon(this project), which
+    //normally runs locally, while rpcbind/rpcport point at the DigiByte Core node(which can be
+    //remote).  They are different hosts, so the asset connection has its own rpcassetbind key
+    //(defaulting to localhost) rather than reusing rpcbind.
+    std::string host = _useAssetPort
+                               ? config.getString("rpcassetbind", "127.0.0.1")
+                               : config.getString("rpcbind", "127.0.0.1");
+    int port = _useAssetPort ? config.getInteger("rpcassetport", 14024)
+                             : config.getInteger("rpcport", 14022);
+
     //see if core is online and config if valid
     try {
         // Build the JSON-RPC URL separately so we can log it at DEBUG, and so
@@ -131,8 +144,7 @@ void DigiByteCore::makeConnection() {
         std::string rpcUrl =
                 "http://" + urlEncode(config.getString("rpcuser")) + ":" +
                 urlEncode(config.getString("rpcpassword")) + "@" +
-                config.getString("rpcbind", "127.0.0.1") + ":" +
-                std::to_string(_useAssetPort ? config.getInteger("rpcassetport", 14024) : config.getInteger("rpcport", 14022));
+                host + ":" + std::to_string(port);
         // Diagnostic hook: set DGBCORE_DEBUG_URL=1 to print the JSON-RPC URL
         // to stderr on connect. Useful when debugging libcurl errors like
         // "couldn't resolve host" that usually mean a character in
@@ -152,6 +164,14 @@ void DigiByteCore::makeConnection() {
         }
         throw Config::exceptionConfigFileInvalid();
     }
+}
+
+/**
+ * Overrides the http timeout set from config.cfg's rpctimeout(ms)
+ */
+void DigiByteCore::setTimeout(unsigned int milliseconds) {
+    if (httpClient == nullptr) throw exceptionDigiByteCoreNotConnected();
+    httpClient->SetTimeout(milliseconds);
 }
 
 /**
@@ -288,17 +308,7 @@ static blockinfo_t parseVerboseBlockResult(const Value& result,
             output.scriptPubKey.hex = val["scriptPubKey"]["hex"].asString();
             output.scriptPubKey.reqSigs = val["scriptPubKey"]["reqSigs"].asInt();
             output.scriptPubKey.type = val["scriptPubKey"]["type"].asString();
-            for (auto addrIt = val["scriptPubKey"]["addresses"].begin();
-                 addrIt != val["scriptPubKey"]["addresses"].end(); addrIt++) {
-                output.scriptPubKey.addresses.push_back((*addrIt).asString());
-            }
-            auto& addr = val["scriptPubKey"]["address"];
-            if (addr) {
-                std::string addrStr = addr.asString();
-                if (std::find(output.scriptPubKey.addresses.begin(), output.scriptPubKey.addresses.end(), addrStr) == output.scriptPubKey.addresses.end()) {
-                    output.scriptPubKey.addresses.push_back(addrStr);
-                }
-            }
+            DigiByteCore::extractScriptPubKeyAddresses(val["scriptPubKey"], output.scriptPubKey.addresses);
             tx.vout.push_back(output);
         }
         tx.blockhash = ret.hash;
@@ -309,6 +319,31 @@ static blockinfo_t parseVerboseBlockResult(const Value& result,
         txOut[txid] = std::move(tx);
     }
     return ret;
+}
+
+// Extract output addresses from a scriptPubKey across DigiByte Core versions.
+// v7.17.x emits a plural "addresses"[]; the v8/8.22+ Bitcoin rebase emits a
+// singular "address". Read both (deduped) so the indexer works on either. This
+// lived inline in parseVerboseBlockResult; pulled out so it is unit-testable.
+void DigiByteCore::extractScriptPubKeyAddresses(const Value& scriptPubKey, std::vector<std::string>& out) {
+    for (auto addrIt = scriptPubKey["addresses"].begin();
+         addrIt != scriptPubKey["addresses"].end(); ++addrIt) {
+        out.push_back((*addrIt).asString());
+    }
+    const Value& addr = scriptPubKey["address"];
+    if (addr) {
+        std::string addrStr = addr.asString();
+        if (std::find(out.begin(), out.end(), addrStr) == out.end()) {
+            out.push_back(addrStr);
+        }
+    }
+}
+
+// Test hook so parseVerboseBlockResult (file-static) can be exercised on a
+// captured block fixture without a live Core connection.
+blockinfo_t DigiByteCore::parseVerboseBlockForTest(const Value& result) {
+    std::map<std::string, getrawtransaction_t> txOut;
+    return parseVerboseBlockResult(result, txOut);
 }
 
 blockinfo_t DigiByteCore::getBlockVerbose(const string& hash) {
@@ -480,7 +515,7 @@ getaddressinfo_t DigiByteCore::getAddressInfo(const string& address) {
 Value DigiByteCore::sendcommand(const string& command, const Value& params) {
     Value result;
     std::chrono::steady_clock::time_point _creationTime=std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(_mutex); //we can only run one at a time or bad things happen
+    std::lock_guard<std::mutex> lock(getLock()); //we can only run one at a time or bad things happen
     _runCount++; //inside the lock: the prefetch thread can call this concurrently
     try {
         result = client->CallMethod(command, params);

@@ -18,13 +18,16 @@ using namespace std;
 
 
 AppMain* AppMain::_pinstance = nullptr;
-mutex AppMain::_mutex;
+mutex& AppMain::getLock() {
+    static mutex* m = new mutex; //intentionally leaked - see header
+    return *m;
+}
 
 // Return the single AppMain instance, lazily constructing it on first call.
 // Thread-safe: guarded by _mutex. The instance is intentionally never freed
 // (lives for the whole process).
 AppMain* AppMain::GetInstance() {
-    lock_guard<mutex> lock(_mutex);
+    lock_guard<mutex> lock(getLock());
     if (_pinstance == nullptr) {
         _pinstance = new AppMain();
     }

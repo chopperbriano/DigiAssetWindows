@@ -101,7 +101,7 @@ private:
     std::unique_ptr<jsonrpc::HttpClient> httpClient = nullptr;
     std::unique_ptr<jsonrpc::Client> client = nullptr;
     uint64_t _dgbToSat(std::string value);
-    static std::mutex _mutex;
+    static std::mutex& getLock(); //never destroyed - safe to use during process exit
     bool _useAssetPort = false;
 
 
@@ -171,6 +171,10 @@ public:
     //functions that create connection
     void makeConnection(); //will throw an error if we can't connect
 
+    //overrides the http timeout set from config.cfg's rpctimeout(ms).  Useful for individual
+    //calls that are known to legitimately run long(eg issueasset's funding retries)
+    void setTimeout(unsigned int milliseconds);
+
     //config based getter
     std::string getFileName();
 
@@ -180,6 +184,16 @@ public:
     blockinfo_t getBlock(const std::string& hash);
     getrawtransaction_t getRawTransaction(const std::string& txid);
     blockinfo_t getBlockVerbose(const std::string& hash); // getblock with verbosity 2 — loads TX cache
+
+    // --- Static, pure parsers (unit-testable with captured-block fixtures) ---
+    // Extract output addresses from a scriptPubKey across DigiByte Core versions:
+    // v7.17.x emits a plural "addresses"[]; the v8/8.22+ Bitcoin rebase emits a
+    // singular "address". Reads both. See tests/fixtures/chain-split-2026.
+    static void extractScriptPubKeyAddresses(const Json::Value& scriptPubKey,
+                                             std::vector<std::string>& out);
+    // Test hook: parse a verbosity-2 getblock JSON into a blockinfo_t with no live
+    // Core, so a captured block (e.g. a Groestl 0x00000400 block) can be replayed.
+    static blockinfo_t parseVerboseBlockForTest(const Json::Value& result);
 
     // --- Block prefetch pipeline (opt-in via config pipelinesync) ---
     // startPrefetch: launch the producer thread walking the chain from startHash.

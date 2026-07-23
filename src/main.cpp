@@ -11,12 +11,14 @@
 #include "ConsoleDashboard.h"
 #include "Database.h"
 #include "DigiByteCore.h"
+#include "EventBroadcaster.h"
 #include "IPFS.h"
 #include "Log.h"
 #include "RPC/Server.h"
 #include "Version.h"
 #include "WebServer.h"
 #include "utils.h"
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <ctime>
@@ -37,6 +39,12 @@ static void signalHandler(int signal) {
     g_shutdown = 1;
 }
 
+namespace {
+    std::atomic<bool> shutdownRequested{false};
+    extern "C" void handleShutdownSignal(int) {
+        shutdownRequested = true; //signal safe: everything else happens on the main thread
+    }
+} // namespace
 
 // Node process entry point. Wires up and starts every subsystem in dependency
 // order, then blocks until shutdown is requested. Returns 0 on clean exit, -1 on
@@ -404,6 +412,12 @@ int main() {
     }
 
     /**
+     * Start event stream (TCP newline-delimited JSON events; config eventport, 0 disables)
+     */
+    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
+                                           config.getString("eventbind", "127.0.0.1"));
+
+    /**
      * Start Web Server
      */
     WebServer webServer("config.cfg");
@@ -429,9 +443,14 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    // Graceful shutdown
+    // Graceful shutdown. Order matters: stop the analyzer (joins its thread, so no
+    // more DB writes), stop the event stream, then flush the WAL into chain.db so
+    // the file is complete on its own. The RPC + web servers run on detached
+    // threads and are torn down by the std::exit(0) below.
     log->addMessage("Shutting down...");
     analyzer.stop();
+    EventBroadcaster::GetInstance()->stop();
+    db->walCheckpoint();
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 

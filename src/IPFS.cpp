@@ -78,6 +78,19 @@ IPFS::IPFS(const string& configFile, bool runStart) {
     if (runStart) start();
 }
 
+IPFS::~IPFS() {
+    stop();
+}
+
+void IPFS::stop() {
+    //in flight requests can block for up to the pin/download timeout(minutes) and
+    //Threaded::stop() waits for every job thread - cut the requests short instead.
+    //Interrupted jobs fail like timeouts: still queued in the db, resumed on restart
+    CurlHandler::abortAllTransfers(true);
+    Threaded::stop();
+    CurlHandler::abortAllTransfers(false);
+}
+
 /*
 ████████╗██╗  ██╗██████╗ ███████╗ █████╗ ██████╗
 ╚══██╔══╝██║  ██║██╔══██╗██╔════╝██╔══██╗██╔══██╗
@@ -131,6 +144,8 @@ void IPFS::mainFunction() {
                     (getSize(cid) < stoul(extra)) //within restrictions
             ) {
                 _command("pin/add/" + cid, {}, _timeoutPin * 1000);
+                std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+                _pinnedCache.insert(cid);
             }
         } catch (...) {
             //don't worry about failed pin (timeout, size check failure, etc.)
@@ -143,6 +158,8 @@ void IPFS::mainFunction() {
                     (getSize(cid) < stoul(extra)) //within restrictions
             ) {
                 _command("pin/rm/" + cid, {}, _timeoutPin * 1000);
+                std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+                _pinnedCache.erase(cid);
             }
         } catch (...) {
             //don't worry about failed unpin
@@ -218,6 +235,33 @@ string IPFS::sha256ToCID(BitIO& hash) {
 string IPFS::sha256ToCID(const string& hash) {
     BitIO data = BitIO::makeHexString(hash);
     return sha256ToCID(data);
+}
+
+/**
+ * Converts an IPFS cid back to the SHA256 hash of the file's content.
+ * This is the reverse of sha256ToCID and only works for base32 CIDv1 raw mode cids
+ * (the kind created by sha256ToCID and addFile).
+ * @param cid - base32 CIDv1 raw cid("b" followed by 58 base32 characters)
+ * @return - 64 character hex sha256 of the content
+ */
+string IPFS::cidToSha256(const string& cid) {
+    const string chars = "abcdefghijklmnopqrstuvwxyz234567";
+    if ((cid.length() != 59) || (cid[0] != 'b')) throw exceptionInvalidCID(cid);
+
+    //decode base 32
+    BitIO data;
+    for (size_t i = 1; i < cid.length(); i++) {
+        size_t pos = chars.find(cid[i]);
+        if (pos == string::npos) throw exceptionInvalidCID(cid);
+        data.appendBits(pos, 5);
+    }
+
+    //check header is CIDv1, raw codec, sha2-256, 32 byte digest
+    data.movePositionToBeginning();
+    if (data.getBits(32) != 0x01551220) throw exceptionInvalidCID(cid);
+
+    //return the 32 byte digest
+    return data.getHexString(64);
 }
 
 
@@ -568,21 +612,44 @@ void IPFS::unpin(const string& cid) {
 
 
 bool IPFS::isPinned(const string& cid) const {
-    string results = _command("pin/ls/" + cid);
-    return (results.find("is not pinned") == string::npos);
+    std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+
+    //one bulk load instead of one HTTP round trip per lookup.  The cache is kept fresh
+    //by the pin/unpin job handlers, so the only misses are pins made by OTHER programs
+    //sharing the node - for those we just queue a download job which is still correct
+    if (!_pinnedCacheLoaded) {
+        try {
+            string results = _command("pin/ls?type=recursive");
+            Json::Value json;
+            Json::CharReaderBuilder rbuilder;
+            istringstream stream(results);
+            string errs;
+            if (Json::parseFromStream(rbuilder, stream, &json, &errs) && json.isMember("Keys")) {
+                for (const string& key: json["Keys"].getMemberNames()) {
+                    _pinnedCache.insert(key);
+                }
+            }
+            _pinnedCacheLoaded = true;
+        } catch (...) {
+            return false; //node not reachable - treat as not pinned, retry the load next call
+        }
+    }
+    return (_pinnedCache.count(cid) > 0);
 }
 
 unsigned int IPFS::getSize(const string& cid) const {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
-    string stats = _command("object/stat?arg=" + cid);
+    //files/stat handles both dag-pb(Qm…) and raw-leaves(bafkrei…) cids.  object/stat was
+    //removed in kubo 0.40 so it failed for every cid on modern nodes
+    string stats = _command("files/stat?arg=/ipfs/" + cid);
     Json::Value json;
     Json::CharReaderBuilder rbuilder;
     istringstream s(stats);
     string errs;
     if (!Json::parseFromStream(rbuilder, s, &json, &errs)) throw out_of_range("No size data found");
 
-    if (json.isMember("CumulativeSize") && json["CumulativeSize"].isInt()) {
+    if (json.isMember("CumulativeSize") && json["CumulativeSize"].isNumeric()) {
         return json["CumulativeSize"].asUInt();
     }
     // Handle error case
@@ -599,8 +666,60 @@ unsigned int IPFS::getSize(const string& cid) const {
 void IPFS::downloadFile(const string& cid, const string& filePath, bool pinAlso) {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
-    if (pinAlso) _command("pin/add/" + cid);
+    if (pinAlso) {
+        _command("pin/add/" + cid);
+        std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+        _pinnedCache.insert(cid);
+    }
     _command("cat?arg=" + cid, {}, 0, filePath);
+}
+
+/**
+ * Synchronously adds content to the IPFS node and returns its cid.
+ * The file is stored in raw mode with a sha2-256 hash so the returned cid is always a
+ * base32 CIDv1 that can be converted to/from the content's sha256 with cidToSha256/sha256ToCID.
+ * This is the storage mode DigiAsset issuance metadata must use(the sha256 gets encoded on chain).
+ * @param content - the file content to add(2MB max, raw mode limit)
+ * @param pinFile - defaults true.  Pin so the content is not garbage collected
+ * @return - cid of the added content
+ */
+string IPFS::addFile(const string& content, bool pinFile) const {
+    if (content.empty()) throw exception("Can not add empty content to IPFS");
+    if (content.length() > 2096896) throw exception("Content too large.  Raw mode has a 2MB limit");
+
+    //upload as multipart form data(chunker set to the maximum ipfs allows so the content is
+    //always a single raw block, which keeps cid == sha256(content))
+    string url = _nodePrefix + "add?raw-leaves=true&cid-version=1&hash=sha2-256&chunker=size-2096896&pin=" +
+                 (pinFile ? "true" : "false");
+    string response;
+    try {
+        response = CurlHandler::postFile(url, "file", "file", content, _timeoutPin * 1000);
+    } catch (const CurlHandler::exceptionTimeout& e) {
+        throw exceptionTimeout();
+    } catch (const std::exception& e) {
+        if (string(e.what()) == "Couldn't connect to server") throw exceptionNoConnection();
+        throw;
+    }
+
+    //parse response({"Name":"file","Hash":"b...","Size":"..."})
+    Json::Value root;
+    Json::Reader reader;
+    if (!reader.parse(response, root) || !root.isObject() || !root.isMember("Hash")) {
+        throw exception("Unexpected response from IPFS add: " + response);
+    }
+    string cid = root["Hash"].asString();
+
+    //mark as pinned in the cache immediately - without this, isPinned(cid) for content we
+    //just added ourselves incorrectly returns false(the cache doesn't know about it until the
+    //next full pin/ls reload, which may never happen again once loaded), so every caller that
+    //checks isPinned first(eg a storage pool costing its own just-published metadata) takes the
+    //slow path: queuing a download job behind whatever the async job queue is already working
+    //through, which can be tied up for a very long time on unrelated historical content
+    if (pinFile) {
+        std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
+        _pinnedCache.insert(cid);
+    }
+    return cid;
 }
 
 /**

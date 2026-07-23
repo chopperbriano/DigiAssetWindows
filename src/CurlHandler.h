@@ -22,6 +22,12 @@
 
 namespace CurlHandler {
 
+    ///abort(or stop aborting) every in flight and future transfer process wide.
+    ///Used during shutdown: a pin/download can legitimately block for many minutes
+    ///and joining those threads would hang otherwise.  Aborted transfers fail the
+    ///same way a timeout does so all retry paths behave as if the request timed out.
+    void abortAllTransfers(bool abort);
+
     // Performs a blocking HTTP GET and returns the full response body.
     // timeout is in milliseconds (0 = no timeout). Throws exceptionTimeout on
     // timeout, std::runtime_error on other transport errors.
@@ -34,6 +40,10 @@ namespace CurlHandler {
     // Raw JSON POST. Returns the HTTP status code via statusCode, body via responseBody.
     // Throws on transport/network errors only; non-2xx is NOT an exception.
     long postJson(const std::string& url, const std::string& body, std::string& responseBody, unsigned int timeout = 0);
+    // Multipart/form-data POST uploading content as an in-memory file attachment
+    // (needed for the IPFS "add" API endpoint). Returns the response body.
+    std::string postFile(const std::string& url, const std::string& fieldName, const std::string& fileName,
+                         const std::string& content, unsigned int timeout = 0);
     // Performs a blocking HTTP GET and writes the response body directly to
     // fileName (opened "wb"). timeout in ms (0 = none). Throws exceptionTimeout
     // on timeout, std::runtime_error on file-open or other transport errors.

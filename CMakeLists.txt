@@ -29,13 +29,16 @@ if(MSVC)
 
   # Disable Windows features not needed.
   add_definitions(-D_WIN32_WINNT=0x0601)
+  add_definitions(-DNOMINMAX)              # from asset_features: avoid Windows.h min/max macro clash with std::min/max
+  add_definitions(-DWIN32_LEAN_AND_MEAN)   # from asset_features: trim unused Windows headers
 else()
   set(CMAKE_CXX_STANDARD 11)
   SET(CMAKE_CXX_FLAGS "-std=c++11 -g -Wall")
 endif()
 
 # Set version number
-# Upstream version (keep in sync with DigiAsset-Core/DigiAsset_Core)
+# Upstream version (keep in sync with DigiAsset-Core/DigiAsset_Core). Kept at 0.3.3
+# for this test build; the fork's WIN_BUILD counter below is the real version.
 SET(MAJOR_VERSION 0)
 SET(MINOR_VERSION 3)
 SET(PATCH_VERSION 3)

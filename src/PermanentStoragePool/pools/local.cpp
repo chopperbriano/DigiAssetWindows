@@ -20,6 +20,15 @@ void local::start() {
 void local::stop() {
     //not needed for local only storage
 }
+local::~local() {
+    if (_db == nullptr) return;
+    sqlite3_finalize(_stmtCheckIfPartOfPool);
+    sqlite3_finalize(_stmtCheckIfBad);
+    sqlite3_finalize(_stmtEnableInPool);
+    sqlite3_finalize(_stmtMarkBad);
+    sqlite3_finalize(_stmtDiableFromPool);
+    sqlite3_close(_db);
+}
 
 /**
  * Opts a transaction's issued asset into the local pool by inserting its CID
@@ -92,7 +101,7 @@ void local::loadDB() {
     if (_db != nullptr) return;
 
     //see if this is first run
-    bool firstRun = localExists();
+    bool firstRun = !localExists();
 
     //load or create the database
     int rc;
@@ -108,13 +117,14 @@ void local::loadDB() {
     initializeDBValues();
 }
 /**
- * First-run probe. stat()s local.db and returns true when the call fails,
- * i.e. when the file is absent. Callers use the result as a "this is the first
- * run, build the tables" flag.
+ * Returns true if the local pool's database file exists (stat() succeeds).
+ * Callers negate the result to detect a first run and build the tables.
+ * Warning: before 2026-07 this returned the opposite of its name which made
+ * serializeMetaProcessor and isAssetBad skip the pool whenever it was actually in use.
  */
 bool local::localExists() const {
     struct stat buffer {};
-    return (stat(PSP_LOCAL_DB_FILENAME, &buffer) != 0);
+    return (stat(PSP_LOCAL_DB_FILENAME, &buffer) == 0);
 }
 
 /**

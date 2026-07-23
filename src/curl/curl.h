@@ -183,7 +183,9 @@ typedef enum {
   CURLOPT_POSTFIELDSIZE = 60,
   CURLOPT_COPYPOSTFIELDS = 10165,
   CURLOPT_SSL_VERIFYPEER = 64,
-  CURLOPT_SSL_VERIFYHOST = 81
+  CURLOPT_SSL_VERIFYHOST = 81,
+  CURLOPT_XFERINFOFUNCTION = 20219,   /* progress/abort callback (curl_off_t args) - PR26 */
+  CURLOPT_MIMEPOST = 10269            /* attach a curl_mime multipart body - PR26 */
 } CURLoption;
 
 /* Info identifiers passed to curl_easy_getinfo to read transfer results. */
@@ -206,6 +208,22 @@ struct curl_slist *curl_slist_append(struct curl_slist *list, const char *string
 void curl_slist_free_all(struct curl_slist *list);                               /* free a string list */
 CURLcode curl_global_init(long flags);                                           /* process-wide init */
 void curl_global_cleanup(void);                                                  /* process-wide teardown */
+
+/* --- Windows-fork additions for asset_features (PR26) -----------------------
+ * Upstream's postFile()/progress code uses libcurl's mime (multipart upload)
+ * and xferinfo APIs. curl_mime_* are IMPLEMENTED over WinHTTP in curl_stubs.cpp
+ * (they build a real multipart/form-data body that curl_easy_perform() POSTs).
+ * The xferinfo progress/abort callback (CURLOPT_XFERINFOFUNCTION) is accepted
+ * but not wired into WinHTTP, so mid-transfer abort is a no-op on Windows. */
+typedef long long curl_off_t;
+typedef struct curl_mime curl_mime;
+typedef struct curl_mimepart curl_mimepart;
+curl_mime *curl_mime_init(CURL *easy);
+curl_mimepart *curl_mime_addpart(curl_mime *mime);
+CURLcode curl_mime_name(curl_mimepart *part, const char *name);
+CURLcode curl_mime_filename(curl_mimepart *part, const char *filename);
+CURLcode curl_mime_data(curl_mimepart *part, const char *data, size_t datasize);
+void curl_mime_free(curl_mime *mime);
 
 #define CURL_MAX_WRITE_SIZE 16384
 /* Signature of the callback libcurl invokes with received response body chunks. */

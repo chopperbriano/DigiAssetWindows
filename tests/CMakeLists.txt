@@ -37,7 +37,10 @@ find_package(jsoncpp CONFIG QUIET)
 find_package(JSONCPP QUIET)
 
 set(TESTS
+        AppMainTest.cpp
         BitIO.cpp
+        DigiByteDomainTest.cpp
+        LocalPoolTest.cpp
         DatabaseChain.cpp
         DigiByteCore.cpp
         IPFS.cpp
@@ -45,7 +48,10 @@ set(TESTS
         DigiAssetTest.cpp
         DigiAssetRulesTest.cpp
         DigiAssetTransactionTest.cpp
+        DigiByteTransactionBuilderTest.cpp
+        DigiAssetRulesEncodeTest.cpp
         PermanentStoragePoolTest.cpp
+        PermanentStoragePoolListTest.cpp
         ConfigTest.cpp
         KYCTest.cpp
         BlobTest.cpp
@@ -58,6 +64,8 @@ set(TESTS
         InstanceLockTest.cpp
         RPC_ResponseTest.cpp
         RPC_CacheTest.cpp
+        RPC_ServerTest.cpp
+        DigiByteExceptionTest.cpp
         Database_StatementTest.cpp
         DatabaseTest.cpp
         ChainAnalyzerTest.cpp
@@ -104,7 +112,8 @@ set(UNIT_TESTS
     DatabaseUnitTests.cpp
     DatabaseFunctionalTests.cpp
     VersionTests.cpp
-    Base58Tests.cpp)
+    Base58Tests.cpp
+    ChainSplitFixtureTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)

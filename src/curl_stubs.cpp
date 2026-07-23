@@ -122,6 +122,11 @@ struct CurlHandle {
     bool                   isPost        = false;
     long                   responseCode  = 0;
 
+    // Multipart (postFile) body built from curl_mime_* — PR26
+    std::string            mimeBody;
+    std::string            mimeContentType;
+    bool                   hasMime       = false;
+
     // Persistent WinHTTP handles — reused across curl_easy_perform calls
     HINTERNET              hSession      = nullptr;
     HINTERNET              hConnect      = nullptr;
@@ -209,6 +214,10 @@ void curl_easy_reset(CURL* handle) {
 // Set one request option (URL, POST fields, headers, timeout, write callback,
 // etc.) via the variadic curl API. Unrecognized options are accepted and their
 // argument consumed as a no-op. Always returns CURLE_OK.
+// Build a multipart/form-data body from a curl_mime and store it on the handle
+// (defined at the bottom of this file, after the curl_mime struct). PR26.
+static void buildMultipartBody(CurlHandle* h, curl_mime* mime);
+
 CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
     CurlHandle* h = reinterpret_cast<CurlHandle*>(handle);
     if (!h) return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -242,8 +251,15 @@ CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
         case CURLOPT_POST:
             h->isPost = (va_arg(args, long) != 0);
             break;
+        case CURLOPT_MIMEPOST: {
+            curl_mime* mime = va_arg(args, curl_mime*);
+            if (mime) buildMultipartBody(h, mime); // sets mimeBody/mimeContentType/hasMime/isPost
+            break;
+        }
         default:
-            // consume unknown argument (treat as long/pointer)
+            // consume unknown argument (treat as long/pointer). This also covers
+            // CURLOPT_XFERINFOFUNCTION / CURLOPT_NOPROGRESS (progress/abort is not
+            // wired into the WinHTTP stub) - harmless no-ops.
             (void)va_arg(args, void*);
             break;
     }
@@ -289,7 +305,7 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
     }
     // libcurl automatically sets Content-Type for POSTFIELDS — match that behavior.
     // Without this, servers like Express body-parser silently drop the body.
-    if (h->isPost && !h->postFields.empty()) {
+    if (h->isPost && (!h->postFields.empty() || h->hasMime)) {
         // Only add if user hasn't already provided one
         bool hasContentType = false;
         for (curl_slist* sl = h->headers; sl; sl = sl->next) {
@@ -299,12 +315,18 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
             if (lower.find("content-type:") == 0) { hasContentType = true; break; }
         }
         if (!hasContentType) {
-            extraHeaders += L"Content-Type: application/x-www-form-urlencoded\r\n";
+            if (h->hasMime) {
+                extraHeaders += L"Content-Type: " + utf8ToWide(h->mimeContentType) + L"\r\n";
+            } else {
+                extraHeaders += L"Content-Type: application/x-www-form-urlencoded\r\n";
+            }
         }
     }
 
-    const void* postData    = h->isPost ? h->postFields.c_str() : nullptr;
-    DWORD       postDataLen = h->isPost ? (DWORD)h->postFields.size() : 0;
+    // A multipart (postFile) body takes precedence over plain postFields.
+    const std::string& reqBody = h->hasMime ? h->mimeBody : h->postFields;
+    const void* postData    = h->isPost ? reqBody.data()        : nullptr;
+    DWORD       postDataLen = h->isPost ? (DWORD)reqBody.size()  : 0;
 
     // Attempt the request, with one reconnect retry if the connection was stale
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -466,4 +488,62 @@ CURLcode curl_global_init(long flags) {
 }
 
 void curl_global_cleanup(void) {
+}
+
+// --- asset_features (PR26) multipart-upload over WinHTTP --------------------
+// Real implementation: curl_mime_* accumulate named/file parts; CURLOPT_MIMEPOST
+// (in curl_easy_setopt) calls buildMultipartBody() to render a multipart/form-data
+// body, which curl_easy_perform() then POSTs. Mirrors libcurl's mime API closely
+// enough for the asset-issuance file-upload path (issueasset with media).
+struct curl_mimepart {
+    std::string name;
+    std::string filename;
+    std::string data;
+};
+struct curl_mime {
+    std::vector<curl_mimepart*> parts;
+    ~curl_mime() { for (curl_mimepart* p : parts) delete p; }
+};
+
+curl_mime* curl_mime_init(CURL*) { return new curl_mime(); }
+curl_mimepart* curl_mime_addpart(curl_mime* mime) {
+    if (!mime) return nullptr;
+    curl_mimepart* p = new curl_mimepart();
+    mime->parts.push_back(p);
+    return p;
+}
+CURLcode curl_mime_name(curl_mimepart* part, const char* name) {
+    if (part && name) part->name = name;
+    return CURLE_OK;
+}
+CURLcode curl_mime_filename(curl_mimepart* part, const char* filename) {
+    if (part && filename) part->filename = filename;
+    return CURLE_OK;
+}
+CURLcode curl_mime_data(curl_mimepart* part, const char* data, size_t datasize) {
+    if (part && data) part->data.assign(data, datasize);
+    return CURLE_OK;
+}
+void curl_mime_free(curl_mime* mime) { delete mime; }
+
+// Render all parts into a multipart/form-data body + matching Content-Type and
+// mark the handle as a POST. A fixed boundary is used (real libcurl randomizes);
+// asset payloads won't contain this token, so it is safe in practice.
+static void buildMultipartBody(CurlHandle* h, curl_mime* mime) {
+    const std::string boundary = "----DigiAssetWindowsBoundary8f2a1c6b4e07";
+    std::string body;
+    for (curl_mimepart* p : mime->parts) {
+        body += "--" + boundary + "\r\n";
+        body += "Content-Disposition: form-data; name=\"" + p->name + "\"";
+        if (!p->filename.empty()) body += "; filename=\"" + p->filename + "\"";
+        body += "\r\n";
+        body += "Content-Type: application/octet-stream\r\n\r\n";
+        body.append(p->data);
+        body += "\r\n";
+    }
+    body += "--" + boundary + "--\r\n";
+    h->mimeBody        = std::move(body);
+    h->mimeContentType = "multipart/form-data; boundary=" + boundary;
+    h->hasMime         = true;
+    h->isPost          = true;
 }
