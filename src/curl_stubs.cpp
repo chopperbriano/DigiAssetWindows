@@ -208,6 +208,12 @@ void curl_easy_reset(CURL* handle) {
     h->timeoutMs     = 30000;
     h->isPost        = false;
     h->responseCode  = 0;
+    // Clear multipart state too — otherwise a handle reused after a postFile()
+    // keeps hasMime=true and the stale mimeBody, so the next plain GET/POST would
+    // wrongly resend the old multipart/form-data body. (L7)
+    h->mimeBody.clear();
+    h->mimeContentType.clear();
+    h->hasMime       = false;
     // hSession, hConnect, connHost, connPort, connHttps are preserved
 }
 

@@ -126,11 +126,13 @@ int main() {
 
         //todo check if above is correct
 
-        //Get payout address
+        //Get payout address. Pay to the local pool (psp0) and the active
+        //networked pool (psp2 = DigiStamp on new nodes). psp1 is the deprecated
+        //mctrivia slot and stays unsubscribed - matching the installer + dashboard.
         cout << "You will get paid for running this app.  What DigiByte address would you like to get paid to? ";
         string payout = utils::getAnswerString(R"(^(D|S)[1-9A-HJ-NP-Za-km-z]{25,34}|(dgb1)[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,90}$)");
         config.setString("psp0payout", payout);
-        config.setString("psp1payout", payout);
+        config.setString("psp2payout", payout);
 
         //Get the Permanent Storage Pool server to join. This is the pool that
         //verifies your node and pays you for hosting. Keep the default in sync
@@ -140,7 +142,9 @@ int main() {
         cout << "Press Enter for the default (" << defaultPoolServer << ") or type another pool's URL: ";
         string poolServer = utils::getAnswerString();
         if (poolServer.empty()) poolServer = defaultPoolServer;
-        config.setString("psp1server", poolServer);
+        config.setString("psp2server", poolServer);
+        config.setBool("psp2subscribe", true);    // join the DigiStamp pool (index 2)
+        config.setBool("psp1subscribe", false);   // legacy mctrivia pool stays off
 
         //check if user wants to store minimal information or everything
         cout << "Unpruned mode requires 100GB of storage.  Pruned mode requires 2 GB of storage.  Unless running a service like an explorer or wallet back end Pruned Mode is recommended.\n";
@@ -397,16 +401,17 @@ int main() {
     main->setChainAnalyzer(&analyzer);
 
     /**
-     * Start RPC Server in its own thread so it doesn't block the main thread
+     * Start RPC Server. start() is non-blocking — it spawns the Server's own
+     * accept thread — so we no longer wrap it in a detached thread here. The
+     * shared_ptr is held at function scope so the Server outlives shutdown
+     * (stop() joins its accept thread before we tear the process down).
      */
+    std::shared_ptr<RPC::Server> rpcServer;
     try {
         log->addMessage("Starting RPC Server");
-        std::shared_ptr<RPC::Server> server = std::make_shared<RPC::Server>();
-        main->setRpcServer(server.get());
-        std::thread rpcThread([server] {
-            server->start();
-        });
-        rpcThread.detach();
+        rpcServer = std::make_shared<RPC::Server>();
+        main->setRpcServer(rpcServer.get());
+        rpcServer->start();
     } catch (const std::exception& e) {
         log->addMessage(std::string("RPC server failed: ") + e.what(), Log::CRITICAL);
     }
@@ -451,18 +456,18 @@ int main() {
     log->addMessage("Shutting down...");
     // Stop the RPC server first: it's the main thing that services DB reads on
     // its worker threads, and its stop() closes the acceptor to unblock cleanly.
-    // (We deliberately do NOT call webServer.stop() here - it joins a thread
-    // blocked in a plain accept() with no unblock, so it would HANG shutdown; the
-    // web console is torn down by the std::exit(0) below instead. The web console
-    // only does throttled reads, so it's low-risk during the brief checkpoint.)
     if (auto* rpc = main->getRpcServerIfSet()) { try { rpc->stop(); } catch (...) {} }
+    // Then the web console — it also services (throttled) DB reads. WebServer::stop()
+    // wakes its blocked accept() with a throwaway loopback connection, so this joins
+    // promptly instead of hanging as an earlier version did.
+    try { webServer.stop(); } catch (...) {}
     analyzer.stop();                                                                    // joins the analyzer thread
     EventBroadcaster::GetInstance()->stop();
     db->walCheckpoint();                                                                // flush WAL into chain.db
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    // Force exit — detached threads (RPC server, web server) won't hold process
+    // Force exit — any remaining detached threads won't hold the process open
     dashboard.stop();
     std::cout << "\033[?25h" << std::flush;
     std::exit(0);

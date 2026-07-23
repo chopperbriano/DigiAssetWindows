@@ -7,8 +7,8 @@
 // Contains the two background thread bodies (keepalive + permanent fetcher), the
 // HTTP glue to the pool server, cost/enable logic for asset creators, and the
 // bad-list maintenance. Registration + payouts are handled by whichever pool you
-// point psp1server at (the community DigiStamp pool by default, or your own); the
-// legacy /list endpoint is probed only for diagnostics.
+// point psp<index>server at (the community DigiStamp pool by default, or your
+// own); the legacy /list endpoint is probed only for diagnostics.
 //
 
 #include "mctrivia.h"
@@ -28,15 +28,24 @@
 using namespace std;
 
 namespace {
-    // Default base URL for the pool server used when `psp1server` is not set in
-    // config.cfg. mctrivia's DigiAssetX pool (https://ipfs.digiassetx.com)
+    // Default base URL for the pool server used when `psp<index>server` is not set
+    // in config.cfg. mctrivia's DigiAssetX pool (https://ipfs.digiassetx.com)
     // pioneered permanent storage and the payout protocol this builds on - huge
     // credit to that original work. The Windows fork simply defaults to the
     // community DigiStamp pool, and you can point at ANY pool - including your
-    // own - by setting `psp1server` (e.g. `http://127.0.0.1:14028` for a local
-    // DigiAssetPoolServer.exe). Keep this in sync with the wizard default in
-    // src/main.cpp.
+    // own - by setting that pool's server key (e.g. `psp2server=http://127.0.0.1:14028`
+    // for a local DigiAssetPoolServer.exe). Keep this in sync with the wizard
+    // default in src/main.cpp.
     const std::string DEFAULT_POOL_BASE = "https://pool.digistamp.co";
+
+    // Serializes read-modify-write updates to config.cfg. Config::write() rewrites
+    // the whole file, so two pool instances (or the startup path + a fetcher
+    // thread) persisting concurrently could clobber each other's change. Shared by
+    // ALL pool instances/subclasses since a single config.cfg is the resource.
+    std::mutex& configWriteMutex() {
+        static std::mutex m;   // function-local static: constructed on first use, never destroyed
+        return m;
+    }
 }
 
 mctrivia::mctrivia() : _keepRunning(false), _fetcherRunning(false) {}
@@ -69,12 +78,19 @@ string mctrivia::defaultServer() const {
 // Apply the configurable pricing knobs to the raw size-based cost. Defaults
 // (100% / no floor) preserve the historical cheap pricing.
 uint64_t mctrivia::applyPricing(uint64_t baseCost, double exchangeRate) const {
-    if (baseCost == 0) return 0;
+    // Scale the size-based cost by the operator's percentage (100 = unchanged).
+    // Note we do NOT short-circuit on baseCost==0: an operator who set a minimum
+    // floor still expects it applied to a zero-size issuance (L2).
     uint64_t cost = static_cast<uint64_t>(baseCost * (_costPercent / 100.0));
     if (_minCostUsdCents > 0) {
-        // exchangeRate is DGB sats per USD; convert the cents floor to sats.
-        uint64_t minSat = static_cast<uint64_t>(ceil(_minCostUsdCents / 100.0 * exchangeRate));
-        if (cost < minSat) cost = minSat;
+        if (exchangeRate > 0.0) {
+            // exchangeRate is DGB sats per USD; convert the cents floor to sats.
+            uint64_t minSat = static_cast<uint64_t>(ceil(_minCostUsdCents / 100.0 * exchangeRate));
+            if (cost < minSat) cost = minSat;
+        }
+        // If the exchange rate is unavailable (<=0) we can't convert the cents
+        // floor to sats, so leave `cost` unchanged rather than dividing by / scaling
+        // against a bogus rate (L3). enable() still floors the output to DIGIBYTE_DUST.
     }
     return cost;
 }
@@ -172,11 +188,13 @@ void mctrivia::enable(DigiByteTransaction& tx) {
     tx.addDigiByteOutput(outputAddress, cost);
 }
 /**
- * Loads this pool's configuration from config.cfg. Reads visibility
- * (psp1visible), the pool server base URL (psp1server, trailing slashes
- * stripped), a persistent node identity (psp1secret, generated and written back
- * on first run), and the permanent-list walker page (psp1permanentpage).
- * Side effect: may write a freshly generated psp1secret back to config.cfg.
+ * Loads this pool's configuration from config.cfg. All keys use this pool's
+ * own psp<index> prefix (configPrefix()), so e.g. the DigiStamp pool at index 2
+ * reads psp2visible/psp2server/psp2secret/psp2permanentpage. Reads visibility,
+ * the pool server base URL (trailing slashes stripped), a persistent node
+ * identity (generated and written back on first run), and the permanent-list
+ * walker page. Side effect: may write a freshly generated psp<index>secret back
+ * to config.cfg.
  */
 void mctrivia::_setConfig(const Config& config) {
     _visible = config.getBool(configPrefix() + "visible", true);
@@ -198,6 +216,7 @@ void mctrivia::_setConfig(const Config& config) {
     if (_secretCode.empty()) {
         _secretCode = utils::generateRandom(8, utils::CodeType::ALPHANUMERIC);
         try {
+            std::lock_guard<std::mutex> cfgLock(configWriteMutex());
             Config writable("config.cfg");
             writable.setString(configPrefix() + "secret", _secretCode);
             writable.write();
@@ -283,7 +302,7 @@ void mctrivia::keepAliveTask() {
  *
  * This is the core "what should this node pin" signal in mctrivia's protocol,
  * and the pinning is genuinely useful work regardless of which pool handles
- * registration + payouts (that's whatever pool you point psp1server at).
+ * registration + payouts (that's whatever pool you point psp<index>server at).
  */
 void mctrivia::permanentFetcherTask() {
     Log* log = Log::GetInstance();
@@ -300,6 +319,7 @@ void mctrivia::permanentFetcherTask() {
             if (done) {
                 _permanentPage++;
                 try {
+                    std::lock_guard<std::mutex> cfgLock(configWriteMutex());
                     Config writable("config.cfg");
                     writable.setInteger(configPrefix() + "permanentpage", static_cast<int>(_permanentPage));
                     writable.write();
@@ -321,7 +341,7 @@ void mctrivia::permanentFetcherTask() {
 
         // Probe the /list endpoint once per 3 iterations (~30 min). Purely
         // diagnostic: registration + payouts are handled by whichever pool you
-        // point psp1server at, so this legacy endpoint's response just drives a
+        // point psp<index>server at, so this legacy endpoint's response just drives a
         // dashboard indicator - if it responds, the dashboard reflects it with no
         // client update. Wrapped in its own try/catch so a transport error can
         // never take down the fetcher thread.
@@ -642,7 +662,12 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
 bool mctrivia::isAssetBad(const std::string& assetId) {
     //make sure bad list is populated(there are known bad assets so an empty list means we have not checked yet)
     unsigned int currentTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    if (currentTime - _badTime > 1200) updateBadList();
+    bool needsRefresh;
+    {
+        std::lock_guard<std::mutex> lock(_badListMutex);   // read _badTime under the lock (no torn read)
+        needsRefresh = (currentTime - _badTime > 1200);
+    }
+    if (needsRefresh) updateBadList();   // takes _badListMutex itself - must NOT be holding it here
 
     //see if assetIndex in bad list
     std::lock_guard<std::mutex> lock(_badListMutex);

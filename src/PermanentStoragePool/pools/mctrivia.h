@@ -2,10 +2,14 @@
 // Created by mctrivia on 04/11/23.
 //
 //
-// mctrivia.h - the networked "MCTrivia's PSP" Permanent Storage Pool.
+// mctrivia.h - the base networked Permanent Storage Pool client.
 //
-// Talks to a pool server over HTTP (base URL from config key `psp1server`,
-// defaulting to the DigiStamp pool). Two background threads do the real work:
+// This is the shared base for every networked pool (the deprecated psp1 mctrivia
+// slot, the psp2 DigiStamp pool, and psp3 custompool); each subclass just supplies
+// its own identity/default server. All config keys use this pool's own psp<index>
+// prefix (configPrefix()) - so e.g. the DigiStamp pool at index 2 reads psp2server.
+// Talks to a pool server over HTTP (base URL from `psp<index>server`, defaulting
+// to the DigiStamp pool). Two background threads do the real work:
 //   - keepAliveTask: periodically pings the server so this node stays visible
 //     on the public node map.
 //   - permanentFetcherTask: walks /permanent/<page>.json, pins every listed CID
@@ -69,16 +73,16 @@ private:
     std::thread _permanentFetcherThread;
     std::atomic<bool> _fetcherRunning;
 
-    // Persistent identity. Read from config key `psp1secret`; generated and
+    // Persistent identity. Read from config key `psp<index>secret`; generated and
     // written back to config.cfg on first run. Previously regenerated every
     // startup, which made the node look like a new identity on every restart.
     std::string _secretCode;
 
-    // Base URL for the pool server. Read from config key `psp1server`,
-    // defaults to mctrivia's original server so upstream behavior is
-    // preserved. Users who want to use a different pool (e.g. a local
-    // DigiAssetPoolServer.exe running on the same machine) just set
-    //   psp1server=http://127.0.0.1:14028
+    // Base URL for the pool server. Read from config key `psp<index>server`,
+    // defaults to the pool's defaultServer() (DigiStamp for mctrivia/digistamp).
+    // Users who want to use a different pool (e.g. a local DigiAssetPoolServer.exe
+    // running on the same machine) just set, for the DigiStamp slot,
+    //   psp2server=http://127.0.0.1:14028
     // in their config.cfg.
     std::string _baseUrl;
 

@@ -16,12 +16,22 @@
 #include <string>
 #include <vector>
 
-// Load a JSON fixture. Tests are normally run from the tests/ dir, but CI may
-// run from the repo root - try a few CWD-relative locations.
+// Load a JSON fixture named relative to the chain-split fixture directory
+// (e.g. "scriptpubkey/v8-v9-address-singular.json"). Resolution order:
+//   1. CHAIN_SPLIT_FIXTURE_DIR - an absolute path baked in by CMake, so the test
+//      passes no matter what CWD it is launched from (ctest / VS / a raw run out
+//      of build/tests/Release each have a different CWD).
+//   2. A few CWD-relative locations, as a fallback for ad-hoc/other build setups.
 static bool loadJson(const std::string& rel, Json::Value& out) {
-    const char* prefixes[] = {"", "tests/", "../tests/"};
-    for (const char* p : prefixes) {
-        std::ifstream f(std::string(p) + rel, std::ios::binary);
+    std::vector<std::string> candidates;
+#ifdef CHAIN_SPLIT_FIXTURE_DIR
+    candidates.push_back(std::string(CHAIN_SPLIT_FIXTURE_DIR) + "/" + rel);
+#endif
+    const char* prefixes[] = {"", "tests/", "../tests/", "../../tests/", "../../../tests/"};
+    for (const char* p : prefixes) candidates.push_back(std::string(p) + "fixtures/chain-split-2026/" + rel);
+
+    for (const std::string& path : candidates) {
+        std::ifstream f(path, std::ios::binary);
         if (!f.good()) continue;
         Json::CharReaderBuilder b;
         std::string errs;
@@ -30,9 +40,9 @@ static bool loadJson(const std::string& rel, Json::Value& out) {
     return false;
 }
 
-static const char* kSpkV8 = "fixtures/chain-split-2026/scriptpubkey/v8-v9-address-singular.json";
-static const char* kSpkV7 = "fixtures/chain-split-2026/scriptpubkey/v7-addresses-plural.json";
-static const char* kGroestl = "fixtures/chain-split-2026/groestl-blocks/block-23751096.json";
+static const char* kSpkV8 = "scriptpubkey/v8-v9-address-singular.json";
+static const char* kSpkV7 = "scriptpubkey/v7-addresses-plural.json";
+static const char* kGroestl = "groestl-blocks/block-23751096.json";
 
 // #4 - v8/8.22+ singular "address" is extracted.
 TEST(ChainSplit2026, ScriptPubKey_v8v9_SingularAddress) {

@@ -8,10 +8,16 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
-#include <execinfo.h>
 #include <string>
-#include <unistd.h>
 #include <vector>
+
+// execinfo.h/unistd.h (backtrace, STDERR_FILENO) are POSIX-only. On Windows/MSVC
+// they don't exist, so the terminate handler below degrades to a plain abort()
+// there. The backtrace is a Linux debugging aid, not required for correctness.
+#ifndef _WIN32
+#include <execinfo.h>
+#include <unistd.h>
+#endif
 
 using namespace std;
 
@@ -20,9 +26,11 @@ namespace {
     //failed" during process exit) print WHERE it was thrown from before aborting -
     //the default terminate gives no backtrace which made that flake undebuggable
     [[noreturn]] void printBacktraceAndAbort() {
+#ifndef _WIN32
         void* frames[64];
         int count = backtrace(frames, 64);
         backtrace_symbols_fd(frames, count, STDERR_FILENO);
+#endif
         abort();
     }
     struct TerminateDiagnosticInstaller {

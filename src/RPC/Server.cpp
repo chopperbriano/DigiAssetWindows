@@ -162,15 +162,16 @@ namespace RPC {
             boost::asio::ip::address bindIp = boost::asio::ip::make_address(bindAddr, bindEc);
             if (bindEc) bindIp = boost::asio::ip::make_address("127.0.0.1");
             tcp::endpoint endpoint(bindIp, _port);
-            log->addMessage("RPC::Server ctor: opening acceptor on port " + std::to_string(_port), Log::INFO);
+            // Play-by-play trace of the acceptor setup. These were INFO while we
+            // were diagnosing the boost::asio stub silently no-op'ing socket ops;
+            // now demoted to DEBUG so a normal startup isn't noisy. The one
+            // human-relevant line ("RPC Server listening on port N") stays below.
+            log->addMessage("RPC::Server ctor: opening acceptor on port " + std::to_string(_port), Log::DEBUG);
             _acceptor.open(endpoint.protocol());
-            log->addMessage("RPC::Server ctor: open() returned", Log::INFO);
             _acceptor.set_option(tcp::acceptor::reuse_address(true));
-            log->addMessage("RPC::Server ctor: set_option() returned", Log::INFO);
             _acceptor.bind(endpoint);
-            log->addMessage("RPC::Server ctor: bind() returned", Log::INFO);
             _acceptor.listen();
-            log->addMessage("RPC::Server ctor: listen() returned", Log::INFO);
+            log->addMessage("RPC::Server ctor: bound + listening", Log::DEBUG);
 
             // Ask boost what it thinks the acceptor is bound to. If listen
             // succeeded but the endpoint is bogus or the native socket is
@@ -181,7 +182,7 @@ namespace RPC {
                 oss << "RPC::Server ctor: local_endpoint = " << le.address().to_string()
                     << ":" << le.port() << " is_open=" << _acceptor.is_open()
                     << " native=" << (long long)_acceptor.native_handle();
-                log->addMessage(oss.str(), Log::INFO);
+                log->addMessage(oss.str(), Log::DEBUG);
             } catch (const std::exception& e) {
                 log->addMessage(std::string("RPC::Server ctor: local_endpoint() threw: ") + e.what(), Log::CRITICAL);
             }
@@ -227,28 +228,33 @@ namespace RPC {
     }
 
     /**
-     * Enters the blocking accept loop (accept()). Returns only when the loop
-     * exits — i.e. the listening socket has died and the server can no longer
-     * receive requests. On exit it logs CRITICAL and clears AppMain's RPC
-     * server pointer so the dashboard reports RPC as down rather than showing a
-     * stale "up" from a dangling pointer.
+     * Launches the accept loop on this Server's OWN _acceptThread and returns
+     * immediately (non-blocking). Owning the thread here — rather than having the
+     * caller run start() on a detached thread — is what lets stop() join it
+     * deterministically instead of orphaning it. The thread runs accept() until
+     * the listening socket dies (natural failure) or stop() closes the acceptor.
+     * On a NATURAL death it clears AppMain's RPC pointer so the dashboard reports
+     * RPC down; on a stop()-initiated close it does NOT touch that pointer, since
+     * shutdown owns the pointer's lifetime and clearing it would race teardown.
      */
     void Server::start() {
-        Log* log = Log::GetInstance();
-        try {
-            accept();
-        } catch (const std::exception& e) {
-            log->addMessage(std::string("RPC server stopped: ") + e.what(), Log::CRITICAL);
-        } catch (...) {
-            log->addMessage("RPC server stopped with unknown error", Log::CRITICAL);
-        }
-        // start() returning means accept() exited, which means the whole
-        // accept loop is dead and this server will never receive another
-        // request. Clear the AppMain pointer so the dashboard can report
-        // honestly that RPC is down, instead of showing a stale green
-        // "Port 14024" from a dangling raw pointer that used to be alive.
-        log->addMessage("RPC Server accept loop exited (socket closed)", Log::CRITICAL);
-        AppMain::GetInstance()->setRpcServer(nullptr);
+        _acceptThread = std::thread([this] {
+            Log* log = Log::GetInstance();
+            try {
+                accept();
+            } catch (const std::exception& e) {
+                log->addMessage(std::string("RPC server stopped: ") + e.what(), Log::CRITICAL);
+            } catch (...) {
+                log->addMessage("RPC server stopped with unknown error", Log::CRITICAL);
+            }
+            // Only report "socket died" when the loop ended on its own. If stop()
+            // closed the acceptor we're in a controlled shutdown — leave the
+            // AppMain pointer alone so we don't race main's teardown of it.
+            if (!_stopRequested) {
+                log->addMessage("RPC Server accept loop exited (socket closed)", Log::CRITICAL);
+                AppMain::GetInstance()->setRpcServer(nullptr);
+            }
+        });
     }
 
     /**

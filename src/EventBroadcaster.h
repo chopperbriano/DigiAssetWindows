@@ -5,6 +5,7 @@
 #ifndef DIGIASSET_CORE_EVENTBROADCASTER_H
 #define DIGIASSET_CORE_EVENTBROADCASTER_H
 
+#include <atomic>
 #include <boost/asio.hpp>
 #include <memory>
 #include <mutex>
@@ -39,7 +40,7 @@ private:
     std::vector<std::shared_ptr<boost::asio::ip::tcp::socket>> _clients;
     std::mutex _clientsMutex;
     std::thread _acceptThread;
-    bool _running = false;
+    std::atomic<bool> _running{false};   // atomic: read/written by the accept thread + the owner
 
     EventBroadcaster() = default;
 

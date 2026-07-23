@@ -119,6 +119,13 @@ add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)
 target_link_libraries(Unit_Tests_run gtest gtest_main)
 
+# Absolute path to the test fixtures so ChainSplitFixtureTest resolves them
+# regardless of the working directory it is launched from (ctest, VS, or a raw
+# run out of build/tests/Release all differ). CWD-relative lookup stays as a
+# fallback inside the test.
+target_compile_definitions(Unit_Tests_run PRIVATE
+    CHAIN_SPLIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/chain-split-2026")
+
 if(WIN32 AND MSVC)
   target_compile_options(Unit_Tests_run PRIVATE /Zc:char8_t-)
   target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")

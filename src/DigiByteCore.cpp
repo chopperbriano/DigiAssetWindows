@@ -99,9 +99,11 @@ void DigiByteCore::setConfig(const std::string& username, const std::string& pas
 }
 
 /**
- * Drops the connection to core
+ * Drops the connection to core. Serialized with sendcommand() via getLock() so a
+ * reset can't free the client while a call is in flight on another thread.
  */
 void DigiByteCore::dropConnection() {
+    std::lock_guard<std::mutex> lock(getLock());
     if (httpClient != nullptr)
         httpClient.reset();
     if (client != nullptr)

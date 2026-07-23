@@ -93,11 +93,22 @@ void WebServer::start() {
     _thread = std::thread(&WebServer::serverLoop, this);
 }
 
-// Requests the accept loop to exit and blocks until the thread joins. Note the
-// loop only observes the stop flag between accepted connections, so this may
-// block until the next request arrives.
+// Requests the accept loop to exit and blocks until the thread joins. The loop
+// spends its time blocked in acceptor.accept(), so simply setting the flag isn't
+// enough — we also make a throwaway loopback connection to wake that accept()
+// call. It then returns, the loop observes _stopRequested, and exits promptly
+// instead of hanging until the next real request arrives.
 void WebServer::stop() {
     _stopRequested = true;
+    if (_running) {
+        try {
+            net::io_context ioc{1};
+            tcp::socket s{ioc};
+            tcp::endpoint ep{net::ip::make_address("127.0.0.1"), _port};
+            beast::error_code ec;
+            s.connect(ep, ec); // best-effort nudge; ignore errors (loop exits on the flag anyway)
+        } catch (...) {}
+    }
     if (_thread.joinable()) {
         _thread.join();
     }

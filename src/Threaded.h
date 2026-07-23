@@ -15,6 +15,7 @@
 
 
 
+#include <atomic>
 #include <future>
 #include <thread>
 #include <vector>
@@ -24,8 +25,10 @@
 // start()/stop() concurrently; intended to be driven from a single owner.
 class Threaded {
     std::thread _thread;
-    volatile bool _running = false;
-    volatile bool _stopRequest = false;
+    // atomic (not volatile - volatile is not a threading primitive) so the flags
+    // are safely visible across the worker thread and the owner thread.
+    std::atomic<bool> _running{false};
+    std::atomic<bool> _stopRequest{false};
     void _threadFunction();                 // thread entry point: runs the startup/main-loop/shutdown lifecycle
     size_t _parallels = 1;//if task is asynchronous allows running sub threads within thread.
 
@@ -39,6 +42,11 @@ public:
     bool stopRequested();                   // true once stop() has requested shutdown; poll from mainFunction() to exit early
     void start();                           // spawn the worker thread (no-op if already running)
     virtual void stop();                    // request shutdown and block until the worker thread has fully exited
+    // IMPORTANT: ~Threaded() calls the virtual stop(), but during base destruction
+    // the vtable is already the base's, so a subclass override does NOT run. Any
+    // subclass whose stop() joins its OWN extra threads MUST also call stop() in
+    // its own destructor (IPFS and ChainAnalyzer already do). Otherwise its worker
+    // runs against half-destroyed members -> UAF.
     virtual ~Threaded();
 };
 
