@@ -44,14 +44,15 @@ function Check($name,$ok){ if($ok){ $script:pass+=$name; Say "  PASS  $name" 'Gr
 $node = Join-Path $ExeDir 'src\Release\DigiAssetWindows.exe'
 $cli  = Join-Path $ExeDir 'cli\Release\DigiAssetWindows-cli.exe'
 foreach($f in $node,$cli){ if(-not (Test-Path $f)){ throw "missing exe: $f" } }
-if(-not (Test-Path $ChainDb)){ throw "chain.db not found: $ChainDb (pass -ChainDb <path>)" }
-
-# --- Read Core RPC creds from the production config ---
-$prodCfg = Join-Path $ProdDir 'config.cfg'
-if(-not (Test-Path $prodCfg)){ throw "production config.cfg not found: $prodCfg" }
+# --- Read Core RPC creds: prefer the production config.cfg, else digibyte.conf ---
 $cfg = @{}
-Get-Content $prodCfg | ForEach-Object { if($_ -match '^\s*([^#=]+)=(.*)$'){ $cfg[$Matches[1].Trim()]=$Matches[2] } }
-foreach($k in 'rpcuser','rpcpassword','rpcport'){ if(-not $cfg.ContainsKey($k)){ throw "production config.cfg missing $k" } }
+$credSrc = Join-Path $ProdDir 'config.cfg'
+if(-not (Test-Path $credSrc)){ $credSrc = Join-Path $env:APPDATA 'DigiByte\digibyte.conf' }
+if(-not (Test-Path $credSrc)){ throw "no RPC creds source found ($ProdDir\config.cfg or %APPDATA%\DigiByte\digibyte.conf)" }
+Get-Content $credSrc | ForEach-Object { if($_ -match '^\s*([^#=]+)=(.*)$'){ $cfg[$Matches[1].Trim()]=$Matches[2] } }
+if(-not $cfg.ContainsKey('rpcport')){ $cfg['rpcport']='14022' }
+foreach($k in 'rpcuser','rpcpassword'){ if(-not $cfg.ContainsKey($k)){ throw "$credSrc missing $k" } }
+Say "Using Core RPC creds from: $credSrc" 'Gray'
 
 # --- Stop the production node (hardcoded InstanceLock forces this) ---
 $prodRunning = [bool](Get-Process DigiAssetWindows -EA SilentlyContinue)
@@ -73,7 +74,8 @@ if(Test-Path $TestDir){ Remove-Item $TestDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $TestDir | Out-Null
 Copy-Item $node (Join-Path $TestDir 'DigiAssetWindows.exe')
 Copy-Item $cli  (Join-Path $TestDir 'DigiAssetWindows-cli.exe')
-Copy-Item $ChainDb (Join-Path $TestDir 'chain.db')
+if($ChainDb -and (Test-Path $ChainDb)){ Copy-Item $ChainDb (Join-Path $TestDir 'chain.db'); Say "  using chain.db: $ChainDb" 'Gray' }
+else { Say "  no chain.db - node will create a fresh one (smoke only, not a sync test)" 'Yellow' }
 if(Test-Path (Join-Path $ProdDir 'web')){ Copy-Item (Join-Path $ProdDir 'web') $TestDir -Recurse }
 
 $payout = 'dgb1qh9n2zzuhdd37gyrktjam5uju8gy3f5ems4yna3'
@@ -86,7 +88,7 @@ $lines = @(
 )
 [System.IO.File]::WriteAllText((Join-Path $TestDir 'config.cfg'), ($lines -join "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
-function Cli($cmdArgs){ Push-Location $TestDir; $o = (& '.\DigiAssetWindows-cli.exe' @cmdArgs 2>&1 | Out-String); Pop-Location; return $o }
+function RunCli($cmdArgs){ Push-Location $TestDir; $o = (& '.\DigiAssetWindows-cli.exe' @cmdArgs 2>&1 | Out-String); Pop-Location; return $o }
 
 $proc = $null
 try {
@@ -97,18 +99,18 @@ try {
     $up=$false
     for($i=0;$i -lt 90 -and -not $up;$i++){
         Start-Sleep -Seconds 2
-        $r = Cli @('getblockcount')
+        $r = RunCli @('getblockcount')
         if($r -match '\d'){ $up=$true }
     }
     Check "node starts + asset RPC answers" $up
     if($up){
         # getnewaddress -> expect an address (needs a loaded wallet on Core)
-        $o = Cli @('getnewaddress'); Check "getnewaddress returns an address" ($o -match '(dgb1|D|S)[0-9A-Za-z]{20,}')
+        $o = RunCli @('getnewaddress'); Check "getnewaddress returns an address" ($o -match '(dgb1|D|S)[0-9A-Za-z]{20,}')
         # getwalletbalances -> registered
-        $o = Cli @('getwalletbalances'); Check "getwalletbalances registered" ($o -notmatch '(?i)method not found|unknown method')
+        $o = RunCli @('getwalletbalances'); Check "getwalletbalances registered" ($o -notmatch '(?i)method not found|unknown method')
         # mutating methods: registration probe only (no valid args -> param error, NOT method-not-found)
         foreach($m in 'issueasset','reissueasset','burnasset','sendasset','sendmanyassets'){
-            $o = Cli @($m); Check "$m registered (dispatches, not method-not-found)" ($o -notmatch '(?i)method not found|unknown method')
+            $o = RunCli @($m); Check "$m registered (dispatches, not method-not-found)" ($o -notmatch '(?i)method not found|unknown method')
         }
         # event stream: TCP connect
         $tcpOk=$false; $tcp=$null
@@ -123,7 +125,7 @@ try {
 }
 finally {
     Say "Stopping test node..." 'Cyan'
-    try{ Cli @('shutdown') | Out-Null }catch{}
+    try{ RunCli @('shutdown') | Out-Null }catch{}
     if($proc){ for($i=0;$i -lt 20 -and (Get-Process -Id $proc.Id -EA SilentlyContinue);$i++){ Start-Sleep -Milliseconds 500 }
                if(Get-Process -Id $proc.Id -EA SilentlyContinue){ Stop-Process -Id $proc.Id -Force -EA SilentlyContinue } }
     $prodNode = Join-Path $ProdDir 'DigiAssetWindows.exe'
