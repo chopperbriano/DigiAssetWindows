@@ -1,0 +1,62 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="issueasset">
+<h1 class="title">issueasset</h1>
+<p><tt class="docutils literal">issueasset {"name":...,"amount":...,...}</tt></p>
+<p>Creates (issues) a new DigiAsset. The asset's metadata is published to IPFS and the issuance transaction is funded, signed and broadcast by the wallet. By default the metadata is stored in the public permanent storage pool, which charges $1.20 USD per MB, paid in DGB as an extra output on the issuance. A single object argument describes the asset; only "name" and "amount" are required.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<p>Takes exactly one object argument. Its members are:</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>(object)</td><td>object</td><td>required</td><td>An object describing the asset (see members below).</td></tr>
+<tr><td>&nbsp;</td><td>name</td><td>string</td><td>required</td><td>Asset name (must be non-empty).</td></tr>
+<tr><td>&nbsp;</td><td>amount</td><td>numeric or string</td><td>required</td><td>Number of assets to create in display units.</td></tr>
+<tr><td>&nbsp;</td><td>decimals</td><td>numeric</td><td>optional</td><td>Number of decimal places, 0 to 7. Defaults to 0.</td></tr>
+<tr><td>&nbsp;</td><td>locked</td><td>boolean</td><td>optional</td><td>True (default) means no more can ever be issued.</td></tr>
+<tr><td>&nbsp;</td><td>aggregation</td><td>string</td><td>optional</td><td>One of "aggregable" (default), "hybrid" or "dispersed".</td></tr>
+<tr><td>&nbsp;</td><td>description</td><td>string</td><td>optional</td><td>Description stored in the metadata.</td></tr>
+<tr><td>&nbsp;</td><td>urls</td><td>array</td><td>optional</td><td>Array of url objects ({"name":..,"url":..,"mimeType":..}) stored in the metadata.</td></tr>
+<tr><td>&nbsp;</td><td>userData</td><td>object</td><td>optional</td><td>Any extra data to store in the metadata.</td></tr>
+<tr><td>&nbsp;</td><td>toAddress</td><td>string</td><td>optional</td><td>Address or domain the new assets should be sent to. Defaults to a new wallet address.</td></tr>
+<tr><td>&nbsp;</td><td>metadata</td><td>object</td><td>optional</td><td>Advanced: a full metadata object to publish as is. When used, name/description/urls/userData are ignored.</td></tr>
+<tr><td>&nbsp;</td><td>psp</td><td>bool, numeric or array</td><td>optional</td><td>Which permanent storage pool(s) store the metadata. true = the public pool (default), false = no pool, an integer = a single pool index (see getpsp), or an array of integers for several pools.</td></tr>
+<tr><td>&nbsp;</td><td>rules</td><td>object</td><td>optional</td><td>Restrictions encoded with the asset. Supports changeable, approval, royalty, kyc, geofence, voting, expiry and deflation.</td></tr>
+<tr><td>&nbsp;</td><td>dryrun</td><td>boolean</td><td>optional</td><td>If true, build everything and return the cost breakdown WITHOUT broadcasting (the metadata is still published to the local IPFS node so storage can be priced). Defaults to false.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>By default an object identifying the newly created asset. When "dryrun" is true, a cost-breakdown object is returned instead.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>txid</td><td>string</td><td>Transaction id of the issuance transaction.</td></tr>
+<tr><td>assetId</td><td>string</td><td>Id of the newly created asset (empty if it must be looked up once the tx confirms).</td></tr>
+<tr><td>cid</td><td>string</td><td>IPFS cid of the published metadata.</td></tr>
+<tr><td>(dryrun)</td><td>object</td><td>Dry run only. Instead of the above, an object with cid, assetOutputs, ruleOutputs, pspFee, estimatedMinerFee, estimatedTotal (decimal DGB strings) and a sats object with the same figures in sats.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe issueasset "{\"name\":\"MyToken\",\"amount\":1000,\"decimals\":2}"
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "issueasset", "params": [{"name": "MyToken", "amount": 1000, "decimals": 2}]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

@@ -1,0 +1,52 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="sendasset">
+<h1 class="title">sendasset</h1>
+<p><tt class="docutils literal">sendasset address asset amount ( options )</tt></p>
+<p>Sends DigiAssets from the wallet to an address. The wallet picks which asset UTXOs to spend, returns any asset change (of this or other assets carried on the same UTXOs) back to the wallet, and pays the transaction fee in DigiByte. Use sendtoaddress, not this method, to send DigiByte (assetIndex 1).</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>address</td><td>string</td><td>required</td><td>Recipient address or DigiByte domain.</td></tr>
+<tr><td>2</td><td>asset</td><td>string or numeric</td><td>required</td><td>Asset to send, given as an assetId (string) or assetIndex (integer). Assets with more than one index (unlocked assets whose id does not start with "Ua") must be identified by assetIndex.</td></tr>
+<tr><td>3</td><td>amount</td><td>numeric or string</td><td>required</td><td>Amount to send in display units (an integer, decimal number, or numeric string).</td></tr>
+<tr><td>4</td><td>options</td><td>object</td><td>optional</td><td>Object with optional members: "changeAddress" (string) the address asset change should go to, defaulting to a new wallet change address; "dryrun" (bool, default false) build the transaction and return the cost breakdown WITHOUT broadcasting.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>By default the txid (string) of the broadcast transaction. When "dryrun" is true, an object describing the cost is returned instead of broadcasting.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>txid</td><td>string</td><td>Transaction id of the broadcast send (default response).</td></tr>
+<tr><td>outputs</td><td>string</td><td>Dry run only. Total value of the transaction outputs in decimal DGB.</td></tr>
+<tr><td>estimatedMinerFee</td><td>string</td><td>Dry run only. Estimated miner fee in decimal DGB.</td></tr>
+<tr><td>estimatedTotal</td><td>string</td><td>Dry run only. Estimated total cost (outputs plus miner fee) in decimal DGB.</td></tr>
+<tr><td>sats</td><td>object</td><td>Dry run only. The same "outputs" and "estimatedMinerFee" figures expressed in sats.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe sendasset dgb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 La5PefА7Rxs7mrvyv9nJ 25
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "sendasset", "params": ["dgb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "La5PefА7Rxs7mrvyv9nJ", 25]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

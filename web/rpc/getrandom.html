@@ -1,0 +1,48 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="getrandom">
+<h1 class="title">getrandom</h1>
+<p><tt class="docutils literal">getrandom txid vout ( outOf ) | height ( outOf )</tt></p>
+<p>Returns a provably fair pseudo-random number for a transaction output or a block. The number is derived by SHA256-hashing the identifier together with the hashes of the 10 blocks up to and including its confirming block, then reducing the digest modulo an optional "out of" bound. Because every input is fixed on-chain data, callers can independently reproduce and verify the result. The confirming block must have at least 2 confirmations, and this only works if the underlying data has not been pruned.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<p>Two usages are supported. Usage 1 hashes a transaction output (first argument is a 64-character txid string); Usage 2 hashes a block (first argument is a block height integer).</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>txid / height</td><td>string or numeric</td><td>required</td><td>A 64-character txid (Usage 1) or a block height (Usage 2).</td></tr>
+<tr><td>2</td><td>vout / outOf</td><td>numeric</td><td>see description</td><td>Usage 1: vout, the output index within the txid (required). Usage 2: outOf, the exclusive upper bound the result is reduced modulo (optional, defaults to the maximum 64-bit unsigned integer).</td></tr>
+<tr><td>3</td><td>outOf</td><td>numeric</td><td>optional</td><td>Usage 1 only. The exclusive upper bound the result is reduced modulo. Defaults to the maximum 64-bit unsigned integer.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>The provably fair pseudo-random number.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>(result)</td><td>numeric</td><td>An unsigned 64-bit integer in the range 0 to outOf-1 (or 0 to 2^64-1 when no bound is given).</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe getrandom e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 100
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getrandom", "params": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0, 100]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

@@ -1,0 +1,46 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="sendmanyassets">
+<h1 class="title">sendmanyassets</h1>
+<p><tt class="docutils literal">sendmanyassets sends ( options )</tt></p>
+<p>Sends DigiAssets to several recipients in a single transaction. The wallet picks which asset UTXOs to spend, sends all asset change back to the wallet, and pays the transaction fee in DigiByte. Up to 31 send entries are allowed (the protocol requires asset outputs to sit in the first 32 outputs).</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>sends</td><td>array</td><td>required</td><td>Array of 1 to 31 objects, one per recipient. Each object has "address" (string, recipient address or DigiByte domain), "asset" (assetId string or assetIndex integer; assets with more than one index must use assetIndex) and "amount" (integer, decimal number or numeric string, in display units).</td></tr>
+<tr><td>2</td><td>options</td><td>object</td><td>optional</td><td>Object with optional member "changeAddress" (string) the address asset change should go to, defaulting to a new wallet change address.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>The txid of the broadcast transaction.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>txid</td><td>string</td><td>Transaction id of the broadcast transaction.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe sendmanyassets "[{\"address\":\"dgb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\",\"asset\":\"La5PefА7Rxs7mrvyv9nJ\",\"amount\":10},{\"address\":\"dgb1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq\",\"asset\":\"La5PefА7Rxs7mrvyv9nJ\",\"amount\":5}]"
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "sendmanyassets", "params": [[{"address": "dgb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "asset": "La5PefА7Rxs7mrvyv9nJ", "amount": 10}, {"address": "dgb1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", "asset": "La5PefА7Rxs7mrvyv9nJ", "amount": 5}]]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

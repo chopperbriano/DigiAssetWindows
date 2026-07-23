@@ -1,0 +1,47 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="getwalletbalances">
+<h1 class="title">getwalletbalances</h1>
+<p><tt class="docutils literal">getwalletbalances ( minconf )</tt></p>
+<p>Returns the wallet's spendable DigiByte balance together with every DigiAsset it holds, aggregated across all wallet UTXOs. Use getassetdata with an assetIndex to look up an asset's name and other metadata.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>minconf</td><td>numeric</td><td>optional</td><td>Minimum number of confirmations a UTXO needs before it is counted. Must be a non-negative integer. Defaults to 1.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>An object with the wallet's DigiByte balance and an array of the assets it holds. Note that the DigiByte total includes DigiByte locked in asset UTXOs, so the freely spendable amount will be less.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>digibyte.sats</td><td>numeric</td><td>DigiByte balance in sats (includes DigiByte locked in asset UTXOs).</td></tr>
+<tr><td>digibyte.amount</td><td>string</td><td>The same DigiByte balance in decimal DGB.</td></tr>
+<tr><td>assets</td><td>array</td><td>One entry per distinct asset held. Each entry has assetIndex (numeric), assetId (string), cid (string, the IPFS cid of the asset's metadata), decimals (numeric), count (numeric, amount held in smallest divisible units) and amount (string, amount held in display units).</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe getwalletbalances 6
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getwalletbalances", "params": [6]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

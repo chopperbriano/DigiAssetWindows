@@ -1,0 +1,49 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+</head>
+<body>
+<div class="document" id="reissueasset">
+<h1 class="title">reissueasset</h1>
+<p><tt class="docutils literal">reissueasset asset amount ( options )</tt></p>
+<p>Issues more of an existing UNLOCKED asset. The wallet must control the address the asset was originally issued from, and that address must hold at least one DigiByte-only UTXO, because the assetId is derived from the first input and the reissuance must spend from the issuer address (send a little DGB there first if it has no coins). The reissuance reuses the existing metadata and keeps the asset's existing rules.</p>
+<div class="section" id="arguments">
+<h1>Arguments</h1>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">#</th><th class="head">Name</th><th class="head">Type</th><th class="head">Required</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>1</td><td>asset</td><td>string or numeric</td><td>required</td><td>The unlocked asset to reissue, given as an assetId (string) or assetIndex (integer).</td></tr>
+<tr><td>2</td><td>amount</td><td>numeric or string</td><td>required</td><td>Additional assets to create in display units (an integer, decimal number, or numeric string).</td></tr>
+<tr><td>3</td><td>options</td><td>object</td><td>optional</td><td>Object with optional members: "toAddress" (string) the address or domain the new assets go to, defaulting to a new wallet address; "dryrun" (bool, default false) build the transaction and return the cost breakdown WITHOUT broadcasting.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="result">
+<h1>Result</h1>
+<p>By default an object identifying the reissuance. When "dryrun" is true, a cost-breakdown object is returned instead.</p>
+<table border="1" class="docutils">
+<thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
+<tbody valign="top">
+<tr><td>txid</td><td>string</td><td>Transaction id of the reissuance transaction.</td></tr>
+<tr><td>assetId</td><td>string</td><td>Id of the asset (the same as the original).</td></tr>
+<tr><td>(dryrun)</td><td>object</td><td>Dry run only. Instead of the above, an object with outputs, estimatedMinerFee, estimatedTotal (decimal DGB strings) and a sats object with the same figures in sats.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h1>Examples</h1>
+<pre class="literal-block">
+DigiAssetWindows-cli.exe reissueasset 42 500
+</pre>
+<pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "reissueasset", "params": [42, 500]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre>
+</div>
+</div>
+<script src="/js/main.js"></script>
+<footer class='fixed-bottom'><p class='copyright'>© DigiByte Project — DigiAsset for Windows</p></footer>
+</body>
+</html>

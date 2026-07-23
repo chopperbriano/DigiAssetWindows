@@ -73,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.19.0'
+$SCRIPT_VERSION = '2.20.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -832,6 +832,40 @@ function Start-Node {
     # dashboard runs but never appears on the desktop.
     if (-not (Test-ProcRunning 'DigiAssetWindows')) { Start-Process -FilePath $NodeExe -WorkingDirectory $DigiAssetDir -WindowStyle Normal }
     return $true
+}
+
+# Opens the local web console (live node status dashboard) in the default browser
+# once it is actually serving. The node was started earlier in the install, but
+# its web thread needs a few seconds to bind the socket, so we poll the port for
+# readiness first and don't open a dead tab. Port comes from config.cfg's webport
+# (default 8090). Never fatal - a failure here just means the user opens it by hand.
+function Open-WebConsole {
+    $port = 8090
+    try {
+        if (Test-Path $NodeConfig) {
+            $m = Select-String -Path $NodeConfig -Pattern '^\s*webport\s*=\s*(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($m) { $port = [int]$m.Matches[0].Groups[1].Value }
+        }
+    } catch {}
+    $url = "http://localhost:$port"
+
+    # Poll for the web server (up to ~20s) so the browser lands on a live page.
+    $ready = $false
+    for ($i = 0; $i -lt 40; $i++) {
+        try {
+            $c = New-Object Net.Sockets.TcpClient
+            $iar = $c.BeginConnect('127.0.0.1', $port, $null, $null)
+            if ($iar.AsyncWaitHandle.WaitOne(500) -and $c.Connected) { $ready = $true; $c.Close(); break }
+            $c.Close()
+        } catch {}
+        Start-Sleep -Milliseconds 500
+    }
+
+    try {
+        Start-Process $url
+        if ($ready) { Log "  opened the node status page in your browser: $url" 'OK' }
+        else        { Log "  opened $url - the web server is still starting, refresh if the page is not up yet." 'WARN' }
+    } catch { Log "  could not auto-open the browser - open $url manually to see node status." 'WARN' }
 }
 
 # ---------------------------------------------------------------------------
@@ -1626,6 +1660,10 @@ function Invoke-Install {
     # Durable proof of completion (the window may close; this file + log line stay).
     Log "Install completed successfully (script v$SCRIPT_VERSION)." 'OK'
     try { Set-Content -Path (Join-Path $LogDir 'INSTALL-COMPLETE.txt') -Value ("DigiAsset for Windows install completed - script v$SCRIPT_VERSION - " + (Get-Date).ToString('s')) -Encoding ascii } catch {}
+
+    # Pop the live status page on top of the summary so the user immediately sees
+    # their node coming up. Last action of the install - purely informational.
+    Open-WebConsole
 }
 
 # ---------------------------------------------------------------------------
