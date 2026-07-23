@@ -25,35 +25,42 @@ static_block {
 
 namespace CurlHandler {
     namespace {
-        // Thread-local CURL handle - reused across calls to preserve
-        // WinHTTP session and connection handles (avoids TCP handshake per request)
-        thread_local CURL* tl_curl = nullptr;
+        // Thread-local CURL handle - reused across calls to preserve WinHTTP
+        // session and connection handles (avoids TCP handshake per request).
+        // Wrapped in an RAII holder whose destructor runs at THREAD EXIT, so the
+        // handle (and its persistent WinHTTP session/connection) is freed when a
+        // worker thread ends instead of leaking per thread. (A-M4)
+        struct CurlHandleHolder {
+            CURL* handle = nullptr;
+            ~CurlHandleHolder() { if (handle) curl_easy_cleanup(handle); }
+        };
+        thread_local CurlHandleHolder tl_holder;
 
         // Returns this thread's reusable CURL easy handle, creating it on first
         // use and otherwise resetting all previously-set options (so a prior
         // request's settings don't leak into the next) while keeping the live
         // connection. Returns nullptr only if curl_easy_init() fails.
         CURL* acquireHandle() {
-            if (!tl_curl) {
-                tl_curl = curl_easy_init();
+            if (!tl_holder.handle) {
+                tl_holder.handle = curl_easy_init();
             } else {
-                curl_easy_reset(tl_curl);
+                curl_easy_reset(tl_holder.handle);
             }
-            return tl_curl;
+            return tl_holder.handle;
         }
 
         // Discard this thread's reusable handle so the next acquireHandle() makes
         // a fresh one. This MUST be used instead of a bare curl_easy_cleanup() on
-        // an acquireHandle() handle: cleaning the handle up without nulling
-        // tl_curl leaves a DANGLING thread-local pointer that the very next call
+        // an acquireHandle() handle: cleaning the handle up without nulling the
+        // thread-local pointer leaves a DANGLING handle that the very next call
         // reuses via curl_easy_reset() -> use-after-free -> heap corruption. That
         // was the win.104 crash. Only call after an error/timeout where the
         // handle's state is suspect; a successful transfer keeps the handle for
         // connection reuse.
         void discardHandle() {
-            if (tl_curl) {
-                curl_easy_cleanup(tl_curl);
-                tl_curl = nullptr;
+            if (tl_holder.handle) {
+                curl_easy_cleanup(tl_holder.handle);
+                tl_holder.handle = nullptr;
             }
         }
 

@@ -305,10 +305,12 @@ operators.
    ```
    psp0subscribe=1
    psp0payout=<your DGB address>          # pool 0 = local pool (no server); needs a payout too
-   psp1server=https://pool.digistamp.co   # pool 1 = the pool server you're joining
-   psp1subscribe=1
-   psp1payout=<your DGB address>
+   psp2server=https://pool.digistamp.co   # pool 2 = DigiStamp, the pool you're joining
+   psp2subscribe=1
+   psp2payout=<your DGB address>
    ```
+   (Pool 1 was MCTrivia's PSP — now **deprecated**; new nodes join pool 2,
+   DigiStamp. Existing nodes still on `psp1` keep working.)
    Both pools need a payout address or the node errors with "Could not generate
    new PSP payout address". A `_label` value auto-creates an address, but only if
    a DigiByte wallet is loaded — use a real address to be safe. The installer sets
@@ -327,7 +329,8 @@ operators.
 > protocol that make all of this possible, and huge credit for it. Building on
 > that foundation, this fork ships its own pool server so the **community can run
 > their own paying pools** (like DigiStamp) with full control over registration
-> and payouts. Point your node at whichever pool you like via `psp1server`.
+> and payouts. Point your node at whichever pool you like via `psp2server`
+> (mctrivia's original pool #1 is deprecated; DigiStamp is pool #2).
 
 ### Pool operator — you want to run a pool and pay hosts
 

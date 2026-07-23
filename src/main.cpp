@@ -443,14 +443,22 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    // Graceful shutdown. Order matters: stop the analyzer (joins its thread, so no
-    // more DB writes), stop the event stream, then flush the WAL into chain.db so
-    // the file is complete on its own. The RPC + web servers run on detached
-    // threads and are torn down by the std::exit(0) below.
+    // Graceful shutdown. Order matters: stop EVERYTHING that could still touch the
+    // database (RPC server + web console handle read requests; the analyzer writes)
+    // BEFORE flushing the WAL, so no other thread races the checkpoint or the
+    // process teardown. Then flush the WAL into chain.db so the file is complete on
+    // its own.
     log->addMessage("Shutting down...");
-    analyzer.stop();
+    // Stop the RPC server first: it's the main thing that services DB reads on
+    // its worker threads, and its stop() closes the acceptor to unblock cleanly.
+    // (We deliberately do NOT call webServer.stop() here - it joins a thread
+    // blocked in a plain accept() with no unblock, so it would HANG shutdown; the
+    // web console is torn down by the std::exit(0) below instead. The web console
+    // only does throttled reads, so it's low-risk during the brief checkpoint.)
+    if (auto* rpc = main->getRpcServerIfSet()) { try { rpc->stop(); } catch (...) {} }
+    analyzer.stop();                                                                    // joins the analyzer thread
     EventBroadcaster::GetInstance()->stop();
-    db->walCheckpoint();
+    db->walCheckpoint();                                                                // flush WAL into chain.db
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 

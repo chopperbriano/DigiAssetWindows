@@ -120,10 +120,14 @@ DigiByte Core  →  ChainAnalyzer  →  chain.db (SQLite)  →  asset/UTXO model
   - `pools/local.*` — the **local** pool (`psp0`): no server, no cost. Records
     opt-in CIDs and bad-asset ids in a small `local.db`. Content survives only as
     long as this node runs.
-  - `pools/mctrivia.*` — the **networked DigiStamp pool** (`psp1`). Talks to a
-    pool server over HTTP (`psp1server`, default `https://pool.digistamp.co`).
-    Two threads: `keepAliveTask` (stay visible on the node map) and
-    `permanentFetcherTask` (walk `/permanent/<page>.json`, pin every listed CID).
+  - `pools/mctrivia.*` — the networked HTTP pool client. Two threads:
+    `keepAliveTask` (stay visible on the node map) and `permanentFetcherTask`
+    (walk `/permanent/<page>.json`, pin every listed CID). It backs **`psp1`**
+    (mctrivia's original PSP — now **deprecated**) as well as the **DigiStamp
+    pool** at **`psp2`** (`psp2server`, default `https://pool.digistamp.co`), the
+    pool new nodes join.
+  - `pools/digistamp.*` — the DigiStamp pool client at **`psp2`**, and
+    `pools/custompool.*` — the spare custom pool slot at **`psp3`**.
     **Design note:** mctrivia's protocol included an on-chain fee-matching payment
     path; in this fork payouts run through the pool server instead, so
     `serializeMetaProcessor` is retired and the legacy `/list` endpoint is probed
@@ -240,21 +244,25 @@ Two top-level directories, kept deliberately separate:
   `poolpayouts`, `ipfspath`, donation/RPC info for the stats page).
 - `pool.db` — the pool's SQLite state.
 
-### The psp0 vs psp1 model
+### The pool model (psp0–psp3)
 
-Every node always has **two** Permanent Storage Pools, addressed by index:
+Every node has **four** Permanent Storage Pool slots, addressed by index. Pool 0
+is always on; pools 1–3 are networked HTTP pools that are opt-in per node:
 
-| Index | Name       | Backing                | Cost | Persistence |
-|-------|------------|------------------------|------|-------------|
-| `psp0` | **local**  | `local.db`, no server  | free | only while this node runs |
-| `psp1` | **DigiStamp pool** | HTTP pool server (`psp1server`, default `https://pool.digistamp.co`) | (payments currently unavailable) | as long as the pool + its nodes pin it |
+| Index | Name       | Backing                | Notes |
+|-------|------------|------------------------|-------|
+| `psp0` | **local**  | `local.db`, no server  | free; content survives only while this node runs |
+| `psp1` | **MCTrivia's PSP** | HTTP pool server (`psp1server`) | **DEPRECATED** — superseded by DigiStamp (psp2). Existing nodes on it keep working; new nodes leave it unsubscribed (`psp1subscribe=0`) |
+| `psp2` | **DigiStamp pool** | HTTP pool server (`psp2server`, default `https://pool.digistamp.co`) | the pool new nodes join |
+| `psp3` | **custom pool** | HTTP pool server (`psp3server`) | spare slot, inert until you configure + subscribe it |
 
-Each pool has `psp<N>subscribe`, `psp<N>payout` (both pools need a payout address
-or the node errors), and `psp<N>autoremovebad`. `psp1` additionally has
-`psp1server`, `psp1visible` (show on the pool world map), `psp1secret` (per-node
-identity, auto-generated — never copy between nodes), and `psp1permanentpage`
-(permanent-list cursor). To point a node at a locally-run
-`DigiAssetPoolServer.exe`, set `psp1server=http://127.0.0.1:14028`.
+Each pool has `psp<N>subscribe`, `psp<N>payout` (every subscribed pool needs a
+payout address or the node errors), and `psp<N>autoremovebad`. The networked
+pools (1–3) additionally have `psp<N>server`, `psp<N>visible` (show on the pool
+world map), `psp<N>secret` (per-node identity, auto-generated — never copy
+between nodes), and `psp<N>permanentpage` (permanent-list cursor). To point a
+node at a locally-run `DigiAssetPoolServer.exe`, set
+`psp2server=http://127.0.0.1:14028`. See `example.cfg` for all four pools.
 
 ---
 

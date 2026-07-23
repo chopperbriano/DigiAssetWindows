@@ -282,7 +282,7 @@ Do this once you have pool #1 already running (sections 1-6 above).
    merged `network` view, and permanent-list convergence. Green = the pools are
    aware of each other. A fresh pair may show "still converging" until the first
    ~15-min sync completes.
-7. **Point nodes + fund each treasury.** Point some nodes' `psp1server` at pool A,
+7. **Point nodes + fund each treasury.** Point some nodes' `psp2server` at pool A,
    some at pool B, and fund each pool's own `pooldonationaddress`. Each pool pays
    its own nodes; the dedup stops an operator served by both from being paid twice.
 

@@ -136,6 +136,19 @@ PermanentStoragePool* PermanentStoragePoolList::getPool(unsigned int poolIndex) 
 }
 
 /**
+ * Returns the first SUBSCRIBED non-local pool - the networked pool this node
+ * actually joined (psp1/mctrivia on legacy nodes, psp2/digistamp on new ones).
+ * Lets the dashboard follow whichever pool the operator is on instead of a
+ * hardcoded index. Returns nullptr if the node isn't subscribed to any pool.
+ */
+PermanentStoragePool* PermanentStoragePoolList::getActiveNetworkedPool() {
+    for (unsigned int i = 1; i < _pools.size(); i++) {
+        if (_pools[i]->subscribed()) return _pools[i].get();
+    }
+    return nullptr;
+}
+
+/**
  * Returns how many pools there are
  * @return
  */

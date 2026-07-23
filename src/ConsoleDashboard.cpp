@@ -321,7 +321,7 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("  unavailable (red) = pool /list endpoint is broken or unreachable");
                     log->addMessage("  checking (dim) = first probe hasn't finished yet");
                     log->addMessage("Press N to list the pool's online nodes (IP + peerId) + self-check.");
-                    log->addMessage("Set psp1server=http://... in config.cfg to use a different pool.");
+                    log->addMessage("Set psp2server=http://... in config.cfg to use a different pool.");
                 }
                 break;
             case '5':
@@ -336,7 +336,7 @@ void ConsoleDashboard::processInput() {
                     }
                     log->addMessage("RPC: port 14024 (DigiAssetWindows-cli.exe getnodestats)");
                     log->addMessage("Config: config.cfg in the exe's working directory.");
-                    log->addMessage("  Key settings: rpcuser, rpcpassword, rpcport, psp1server, psp1payout");
+                    log->addMessage("  Key settings: rpcuser, rpcpassword, rpcport, psp2server, psp2payout");
                 }
                 break;
             case '6':
@@ -726,7 +726,10 @@ void ConsoleDashboard::render() {
         // Null-safe: render() runs once on main thread during ConsoleDashboard::start()
         // BEFORE main.cpp's PSP list construction, so we MUST tolerate a null list here.
         auto* pspList = AppMain::GetInstance()->getPermanentStoragePoolListIfSet();
-        auto* poolBase = pspList ? pspList->getPool(1) : nullptr;
+        // Follow whichever networked pool this node actually joined (psp2 DigiStamp
+        // on new nodes, psp1 mctrivia on legacy) - NOT a hardcoded index, or a new
+        // node (on psp2, with psp1 unsubscribed) would show "Starting up" forever.
+        auto* poolBase = pspList ? pspList->getActiveNetworkedPool() : nullptr;
         auto* pool = dynamic_cast<mctrivia*>(poolBase);
 
         // Read the mctrivia pool's health signals ONCE per render. Each getter
@@ -1313,17 +1316,26 @@ void ConsoleDashboard::checkPermanentCoverage() {
 }
 
 /**
- * Returns the configured pool base URL (config key psp1server), falling back to
- * https://pool.digistamp.co and stripping any trailing slashes. Shared by the
- * PSP registration check and the pool-node listing.
+ * Returns the base URL of the pool this node actually joined (its subscribed
+ * networked pool - psp2 DigiStamp on new nodes, psp1 mctrivia on legacy),
+ * falling back to https://pool.digistamp.co and stripping trailing slashes.
+ * Shared by the PSP registration check and the pool-node listing.
  */
 std::string ConsoleDashboard::getConfiguredPoolBase() {
     std::string base;
-    try {
-        Config config("config.cfg");
-        base = config.getString("psp1server", "https://pool.digistamp.co");
-    } catch (...) {
-        base = "https://pool.digistamp.co";
+    auto* pspList = AppMain::GetInstance()->getPermanentStoragePoolListIfSet();
+    auto* pool = pspList ? pspList->getActiveNetworkedPool() : nullptr;
+    if (pool) {
+        base = pool->getURL();
+    } else {
+        // List not built yet, or no pool joined - fall back to the DigiStamp key,
+        // then the legacy key, then the public default.
+        try {
+            Config config("config.cfg");
+            base = config.getString("psp2server", config.getString("psp1server", "https://pool.digistamp.co"));
+        } catch (...) {
+            base = "https://pool.digistamp.co";
+        }
     }
     if (base.empty()) base = "https://pool.digistamp.co";
     while (!base.empty() && base.back() == '/') base.pop_back();
@@ -1422,7 +1434,7 @@ void ConsoleDashboard::listPoolNodes() {
     try {
         resp = CurlHandler::get(url, 8000);
     } catch (...) {
-        log->addMessage("  Could not reach the pool's /nodes.json. Is psp1server correct and the pool up?");
+        log->addMessage("  Could not reach the pool's /nodes.json. Is psp2server correct and the pool up?");
         return;
     }
 
@@ -1496,12 +1508,17 @@ void ConsoleDashboard::loadPayoutInfo() {
     if (!_payoutLoaded) {
         try {
             Config config("config.cfg");
-            // mctrivia is pool index 1 (local is 0). Fall back to psp0payout
-            // for legacy configs that wrote the wrong key.
-            _payoutAddress = config.getString("psp1payout", "");
-            if (_payoutAddress.empty()) {
-                _payoutAddress = config.getString("psp0payout", "");
-            }
+            // Use whichever networked pool this node actually joined (psp2 on new
+            // nodes, psp1 on legacy) instead of a hardcoded index; then fall back
+            // through psp2 / psp1 / psp0 payout keys.
+            std::string payoutKey;
+            auto* pspList = AppMain::GetInstance()->getPermanentStoragePoolListIfSet();
+            auto* pool = pspList ? pspList->getActiveNetworkedPool() : nullptr;
+            if (pool) payoutKey = "psp" + std::to_string(pool->getPoolIndex()) + "payout";
+            _payoutAddress = payoutKey.empty() ? std::string("") : config.getString(payoutKey, "");
+            if (_payoutAddress.empty()) _payoutAddress = config.getString("psp2payout", "");
+            if (_payoutAddress.empty()) _payoutAddress = config.getString("psp1payout", "");
+            if (_payoutAddress.empty()) _payoutAddress = config.getString("psp0payout", "");
         } catch (...) {}
         _payoutLoaded = true;
         _lastBalanceTime = std::chrono::steady_clock::now() - std::chrono::seconds(120); // force immediate fetch

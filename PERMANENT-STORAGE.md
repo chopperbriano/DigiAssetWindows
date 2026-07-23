@@ -38,7 +38,8 @@ list** — the canonical set of assets enrolled for permanent storage.
   thread — **it does not depend on your blockchain sync.**
 - The list is **not fixed** — it *grows* as new assets are enrolled. The node
   walks forward a page at a time and remembers where it got to
-  (`psp1permanentpage` in `config.cfg`). "3442" is just today's size.
+  (`psp<N>permanentpage` in `config.cfg`, e.g. `psp2permanentpage` for the
+  DigiStamp pool). "3442" is just today's size.
 
 So "tracked" answers: *"how many assets is the pool asking every node to host?"*
 

@@ -216,7 +216,9 @@ void mctrivia::_setConfig(const Config& config) {
     // (100% of the size-based cost, no minimum). Raise psp<index>costpercent
     // (e.g. 10000 = 100x) or set psp<index>mincostcents (e.g. 100 = $1 floor).
     _costPercent = config.getInteger(configPrefix() + "costpercent", 100);
-    _minCostUsdCents = static_cast<unsigned int>(config.getInteger(configPrefix() + "mincostcents", 0));
+    if (_costPercent < 0) _costPercent = 0;   // guard: a negative % would make baseCost*(pct/100.0) negative, and casting a negative double to uint64_t is UB (wraps huge)
+    int mincents = config.getInteger(configPrefix() + "mincostcents", 0);
+    _minCostUsdCents = (mincents > 0) ? static_cast<unsigned int>(mincents) : 0;
 }
 
 /**
@@ -299,7 +301,7 @@ void mctrivia::permanentFetcherTask() {
                 _permanentPage++;
                 try {
                     Config writable("config.cfg");
-                    writable.setInteger("psp1permanentpage", static_cast<int>(_permanentPage));
+                    writable.setInteger(configPrefix() + "permanentpage", static_cast<int>(_permanentPage));
                     writable.write();
                 } catch (...) {
                     // Non-fatal — worst case we re-walk the page next restart.

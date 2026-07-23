@@ -1580,8 +1580,9 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                     string type =val["scriptPubKey"]["type"].asString();
                     if (type=="pubkey") {
                         // remove the leading size value and trailing 0xac
-                        string addrHex = hex.substr(2, hex.size() - 4);
-                        output.scriptPubKey.addresses.push_back(addrHex);
+                        if (hex.size() >= 4) {
+                            output.scriptPubKey.addresses.push_back(hex.substr(2, hex.size() - 4));
+                        }
                     } else if (type=="multisig") {
                         // split the ASM into tokens
                         std::istringstream iss(val["scriptPubKey"]["asm"].asString());
@@ -1589,14 +1590,21 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                         std::string tok;
                         while (iss >> tok) parts.push_back(tok);
 
-                        // parts = [ m, pub1, pub2, …, pubN, n, "OP_CHECKMULTISIG" ]
-                        unsigned int m = std::stoul(parts[0]);                            // required sigs
-                        unsigned int n = std::stoul(parts[parts.size() - 2]);             // total pubkeys
-                        output.scriptPubKey.reqSigs = m;
-
-                        // pull out exactly n pubkey hexes (parts[1] through parts[n])
-                        for (unsigned int i = 1; i <= n; ++i) {
-                            output.scriptPubKey.addresses.push_back(parts[i]);
+                        // Expected: [ m, pub1, ..., pubN, n, "OP_CHECKMULTISIG" ]. Chain
+                        // data is attacker-influenceable, so a malformed asm must NOT
+                        // crash the analyzer: guard the size, clamp n to the pubkeys
+                        // actually present (parts[1..size-3]), and don't let stoul throw.
+                        if (parts.size() >= 3) {
+                            try {
+                                output.scriptPubKey.reqSigs = std::stoul(parts[0]);      // required sigs (m)
+                                unsigned int n = std::stoul(parts[parts.size() - 2]);    // claimed pubkey count
+                                size_t maxPub = parts.size() - 3;                        // pubkeys are parts[1..size-3]
+                                for (unsigned int i = 1; i <= n && i <= maxPub; ++i) {
+                                    output.scriptPubKey.addresses.push_back(parts[i]);
+                                }
+                            } catch (const std::exception&) {
+                                // non-numeric m/n - skip this malformed multisig output
+                            }
                         }
                     } else if (type=="nulldata") {
                         //do nothing

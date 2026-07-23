@@ -14,7 +14,7 @@ There are two roles:
 - **Pool operator** — runs `DigiAssetPoolServer.exe`, owns the DGB wallet, and
   decides whether/when to pay.
 - **Node operator** — runs `DigiAssetWindows` + an IPFS (kubo) node, points it at a
-  pool via `psp1server=`, and registers a payout address to earn DGB for hosting.
+  pool via `psp2server=`, and registers a payout address to earn DGB for hosting.
 
 > New here? Read the [architecture overview](../readme.md#how-it-works-architecture)
 > in the top-level readme first — it explains how DigiByte Core, IPFS, and
@@ -203,13 +203,14 @@ key with its CIDs; then watch a subscribed node pin them.
    ```
    psp0subscribe=1
    psp0payout=YOUR_DGB_ADDRESS       # pool 0 = local pool (no server); needs a payout
-   psp1server=https://pool.digistamp.co
-   psp1subscribe=1
-   psp1payout=YOUR_DGB_ADDRESS       # pool 1 = this pool
+   psp2server=https://pool.digistamp.co
+   psp2subscribe=1
+   psp2payout=YOUR_DGB_ADDRESS       # pool 2 = DigiStamp, this pool
    ```
    (New installs are prompted for the address in the first-run wizard and default
-   to the DigiStamp pool, so most users don't need to edit anything by hand.)
-4. Set a **real** payout address for BOTH pools. If `psp0payout`/`psp1payout` are
+   to the DigiStamp pool, so most users don't need to edit anything by hand.
+   Pool 1 was MCTrivia's PSP — now deprecated; nodes already on `psp1` keep working.)
+4. Set a **real** payout address for BOTH pools. If `psp0payout`/`psp2payout` are
    left as the `_psppayout` label, the node tries to mint an address from a loaded
    DigiByte wallet and errors with `Could not generate new PSP payout address`
    when none is loaded. Watch the DigiAssetWindows dashboard's Payment row:
@@ -224,7 +225,7 @@ people the URL. Copy-paste this to Discord/Twitter/your site:
 > **Join the DigiStamp Permanent Storage Pool and earn DGB for hosting DigiAssets.**
 > 1. Install DigiAsset for Windows: https://github.com/chopperbriano/DigiAssetWindows
 > 2. When the setup wizard asks for a pool, press Enter to accept the default
->    (`https://pool.digistamp.co`) — or add `psp1server=https://pool.digistamp.co`
+>    (`https://pool.digistamp.co`) — or add `psp2server=https://pool.digistamp.co`
 >    to your `config.cfg`.
 > 3. Forward IPFS port 4001 on your router for reliable verification.
 > 4. Restart. Your node registers automatically; watch the dashboard's Payment row.

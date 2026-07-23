@@ -1007,7 +1007,12 @@ function Write-NodeConfig($rpc) {
         # Top up any missing keys an older/partial config lacks.
         $add = @()
         if ($PayoutAddress -and -not ($existing -match '^\s*psp0payout\s*=')) { $add += @('psp0subscribe=1',"psp0payout=$PayoutAddress") }
-        if ($PayoutAddress -and -not ($existing -match '^\s*psp1payout\s*=')) { $add += @('psp1subscribe=1',"psp1payout=$PayoutAddress") }
+        # Only top up the pool payout for a config that has NEITHER psp1 nor psp2
+        # payout (a broken/partial config) - and add psp2 (DigiStamp), not the
+        # deprecated psp1. Crucially do NOT re-add psp1subscribe=1: a fresh install
+        # writes psp1subscribe=0 with no psp1payout, and a bare `-not psp1payout`
+        # top-up would re-enable psp1 on every re-run -> double-registration.
+        if ($PayoutAddress -and -not ($existing -match '^\s*psp2payout\s*=') -and -not ($existing -match '^\s*psp1payout\s*=')) { $add += @('psp2subscribe=1',"psp2payout=$PayoutAddress",'psp1subscribe=0') }
         if (-not ($existing -match '^\s*verifydatabasewrite\s*=')) { $add += 'verifydatabasewrite=0' }   # fast path
         if ($changed -or $add.Count -gt 0) {
             $out = @($existing)
