@@ -21,6 +21,8 @@
 #include "Log.h"
 #include "PermanentStoragePool/pools/local.h"
 #include "PermanentStoragePool/pools/mctrivia.h"
+#include "PermanentStoragePool/pools/digistamp.h"
+#include "PermanentStoragePool/pools/custompool.h"
 #include "static_block.hpp"
 #include "utils.h"
 #include <vector>
@@ -64,8 +66,10 @@ PermanentStoragePoolList::PermanentStoragePoolList(const string& configFile) {
     srand(static_cast<unsigned int>(time(nullptr)));
 
     //add known pools to list
-    addPool(std::unique_ptr<PermanentStoragePool>(new local()), config);
-    addPool(std::unique_ptr<PermanentStoragePool>(new mctrivia()), config);
+    addPool(std::unique_ptr<PermanentStoragePool>(new local()), config);      // index 0 - local
+    addPool(std::unique_ptr<PermanentStoragePool>(new mctrivia()), config);   // index 1 - legacy "MCTrivia's PSP" (deprecated; kept so existing psp1 configs keep working)
+    addPool(std::unique_ptr<PermanentStoragePool>(new digistamp()), config);  // index 2 - DigiStamp pool (replacement; psp2*, opt-in)
+    addPool(std::unique_ptr<PermanentStoragePool>(new custompool()), config); // index 3 - generic user-configurable slot (psp3*, opt-in, inert until psp3server set)
 }
 
 

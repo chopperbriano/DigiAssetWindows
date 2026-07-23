@@ -51,7 +51,32 @@ string mctrivia::getDescription() {
     return "Originally operated by digiassetX Inc and continued to run by Matthew Cornelisse.  This pool makes sure asset metadata is always available and pays others DigiAsset Core nodes to help distribute the metadata.";
 }
 string mctrivia::getURL() {
-    return _baseUrl.empty() ? DEFAULT_POOL_BASE : _baseUrl;
+    return _baseUrl.empty() ? defaultServer() : _baseUrl;
+}
+
+// psp<index> config prefix, derived from the base-assigned pool index so each
+// pool reads its own keys without a hardcoded prefix.
+string mctrivia::configPrefix() const {
+    return "psp" + std::to_string(_poolIndex);
+}
+
+// Base pool server URL when psp<index>server is unset. mctrivia + digistamp use
+// the DigiStamp pool; custompool overrides to "" (inert until configured).
+string mctrivia::defaultServer() const {
+    return DEFAULT_POOL_BASE;
+}
+
+// Apply the configurable pricing knobs to the raw size-based cost. Defaults
+// (100% / no floor) preserve the historical cheap pricing.
+uint64_t mctrivia::applyPricing(uint64_t baseCost, double exchangeRate) const {
+    if (baseCost == 0) return 0;
+    uint64_t cost = static_cast<uint64_t>(baseCost * (_costPercent / 100.0));
+    if (_minCostUsdCents > 0) {
+        // exchangeRate is DGB sats per USD; convert the cents floor to sats.
+        uint64_t minSat = static_cast<uint64_t>(ceil(_minCostUsdCents / 100.0 * exchangeRate));
+        if (cost < minSat) cost = minSat;
+    }
+    return cost;
 }
 
 /**
@@ -115,7 +140,8 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
     //or pay ins won't buy the number of bytes the pool expects
     Database* db = AppMain::GetInstance()->getDatabase();
     double exchangeRate = db->getCurrentExchangeRate(DigiAssetConstants::standardExchangeRates[1]); //USD
-    return static_cast<uint64_t>(ceil(size * 1.2 * exchangeRate / 1000000.0));
+    uint64_t baseCost = static_cast<uint64_t>(ceil(size * 1.2 * exchangeRate / 1000000.0));
+    return applyPricing(baseCost, exchangeRate);
 }
 
 /**
@@ -153,13 +179,13 @@ void mctrivia::enable(DigiByteTransaction& tx) {
  * Side effect: may write a freshly generated psp1secret back to config.cfg.
  */
 void mctrivia::_setConfig(const Config& config) {
-    _visible = config.getBool("psp1visible", true);
+    _visible = config.getBool(configPrefix() + "visible", true);
 
-    // Pool server base URL. Defaults to the community DigiStamp pool (see the
-    // DEFAULT_POOL_BASE comment above). Set psp1server=http://... in config.cfg
-    // to point at a different pool - e.g. a local DigiAssetPoolServer.exe you run
-    // yourself for full control over registration + payouts.
-    _baseUrl = config.getString("psp1server", DEFAULT_POOL_BASE);
+    // Pool server base URL. Defaults to defaultServer() (the DigiStamp pool for
+    // mctrivia/digistamp). Set psp<index>server=http://... in config.cfg to point
+    // at a different pool - e.g. a local DigiAssetPoolServer.exe you run yourself
+    // for full control over registration + payouts.
+    _baseUrl = config.getString(configPrefix() + "server", defaultServer());
     // Strip any trailing slash so later url construction like `_baseUrl +
     // "/permanent/..."` produces clean paths regardless of how the user
     // wrote the config value.
@@ -168,23 +194,29 @@ void mctrivia::_setConfig(const Config& config) {
     // Persistent node identity. Historically this was a fresh random string on
     // every startup — harmless-looking but meant the server saw us as a new
     // identity each restart. Read from config; generate + persist on first run.
-    _secretCode = config.getString("psp1secret", "");
+    _secretCode = config.getString(configPrefix() + "secret", "");
     if (_secretCode.empty()) {
         _secretCode = utils::generateRandom(8, utils::CodeType::ALPHANUMERIC);
         try {
             Config writable("config.cfg");
-            writable.setString("psp1secret", _secretCode);
+            writable.setString(configPrefix() + "secret", _secretCode);
             writable.write();
         } catch (...) {
             Log::GetInstance()->addMessage(
-                    "Could not persist psp1secret to config.cfg; will regenerate next run",
+                    "Could not persist " + configPrefix() + "secret to config.cfg; will regenerate next run",
                     Log::WARNING);
         }
     }
 
     // Permanent-list walker page. Defaults to 23 (the currently active page as
     // of 2026-04-11). Advancing happens in permanentFetcherTask.
-    _permanentPage = static_cast<unsigned int>(config.getInteger("psp1permanentpage", 23));
+    _permanentPage = static_cast<unsigned int>(config.getInteger(configPrefix() + "permanentpage", 23));
+
+    // Configurable pricing. Defaults preserve the historical cheap pricing
+    // (100% of the size-based cost, no minimum). Raise psp<index>costpercent
+    // (e.g. 10000 = 100x) or set psp<index>mincostcents (e.g. 100 = $1 floor).
+    _costPercent = config.getInteger(configPrefix() + "costpercent", 100);
+    _minCostUsdCents = static_cast<unsigned int>(config.getInteger(configPrefix() + "mincostcents", 0));
 }
 
 /**

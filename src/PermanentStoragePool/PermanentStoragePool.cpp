@@ -47,7 +47,7 @@ void PermanentStoragePool::setPoolIndexAndInitialize(unsigned int index, const C
 
     //save config data
     const string prefix = "psp" + to_string(index);
-    _subscribed = config.getBool(prefix + "subscribe", true);
+    _subscribed = config.getBool(prefix + "subscribe", defaultSubscribe());
     _autoRemoveBad = config.getBool(prefix + "autoremovebad", true);
     if (!_subscribed) return;
 

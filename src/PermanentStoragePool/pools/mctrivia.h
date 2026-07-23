@@ -119,6 +119,23 @@ protected:
     void _reportFileBad(const std::string& cid) override;
     virtual void updateBadList();
 
+    // --- Subclass hooks. A pool at psp<index> is just mctrivia with a different
+    // identity/server/price, so the new pools (digistamp, custompool) subclass
+    // this and override only what differs. ---
+    // "psp<index>" derived from the base _poolIndex, so each pool reads its own
+    // config keys (server, secret, visible, permanentpage, pricing) without a
+    // hardcoded prefix.
+    std::string configPrefix() const;
+    // Base URL used when psp<index>server is unset. Defaults to the DigiStamp
+    // pool; custompool overrides to "" so it stays inert until configured.
+    virtual std::string defaultServer() const;
+    // Scale the raw size-based cost by _costPercent/100 and floor it at
+    // _minCostUsdCents (converted to sats via exchangeRate). Defaults preserve
+    // the historical cheap pricing (100% / no floor); tune via config, no rebuild.
+    uint64_t applyPricing(uint64_t baseCost, double exchangeRate) const;
+    int _costPercent = 100;            // psp<index>costpercent (100 = 1x)
+    unsigned int _minCostUsdCents = 0; // psp<index>mincostcents (0 = no minimum)
+
 public:
     mctrivia();
     ~mctrivia();

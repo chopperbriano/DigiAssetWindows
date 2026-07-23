@@ -58,6 +58,12 @@ protected:
     virtual void _reportAssetBad(const std::string& assetId);
     virtual void _reportFileBad(const std::string& cid);
     virtual void _setConfig(const Config& config);
+    // Default subscription state when psp<index>subscribe is absent from config.
+    // true for the built-in pools (local, mctrivia) so existing nodes keep
+    // working after an update; NEW pools override this to false so they are
+    // strictly opt-in and never resolve a payout address for a node whose
+    // config predates them.
+    virtual bool defaultSubscribe() const { return true; }
 
 
 

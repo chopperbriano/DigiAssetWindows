@@ -116,6 +116,8 @@ set(HEADER_FILES
         PermanentStoragePool/PermanentStoragePool.h
         PermanentStoragePool/PermanentStoragePoolList.h
         PermanentStoragePool/pools/mctrivia.h
+        PermanentStoragePool/pools/digistamp.h
+        PermanentStoragePool/pools/custompool.h
         PermanentStoragePool/pools/local.h
         AppMain.h
         CurlHandler.h
@@ -162,6 +164,8 @@ set(SOURCE_FILES
         PermanentStoragePool/PermanentStoragePool.cpp
         PermanentStoragePool/PermanentStoragePoolList.cpp
         PermanentStoragePool/pools/mctrivia.cpp
+        PermanentStoragePool/pools/digistamp.cpp
+        PermanentStoragePool/pools/custompool.cpp
         PermanentStoragePool/pools/local.cpp
         AppMain.cpp
         CurlHandler.cpp
