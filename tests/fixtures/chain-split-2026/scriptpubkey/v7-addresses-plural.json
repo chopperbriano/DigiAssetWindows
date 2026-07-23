@@ -1,0 +1,11 @@
+{
+  "_fixture": "DigiByte Core v7.17.x (pre-Bitcoin-22 rebase) getrawtransaction scriptPubKey shape",
+  "_note": "v7 emits reqSigs + an addresses[] ARRAY and has NO singular 'address' or 'desc'. The merged parser (src/DigiByteCore.cpp:311-313) reads addresses[]; the v8/v9 fixture next to this reads the singular 'address' (lines 315-319). A correct parser must extract the same address from BOTH shapes.",
+  "asm": "OP_DUP OP_HASH160 e8df018c7e326cc253faac7e46cdc51e68542c42 OP_EQUALVERIFY OP_CHECKSIG",
+  "hex": "76a914e8df018c7e326cc253faac7e46cdc51e68542c4288ac",
+  "reqSigs": 1,
+  "type": "pubkeyhash",
+  "addresses": [
+    "DFundm6ohbAG7tQajQjUNjnfCUXvNAyBAT"
+  ]
+}

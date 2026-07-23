@@ -1,0 +1,7 @@
+﻿{
+    "asm":  "OP_DUP OP_HASH160 9977d1cabc2a8b5089a27025fa9e8bbc27f0f557 OP_EQUALVERIFY OP_CHECKSIG",
+    "desc":  "addr(DK8ZTp89aahJpmnwdZ8LNsAUNoGA6qS43G)#3sskgyhn",
+    "hex":  "76a9149977d1cabc2a8b5089a27025fa9e8bbc27f0f55788ac",
+    "address":  "DK8ZTp89aahJpmnwdZ8LNsAUNoGA6qS43G",
+    "type":  "pubkeyhash"
+}

@@ -1,0 +1,54 @@
+﻿{
+    "hash":  "f8a16f0fd0382b8f16cdbef18f8a58672a03628db1c47e79cc90404be31ee430",
+    "confirmations":  152834,
+    "height":  23751109,
+    "version":  1024,
+    "versionHex":  "00000400",
+    "merkleroot":  "eb9fe9749e3b1c170564c19ed7c3843e39711660f516e4b10e90323fa9e37c02",
+    "time":  1782664985,
+    "mediantime":  1782664927,
+    "nonce":  658791,
+    "bits":  "1e0fffff",
+    "difficulty":  0.0002441371325370145,
+    "pow_algo_id":  2,
+    "pow_algo":  "groestl",
+    "chainwork":  "0000000000000000000000000000000000000000001d0d6e585b78744a32d94c",
+    "nTx":  1,
+    "previousblockhash":  "56bcb52caedc411170ba507a996e818d2bb8eea6116ad4a6985e03bbf0ad0fc0",
+    "nextblockhash":  "f34d0353c402405ef148e1e53ad5128d472e8ffb50964eb7bbee70f59d957c78",
+    "strippedsize":  180,
+    "size":  180,
+    "weight":  720,
+    "pow_hash":  "000007ed69bd895667463c30a4b296e83a4f2b5cd17352496da3db19cbbc3329",
+    "tx":  [
+               {
+                   "txid":  "eb9fe9749e3b1c170564c19ed7c3843e39711660f516e4b10e90323fa9e37c02",
+                   "hash":  "eb9fe9749e3b1c170564c19ed7c3843e39711660f516e4b10e90323fa9e37c02",
+                   "version":  1,
+                   "size":  99,
+                   "vsize":  99,
+                   "weight":  396,
+                   "locktime":  0,
+                   "vin":  [
+                               {
+                                   "coinbase":  "04c5696a01194f416a00000000534f5247",
+                                   "sequence":  4294967295
+                               }
+                           ],
+                   "vout":  [
+                                {
+                                    "value":  259.31368854,
+                                    "n":  0,
+                                    "scriptPubKey":  {
+                                                         "asm":  "0 25321626148d3a5d2c88996b4ec7a7a7fbcbc5ad",
+                                                         "desc":  "addr(dgb1qy5epvfs535a96tygn945a3a85lauh3ddu9v63y)#42hsdyx2",
+                                                         "hex":  "001425321626148d3a5d2c88996b4ec7a7a7fbcbc5ad",
+                                                         "address":  "dgb1qy5epvfs535a96tygn945a3a85lauh3ddu9v63y",
+                                                         "type":  "witness_v0_keyhash"
+                                                     }
+                                }
+                            ],
+                   "hex":  "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1104c5696a01194f416a00000000534f5247ffffffff019649a1090600000016001425321626148d3a5d2c88996b4ec7a7a7fbcbc5ad00000000"
+               }
+           ]
+}
