@@ -37,8 +37,10 @@ else()
 endif()
 
 # Set version number
-# Upstream version (keep in sync with DigiAsset-Core/DigiAsset_Core). Kept at 0.3.3
-# for this test build; the fork's WIN_BUILD counter below is the real version.
+# Upstream version. Held at 0.3.3 even though this now carries the upstream
+# asset_features (v1.0.0) work: per upstream, a real 1.0.0 = asset_features PLUS
+# the two new PSPs, which are not done yet. Bump to 1.0.0 once the PSP work lands.
+# The fork's WIN_BUILD counter below is the real per-release version.
 SET(MAJOR_VERSION 0)
 SET(MINOR_VERSION 3)
 SET(PATCH_VERSION 3)
@@ -48,7 +50,7 @@ SET(SO_VERSION    0)
 # This is the SOURCE OF TRUTH for the version — it is substituted into
 # src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
 # match the win.<N> tag on every release; do NOT hand-edit the generated header.
-SET(WIN_BUILD 103)
+SET(WIN_BUILD 104)
 # NOTE: upstream added a CMAKE_*_OUTPUT_DIRECTORY -> bin/ redirect here. Not
 # adopted: this fork's release/update scripts expect build/<sub>/Release/. Revisit
 # later if we want the bin/ layout (would require updating those scripts).

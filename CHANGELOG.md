@@ -20,7 +20,29 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.103 (current) — clean RPC error messages (no double-wrapping)
+## 0.3.3-win.104 (current) — upstream asset_features (PR26) + chain-split regression tests
+
+Folds the tested upstream **asset_features** work (DigiAsset Core's v1.0.0 branch,
+PR #26) into master, plus the Windows fixes and new tests it needed:
+- **New asset RPCs:** `issueasset`, `reissueasset`, `burnasset`, `sendasset`,
+  `sendmanyassets`, `getwalletbalances`, `getnewaddress`.
+- **TCP event stream** (`EventBroadcaster`, config `eventport`) broadcasting
+  newBlock + asset-activity events; legacy `OldStream` removed.
+- **Windows fixes:** guarded the POSIX InstanceLock fd under `#ifndef _WIN32`;
+  implemented real WinHTTP **multipart `postFile`** (so `issueasset`-with-media
+  uploads on Windows) — the stub curl only declared the mime API before.
+- **Chain-split-2026 regression tests** (unit suite now **66/66**): asserts the
+  Groestl block 23,751,096 (legacy version `0x00000400`) parses cleanly, and that
+  scriptPubKey address extraction works for both v7 plural `addresses[]` and
+  v8/8.22+ singular `address`. Fixtures in `tests/fixtures/chain-split-2026/`.
+
+**chain.db unchanged** (dbVersion still 6) — existing nodes update with **no
+resync**. Held at 0.3.3 (not 1.0.0): per upstream, a real 1.0.0 also needs the two
+new PSPs, which are not done yet. Qt GUI not built on Windows (`BUILD_QT` off).
+
+---
+
+## 0.3.3-win.103 — clean RPC error messages (no double-wrapping)
 
 `DigiByteException::parseMessage()` wrapped every thrown message in
 `Error during parsing of >>…<<`, even plain human strings that RPC handlers
