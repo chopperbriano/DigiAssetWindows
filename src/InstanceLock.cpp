@@ -10,7 +10,12 @@
 #include <fstream>
 #include <string>
 
+#ifndef _WIN32
+// Static POSIX lock-file descriptor. Only declared (in InstanceLock.h) on
+// non-Windows; the Windows build uses a named mutex (_mutexHandle) instead, so
+// this definition must be guarded or MSVC errors that it's not a member.
 int InstanceLock::_lockFileDescriptor = -1;
+#endif
 
 #ifdef _WIN32
 // ============================== Windows ==============================

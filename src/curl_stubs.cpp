@@ -467,3 +467,16 @@ CURLcode curl_global_init(long flags) {
 
 void curl_global_cleanup(void) {
 }
+
+// --- asset_features (PR26) multipart-upload stubs ---------------------------
+// Minimal no-op mime implementation so postFile() COMPILES on the winhttp-backed
+// stub curl. These do NOT attach a body to the request; curl_easy_perform() will
+// POST without the file. TODO(windows): implement multipart upload via winhttp.
+struct curl_mime { int _unused; };
+struct curl_mimepart { int _unused; };
+curl_mime* curl_mime_init(CURL*) { return new curl_mime{0}; }
+curl_mimepart* curl_mime_addpart(curl_mime*) { static curl_mimepart part{0}; return &part; }
+CURLcode curl_mime_name(curl_mimepart*, const char*) { return CURLE_OK; }
+CURLcode curl_mime_filename(curl_mimepart*, const char*) { return CURLE_OK; }
+CURLcode curl_mime_data(curl_mimepart*, const char*, size_t) { return CURLE_OK; }
+void curl_mime_free(curl_mime* mime) { delete mime; }
