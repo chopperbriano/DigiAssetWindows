@@ -1,0 +1,60 @@
+name: Windows build + unit tests
+
+# Builds the Windows fork (node + CLI + pool) on MSVC and runs the no-external-
+# deps unit test suite on every push/PR. This is the guardrail that catches
+# "broke the Windows build" automatically - the thing that had to be done by
+# hand when merging upstream asset_features (PR26).
+#
+# NOTE: first-run validation. The vendored-dependency bootstrap below mirrors
+# the documented local build (config-jsoncpp.bat / config-libjson-rpc.bat +
+# `nuget install boost`). If a step needs a tweak on the GitHub runner, adjust
+# here - the final DigiAsset build itself is confirmed to compile on MSVC.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout (with submodules - jsoncpp, libjson-rpc-cpp, googletest)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore Boost 1.82.0 headers (NuGet) -> packages/boost.1.82.0
+        run: nuget install boost -Version 1.82.0 -OutputDirectory packages -NonInteractive
+
+      # The final DigiAsset link uses vendored stubs (WinHTTP curl, sqlite3.c,
+      # openssl stubs), but the libjson-rpc-cpp dependency build wants curl+openssl.
+      - name: Install curl + openssl (vcpkg, for the libjson-rpc-cpp build)
+        run: vcpkg install curl:x64-windows openssl:x64-windows
+
+      - name: Build jsoncpp (vendored submodule)
+        run: |
+          cmake -S jsoncpp -B jsoncpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/jsoncpp/install" -DCMAKE_INSTALL_INCLUDEDIR=include/jsoncpp
+          cmake --build jsoncpp/build --config Release --target install
+
+      - name: Build libjson-rpc-cpp (vendored submodule)
+        run: |
+          cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install" "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build libjson-rpc-cpp/build --config Release --target install
+
+      - name: Configure (node + CLI + pool + tests)
+        run: cmake -S . -B build -DBUILD_TEST=ON
+
+      - name: Build node + CLI + pool
+        run: cmake --build build --config Release --target DigiAssetWindows DigiAssetWindows-cli DigiAssetPoolServer
+
+      - name: Build unit tests
+        run: cmake --build build --config Release --target Unit_Tests_run
+
+      - name: Run unit tests (63 expected)
+        working-directory: tests
+        run: ../build/tests/Release/Unit_Tests_run.exe
