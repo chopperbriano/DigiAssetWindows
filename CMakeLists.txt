@@ -37,10 +37,11 @@ else()
 endif()
 
 # Set version number
-# Upstream version. Held at 0.3.3 even though this now carries the upstream
-# asset_features (v1.0.0) work: per upstream, a real 1.0.0 = asset_features PLUS
-# the two new PSPs, which are not done yet. Bump to 1.0.0 once the PSP work lands.
-# The fork's WIN_BUILD counter below is the real per-release version.
+# Upstream version. Deliberately held at 0.3.3 even though this carries the
+# upstream asset_features (which upstream calls v1.0.0) and the new PSPs. This
+# fork stays on the 0.3.3-win.<N> scheme by choice - the WIN_BUILD counter below
+# is the real per-release version and just keeps incrementing. Not adopting a
+# 1.0.0 label.
 SET(MAJOR_VERSION 0)
 SET(MINOR_VERSION 3)
 SET(PATCH_VERSION 3)
