@@ -152,6 +152,44 @@ namespace {
         }
     }
 
+    // Wallet balance actually SPENDABLE for payouts: the listunspent sum
+    // (unlocked, spendable, confirmed outputs), NOT getbalance. getbalance counts
+    // DGB in outputs coin selection can't use - notably UTXOs the DigiAsset node
+    // lockunspent-locks to protect asset/treasury coins - so it overstates what
+    // payouts can draw. This mirrors PoolDashboard::getWalletBalance so the public
+    // /stats "available" figure matches the real, spendable payout budget instead
+    // of a number the pool can't actually pay out. -1.0 on RPC error.
+    double rpcSpendableBalance(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
+        if (rpcUser.empty()) return -1.0;
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"poolstats\",\"method\":\"listunspent\",\"params\":[1,9999999]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string resp;
+        long status = 0;
+        try { status = CurlHandler::postJson(url, body, resp, 8000); }
+        catch (...) { return -1.0; }
+        if (status < 200 || status >= 300) return -1.0;
+        size_t rpos = resp.find("\"result\"");
+        if (rpos == std::string::npos) return -1.0;
+        // "result":null means the RPC failed - not an empty wallet.
+        size_t rcolon = resp.find(':', rpos + 8);
+        if (rcolon != std::string::npos) {
+            size_t rv = resp.find_first_not_of(" \t", rcolon + 1);
+            if (rv != std::string::npos && resp.compare(rv, 4, "null") == 0) return -1.0;
+        }
+        double total = 0.0;
+        const std::string key = "\"amount\"";
+        size_t pos = rpos;
+        while ((pos = resp.find(key, pos)) != std::string::npos) {
+            size_t colon = resp.find(':', pos + key.size());
+            if (colon == std::string::npos) break;
+            size_t s = resp.find_first_not_of(" \t", colon + 1);
+            if (s == std::string::npos) break;
+            try { total += std::stod(resp.substr(s)); } catch (...) {}
+            pos = colon + 1;
+        }
+        return total;
+    }
+
     // Fetch an address's on-chain totals from an Esplora-style explorer API
     // (GET <prefix><address>, as digiexplorer.info serves at /api/address/).
     // Fills receivedDgb (all funded) and balanceDgb (funded - spent) from
@@ -741,10 +779,12 @@ void PoolServer::handleStats(std::string& outBody) {
     if (refreshDue && _statsRefreshMutex.try_lock()) {
         std::lock_guard<std::mutex> refreshGuard(_statsRefreshMutex, std::adopt_lock);
 
-        // Local pool wallet balance (what payouts actually draw from).
+        // Local pool wallet balance actually spendable for payouts (listunspent
+        // sum, not getbalance) so the public "available" figure matches what the
+        // pool can really pay out rather than an inflated locked-coins total.
         double newAvail = 0.0; bool haveAvail = false;
         if (!rpcUser.empty()) {
-            double bal = rpcNumber(rpcUser, rpcPass, rpcPort, "getbalance", "[]");
+            double bal = rpcSpendableBalance(rpcUser, rpcPass, rpcPort);
             if (bal >= 0) { newAvail = bal; haveAvail = true; }
         }
         // Treasury received + balance from a public explorer (external wallet).

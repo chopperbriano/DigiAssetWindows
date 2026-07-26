@@ -4,11 +4,12 @@
 // Renders the live status screen every 500 ms and handles operator keypresses.
 // The bulk of the interesting logic is the payout flow: an anonymous-namespace
 // set of helpers re-reads pool.cfg on demand, queries DigiByte Core over
-// JSON-RPC for the wallet balance, computes this period's payout budget
-// (either a percent of the balance or a fixed amount), and sends DGB via
-// sendtoaddress. [P] previews the split read-only; [E] runs the guarded
-// execute path (enabled flag, eligible nodes, once-per-period spend guard,
-// then a Y/N confirm) and records each successful send in the ledger.
+// JSON-RPC for the wallet's SPENDABLE balance (listunspent sum), computes this
+// period's payout budget (either a percent of that balance or a fixed amount),
+// and pays every recipient in ONE atomic sendmany transaction. [P] previews the
+// split read-only; [E] runs the guarded execute path (enabled flag, eligible
+// nodes, once-per-period spend guard, then a Y/N confirm) and records each
+// recipient against the shared txid in the ledger.
 //
 
 #include "PoolDashboard.h"
@@ -103,7 +104,7 @@ namespace {
 
     // A DGB address is only base58 or bech32 chars - never quotes/commas/spaces -
     // so validating it also closes the JSON-injection vector when it is
-    // interpolated into the sendtoaddress params below. (audit MUST-FIX #8)
+    // interpolated into the sendmany params below. (audit MUST-FIX #8)
     bool isValidDgbAddress(const std::string& a) {
         if (a.size() < 26 || a.size() > 90) return false;
         if (a.rfind("dgb1", 0) == 0) {
@@ -116,65 +117,58 @@ namespace {
         return true;
     }
 
-    // Send amountDgb to a single address via DigiByte Core's sendtoaddress RPC.
-    // On success returns the txid; on a DEFINITE failure returns a string
-    // starting "ERROR: " (HTTP error, RPC error envelope, or a non-string
-    // result - the send certainly did not happen). On an AMBIGUOUS failure -
-    // a transport-level exception (timeout / dropped connection) where the tx
-    // MAY already have broadcast - returns a string starting "TIMEOUT: ". The
-    // caller must treat TIMEOUT as "possibly sent": record a pending ledger row
-    // and reconcile against the wallet before ever re-sending. (audit M7)
-    std::string sendToAddress(const std::string& rpcUser, const std::string& rpcPass,
-                              int rpcPort, const std::string& address, double amountDgb) {
-        // Never send to an unvalidated address (rejects garbage + JSON injection). (audit MUST-FIX #8)
-        if (!isValidDgbAddress(address)) return "ERROR: invalid payout address rejected before send";
-        // Build the JSON-RPC request for sendtoaddress.
-        char amountBuf[64];
-        snprintf(amountBuf, sizeof(amountBuf), "%.8f", amountDgb);
-
-        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"sendtoaddress\","
-                           "\"params\":[\"" + address + "\"," + amountBuf + "]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" +
-                          std::to_string(rpcPort);
-
+    // Send an ENTIRE payout batch as one sendmany transaction: every recipient is
+    // paid in a single tx with a single fee, or none are. This makes the payout
+    // ATOMIC - it removes the "2 sent, 1 failed" partial-payout outcome where a
+    // shortfall (or any mid-batch error) strands the last recipient(s) while the
+    // earlier ones already went out. Same return contract as sendToAddress: the
+    // txid on success, "ERROR: ..." on a definite failure (nothing sent), or
+    // "TIMEOUT: ..." on an ambiguous transport failure where the batch MAY have
+    // broadcast (caller records ALL rows pending and reconciles before re-sending).
+    std::string sendMany(const std::string& rpcUser, const std::string& rpcPass, int rpcPort,
+                         const std::vector<std::pair<std::string, double>>& payouts) {
+        if (payouts.empty()) return "ERROR: empty payout batch";
+        // Build the {"addr":amount,...} object, validating every address (rejects
+        // garbage and closes the JSON-injection vector, as sendToAddress does).
+        std::string amounts = "{";
+        bool first = true;
+        for (const auto& p : payouts) {
+            if (!isValidDgbAddress(p.first)) return "ERROR: invalid payout address rejected before send: " + p.first;
+            char amountBuf[64];
+            snprintf(amountBuf, sizeof(amountBuf), "%.8f", p.second);
+            if (!first) amounts += ",";
+            amounts += "\"" + p.first + "\":" + amountBuf;
+            first = false;
+        }
+        amounts += "}";
+        // sendmany "" {addr:amount,...}  (first arg is the deprecated dummy account)
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"sendmany\","
+                           "\"params\":[\"\"," + amounts + "]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
         std::string respBody;
         long status = 0;
         try {
-            status = CurlHandler::postJson(url, body, respBody, 30000);
+            status = CurlHandler::postJson(url, body, respBody, 60000);
         } catch (const std::exception& e) {
-            // Transport failed AFTER we handed the request off: the tx may or may
-            // not have broadcast. Ambiguous - flag as TIMEOUT, never as ERROR. (M7)
+            // Ambiguous transport failure - the batch may already have broadcast.
             return std::string("TIMEOUT: ") + e.what();
         }
-
-        if (status < 200 || status >= 300) {
-            return "ERROR: HTTP " + std::to_string(status) + " " + respBody;
-        }
-
-        // DigiByte returns {"result":"<txid>","error":null,...} on success and
-        // {"result":null,"error":{...}} on failure. Check "error" FIRST — if it's
-        // a non-null object the send failed, and we must never mistake the error
-        // body for a txid (which would record a failed payout as SENT).
+        if (status < 200 || status >= 300) return "ERROR: HTTP " + std::to_string(status) + " " + respBody;
+        // Check "error" first so we never mistake an error envelope for a txid.
         size_t epos = respBody.find("\"error\"");
         if (epos != std::string::npos) {
             size_t ec = respBody.find(':', epos + 7);
             size_t ev = (ec != std::string::npos) ? respBody.find_first_not_of(" \t", ec + 1) : std::string::npos;
-            if (ev != std::string::npos && respBody.compare(ev, 4, "null") != 0) {
-                return "ERROR: " + respBody;
-            }
+            if (ev != std::string::npos && respBody.compare(ev, 4, "null") != 0) return "ERROR: " + respBody;
         }
-        // Parse the result, which must be a JSON string (the txid).
         size_t rpos = respBody.find("\"result\"");
         if (rpos == std::string::npos) return "ERROR: no result field in response";
         size_t rc = respBody.find(':', rpos + 8);
         size_t rv = (rc != std::string::npos) ? respBody.find_first_not_of(" \t", rc + 1) : std::string::npos;
-        if (rv == std::string::npos || respBody[rv] != '"') {
-            // result is null or not a string — treat as failure.
-            return "ERROR: " + respBody;
-        }
+        if (rv == std::string::npos || respBody[rv] != '"') return "ERROR: " + respBody;
         size_t q2 = respBody.find('"', rv + 1);
         if (q2 == std::string::npos) return "ERROR: " + respBody;
-        return respBody.substr(rv + 1, q2 - rv - 1); // the txid
+        return respBody.substr(rv + 1, q2 - rv - 1); // the shared txid
     }
 
     // Unlock an encrypted wallet for `seconds` so the payout batch can spend.
@@ -207,11 +201,24 @@ namespace {
         try { CurlHandler::postJson(url, body, resp, 15000); } catch (...) {}
     }
 
-    // Wallet spendable balance via DigiByte Core RPC. Negative sentinel on any
-    // failure so callers can tell "0 DGB" from "couldn't reach core".
+    // Wallet balance actually SPENDABLE for a payout, via DigiByte Core RPC.
+    // Negative sentinel on any failure so callers can tell "0 DGB" from
+    // "couldn't reach core".
+    //
+    // We sum listunspent, NOT getbalance. getbalance counts DGB sitting in outputs
+    // the wallet cannot actually select for a send - most importantly UTXOs the
+    // DigiAsset node has lockunspent-locked to protect asset/treasury coins (locked
+    // outputs stay in getbalance but are skipped by coin selection). Sizing the
+    // payout budget off getbalance therefore over-commits: the split spends the
+    // whole inflated budget, the genuinely-spendable coins run out partway, and the
+    // remaining sends fail "Insufficient funds" (code -6) - exactly the partial
+    // payout seen in production. listunspent returns only spendable, UNLOCKED
+    // outputs (respecting minconf), so summing their amounts gives the true
+    // coin-selectable balance the payout can rely on.
     double getWalletBalance(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
         if (rpcUser.empty()) return -1.0;
-        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"getbalance\",\"params\":[]}";
+        // params: [minconf=1, maxconf=big] - confirmed, unlocked, spendable only.
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"listunspent\",\"params\":[1,9999999]}";
         std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
         std::string resp;
         long status = 0;
@@ -220,11 +227,27 @@ namespace {
         if (status < 200 || status >= 300) return -1.0;
         size_t rpos = resp.find("\"result\"");
         if (rpos == std::string::npos) return -1.0;
-        size_t colon = resp.find(':', rpos + 8);
-        if (colon == std::string::npos) return -1.0;
-        size_t start = resp.find_first_not_of(" \t", colon + 1);
-        if (start == std::string::npos) return -1.0;
-        try { return std::stod(resp.substr(start)); } catch (...) { return -1.0; }
+        // An RPC error yields "result":null - treat as failure, not an empty wallet.
+        size_t rcolon = resp.find(':', rpos + 8);
+        if (rcolon != std::string::npos) {
+            size_t rv = resp.find_first_not_of(" \t", rcolon + 1);
+            if (rv != std::string::npos && resp.compare(rv, 4, "null") == 0) return -1.0;
+        }
+        // Sum every unspent output's "amount" (exactly one per entry). An empty
+        // result array legitimately sums to 0.0 (nothing spendable), distinct from
+        // the -1.0 error sentinel above.
+        double total = 0.0;
+        const std::string key = "\"amount\"";
+        size_t pos = rpos;
+        while ((pos = resp.find(key, pos)) != std::string::npos) {
+            size_t colon = resp.find(':', pos + key.size());
+            if (colon == std::string::npos) break;
+            size_t s = resp.find_first_not_of(" \t", colon + 1);
+            if (s == std::string::npos) break;
+            try { total += std::stod(resp.substr(s)); } catch (...) {}
+            pos = colon + 1;
+        }
+        return total;
     }
 
     // Read a cfg key (map is const) with a default.
@@ -253,9 +276,19 @@ namespace {
             double bal = getWalletBalance(rpcUser, rpcPass, rpcPort);
             if (bal < 0.0) { mode = "balance unavailable (RPC error)"; return -1.0; }
             char m[96];
-            snprintf(m, sizeof(m), "%.1f%% of %.4f DGB available", percent, bal);
+            snprintf(m, sizeof(m), "%.1f%% of %.4f DGB spendable", percent, bal);
             mode = m;
-            return bal * (percent / 100.0);
+            double budget = bal * (percent / 100.0);
+            // Always keep a little unspent for the per-send network fees. Each send
+            // pays its fee ON TOP of the amount, so a budget equal to the whole
+            // spendable balance (e.g. poolpayoutpercent=100) would leave nothing for
+            // fees and the last payment would fail. This reserve covers many sends
+            // at typical DGB fee rates; it only bites when the budget approaches the
+            // full balance, so normal small percentages are unaffected.
+            const double feeReserve = 0.01; // DGB
+            if (budget > bal - feeReserve) budget = bal - feeReserve;
+            if (budget < 0.0) budget = 0.0;
+            return budget;
         }
         double spend = 0.0;
         try { spend = std::stod(cfgGet(cfg, "poolspendperperiod", "0")); } catch (...) { spend = 0.0; }
@@ -370,36 +403,44 @@ void PoolDashboard::processInput() {
                     else addLog("WARNING: wallet unlock failed (" + ue + "); sends may fail with -13.");
                 }
 
-                // Execute the exact per-node plan (weighted by coverage x
-                // reliability) computed and shown at [E] time.
+                // Execute the whole per-node plan (weighted by coverage x
+                // reliability, computed and shown at [E] time) as ONE atomic
+                // sendmany: either every recipient is paid in a single transaction
+                // or none are, so a shortfall / mid-batch error can never strand
+                // some recipients after paying others.
                 int success = 0;
                 int failed = 0;
                 int ambiguous = 0;
                 bool sawLocked = false;
-                for (const auto& pay: _pendingPayouts) {
-                    const std::string& addr = pay.first;
-                    double amt = pay.second;
-                    int64_t amtSat = (int64_t)(amt * 100000000.0);
-                    std::string result = sendToAddress(rpcUser, rpcPass, rpcPort, addr, amt);
-                    if (result.substr(0, 7) == "TIMEOUT") {
-                        // Ambiguous: the tx MAY have broadcast. Record a pending
-                        // ledger row so the period guard blocks a blind re-run,
-                        // and tell the operator to reconcile manually. (audit M7)
-                        _db.recordPendingPayout(addr, amtSat);
-                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amt);
-                        addLog("  TIMEOUT " + addr + " " + std::string(ab) + " DGB - MAY have sent: " + result);
-                        addLog("    -> VERIFY via 'listtransactions' before re-sending; recorded as PENDING.");
-                        ambiguous++;
-                    } else if (result.substr(0, 5) == "ERROR") {
-                        if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
-                        addLog("  FAIL " + addr + ": " + result);
-                        failed++;
-                    } else {
-                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amt);
-                        addLog("  SENT " + addr + " " + std::string(ab) + " DGB txid=" + result.substr(0, 16) + "...");
-                        _db.recordPayout(addr, amtSat, result);
-                        success++;
+                std::string result = sendMany(rpcUser, rpcPass, rpcPort, _pendingPayouts);
+                if (result.substr(0, 7) == "TIMEOUT") {
+                    // Ambiguous: the batch MAY have broadcast. Record EVERY row as
+                    // pending so the period guard blocks a blind re-run, and tell
+                    // the operator to reconcile manually. (audit M7)
+                    for (const auto& pay: _pendingPayouts) {
+                        _db.recordPendingPayout(pay.first, (int64_t)(pay.second * 100000000.0));
                     }
+                    addLog("  TIMEOUT - batch of " + std::to_string(_pendingPayouts.size()) +
+                           " MAY have sent: " + result);
+                    addLog("    -> VERIFY via 'listtransactions' before re-sending; ALL recorded as PENDING.");
+                    ambiguous = (int)_pendingPayouts.size();
+                } else if (result.substr(0, 5) == "ERROR") {
+                    // Atomic failure: nothing was sent, so no recipient is stranded.
+                    if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
+                    addLog("  FAIL (nothing sent - atomic batch): " + result);
+                    failed = (int)_pendingPayouts.size();
+                } else {
+                    // Success: one txid for the whole batch. Record every recipient
+                    // against that shared txid.
+                    for (const auto& pay: _pendingPayouts) {
+                        int64_t amtSat = (int64_t)(pay.second * 100000000.0);
+                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", pay.second);
+                        addLog("  SENT " + pay.first + " " + std::string(ab) + " DGB");
+                        _db.recordPayout(pay.first, amtSat, result);
+                    }
+                    addLog("  txid=" + result.substr(0, 16) + "... (" +
+                           std::to_string(_pendingPayouts.size()) + " recipients in one tx)");
+                    success = (int)_pendingPayouts.size();
                 }
                 // Re-lock if we opened it, so the wallet isn't left spendable.
                 if (unlockedNow) walletLock(rpcUser, rpcPass, rpcPort);
@@ -746,9 +787,12 @@ void PoolDashboard::render() {
                 FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
         << "\n";
 
-    // Row: Pool wallet balance - the payout budget source. Refresh at most every
-    // ~30s (getbalance RPC) so render() stays cheap; RED at 0 makes "no budget"
-    // obvious, because budget = poolpayoutpercent x THIS balance.
+    // Row: Pool wallet SPENDABLE balance - the payout budget source. This is the
+    // listunspent sum (unlocked, spendable coins), which can be well below Core's
+    // getbalance when UTXOs are locked/asset-bound - that gap is exactly why we
+    // budget off spendable, not getbalance. Refresh at most every ~30s so render()
+    // stays cheap; RED at 0 makes "no budget" obvious, because budget =
+    // poolpayoutpercent x THIS balance.
     {
         int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
         if (nowSec - _walletBalanceCheckedAt > 30) {
@@ -770,8 +814,8 @@ void PoolDashboard::render() {
             balColor = _cachedWalletBalance > 0.0 ? FG_GREEN : FG_RED;
         }
         out << ERASE_LINE << "  "
-            << cell("Pool wallet", balStr, balColor, COL1_LABEL_W, COL1_VALUE_W)
-            << cell("Payouts spend", "from this wallet", FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
+            << cell("Spendable", balStr, balColor, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("Payouts spend", "from spendable bal", FG_BRIGHT_WHITE, COL2_LABEL_W, 0)
             << "\n";
     }
 
