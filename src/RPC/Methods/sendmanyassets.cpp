@@ -75,6 +75,11 @@ namespace RPC {
                     throw DigiByteException(RPC_MISC_ERROR, "Asset doesn't exist");
                 }
                 if (send.assetIndex == 1) throw DigiByteException(RPC_INVALID_PARAMS, "Use sendtoaddress to send DigiByte");
+
+                // Refuse rule-bound assets (royalty/deflation) whose required
+                // outputs this transfer path can't add - they would be burned.
+                AssetWallet::assertTransferableAsset(send.asset);
+
                 try {
                     send.amount = AssetWallet::parseAssetAmount(entry["amount"], send.asset.getDecimals());
                 } catch (const std::out_of_range& e) {

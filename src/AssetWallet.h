@@ -14,7 +14,19 @@
 #include <string>
 #include <vector>
 
+class DigiAsset;
+
 namespace AssetWallet {
+
+    /**
+     * Refuses (throws DigiByteException) to transfer or burn an asset whose rules
+     * the transfer path cannot satisfy - specifically royalty or deflation rules,
+     * whose required outputs are only ever added at issuance (addRuleOutputs).
+     * Sending such an asset without those outputs makes every indexer treat the
+     * transaction as an unintentional burn and DESTROY the asset, so we reject up
+     * front rather than silently burning. Rule-aware transfers are a future feature.
+     */
+    void assertTransferableAsset(const DigiAsset& asset);
 
     /**
      * Returns all spendable wallet UTXOs with their asset data populated from the local database.

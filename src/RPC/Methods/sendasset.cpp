@@ -66,6 +66,10 @@ namespace RPC {
             }
             if (assetIndex == 1) throw DigiByteException(RPC_INVALID_PARAMS, "Use sendtoaddress to send DigiByte");
 
+            // Refuse rule-bound assets whose required outputs the transfer path
+            // does not add - sending them anyway would silently burn the asset.
+            AssetWallet::assertTransferableAsset(asset);
+
             //parse amount in to smallest divisible units
             uint64_t amount;
             try {

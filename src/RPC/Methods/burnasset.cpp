@@ -58,6 +58,12 @@ namespace RPC {
             }
             if (assetIndex == 1) throw DigiByteException(RPC_INVALID_PARAMS, "DigiByte can not be burned");
 
+            // A royalty/deflation asset's leftover CHANGE from a partial burn is a
+            // non-consolidation receive, so the rule check would burn it too. The
+            // transfer path can't add the required outputs, so refuse rather than
+            // silently destroy the change.
+            AssetWallet::assertTransferableAsset(asset);
+
             //parse amount in to smallest divisible units
             uint64_t amount;
             try {

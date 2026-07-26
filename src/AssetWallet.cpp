@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <thread>
 
 using namespace std;
@@ -83,16 +84,46 @@ namespace AssetWallet {
         return selected;
     }
 
+    void assertTransferableAsset(const DigiAsset& asset) {
+        DigiAssetRules rules = asset.getRules();
+        // Royalty and deflation rules REQUIRE extra outputs (a royalty payment /
+        // a burn) on every transfer. Only issueasset adds rule outputs, so a
+        // transfer/burn built here omits them; DigiAsset::checkRulesPass then
+        // throws exceptionRuleFailed on replay and the asset is burned. Reject.
+        if (rules.getIfRequiresRoyalty() || rules.getRequiredBurn() > 0) {
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset carries royalty or deflation rules; transferring or burning it "
+                                    "is not yet supported and would destroy the asset. Refusing.");
+        }
+    }
+
     uint64_t parseAssetAmount(const Json::Value& amount, uint8_t decimals) {
         const uint64_t multiplier = BitIO::pow10(decimals);
+        // Largest representable asset count (54-bit, matches the DigiAsset cap).
+        // We reject anything that would exceed it BEFORE multiplying, so an
+        // out-of-range request can't silently wrap uint64 into a valid small count.
+        const uint64_t MAX_ASSET_COUNT = 18014398509481983ULL;
 
         if (amount.isIntegral()) {
             if (amount.asInt64() <= 0) throw out_of_range("Amount must be positive");
-            return static_cast<uint64_t>(amount.asInt64()) * multiplier;
+            uint64_t whole = static_cast<uint64_t>(amount.asInt64());
+            if (multiplier != 0 && whole > MAX_ASSET_COUNT / multiplier) throw out_of_range("Amount too large");
+            return whole * multiplier;
         }
 
         //parse doubles and strings as a decimal string to avoid floating point surprises
-        string str = amount.isDouble() ? to_string(amount.asDouble()) : amount.asString();
+        string str;
+        if (amount.isDouble()) {
+            // Format with the ASSET'S OWN precision (up to 7), not to_string()'s
+            // fixed 6 decimals - to_string silently rounded 7-decimal amounts
+            // (e.g. 0.0000015 -> "0.000002", a 33% over-send). This rounds the
+            // double to the asset's smallest representable unit.
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.*f", static_cast<int>(decimals), amount.asDouble());
+            str = buf;
+        } else {
+            str = amount.asString();
+        }
         if (str.empty()) throw out_of_range("Invalid amount");
 
         size_t decimalPos = str.find('.');
@@ -110,9 +141,15 @@ namespace AssetWallet {
             if (!isdigit(c)) throw out_of_range("Invalid amount");
         }
 
+        // Reject an out-of-range whole part BEFORE multiplying so it can't wrap.
+        // (stoull itself throws out_of_range for a value wider than uint64.)
+        uint64_t wholeVal = whole.empty() ? 0 : stoull(whole);
+        if (multiplier != 0 && wholeVal > MAX_ASSET_COUNT / multiplier) throw out_of_range("Amount too large");
+
         uint64_t result = frac.empty() ? 0 : stoull(frac);
-        if (!whole.empty()) result += stoull(whole) * multiplier;
+        result += wholeVal * multiplier;
         if (result == 0) throw out_of_range("Amount must be positive");
+        if (result > MAX_ASSET_COUNT) throw out_of_range("Amount too large");
         return result;
     }
 

@@ -117,6 +117,14 @@ namespace {
         return true;
     }
 
+    // Convert a DGB amount to whole satoshis with consistent half-up rounding.
+    // Used for BOTH the sendmany amount and the ledger record so the value sent
+    // and the value recorded can never disagree (was: %.8f round vs (int64) trunc).
+    int64_t payoutSats(double dgb) {
+        if (dgb < 0.0) dgb = 0.0;
+        return (int64_t)(dgb * 100000000.0 + 0.5);
+    }
+
     // Send an ENTIRE payout batch as one sendmany transaction: every recipient is
     // paid in a single tx with a single fee, or none are. This makes the payout
     // ATOMIC - it removes the "2 sent, 1 failed" partial-payout outcome where a
@@ -134,8 +142,15 @@ namespace {
         bool first = true;
         for (const auto& p : payouts) {
             if (!isValidDgbAddress(p.first)) return "ERROR: invalid payout address rejected before send: " + p.first;
+            // Round to whole satoshis and emit the amount FROM that integer, so the
+            // value we send exactly matches what the ledger records (payoutSats()
+            // uses the identical rounding). Formatting the raw double with %.8f
+            // rounds too, but deriving both from the same integer removes any
+            // rounding-vs-truncation drift between the tx and the ledger.
+            int64_t sat = payoutSats(p.second);
             char amountBuf[64];
-            snprintf(amountBuf, sizeof(amountBuf), "%.8f", p.second);
+            snprintf(amountBuf, sizeof(amountBuf), "%lld.%08lld",
+                     (long long)(sat / 100000000), (long long)(sat % 100000000));
             if (!first) amounts += ",";
             amounts += "\"" + p.first + "\":" + amountBuf;
             first = false;
@@ -259,40 +274,55 @@ namespace {
 
     // Decide this period's total payout budget (DGB). If poolpayoutpercent is
     // set (>0, interpreted as a percent, e.g. 10 = 10%) the budget is that share
-    // of the wallet's spendable balance — balance-derived, so it can never
-    // overspend an empty wallet and auto-scales with donations. Otherwise fall
-    // back to the fixed poolspendperperiod. `mode` is set for display; returns a
-    // negative sentinel if a balance-derived budget was requested but the RPC
-    // balance couldn't be read.
-    double computeBudget(const std::map<std::string, std::string>& cfg, std::string& mode) {
+    // of the wallet's spendable balance. Otherwise fall back to the fixed
+    // poolspendperperiod. EITHER way the budget is bounded by the spendable
+    // balance minus a fee reserve, so it can never commit more than the single
+    // atomic sendmany can actually pay (the fixed path used to skip this bound,
+    // which failed every period once poolspendperperiod exceeded spendable).
+    // `mode` is set for display; returns a negative sentinel if the RPC balance
+    // couldn't be read for a balance-derived (percent) budget.
+    // outputCount is the number of recipients we may pay, used to size the fee
+    // reserve (a big sendmany costs a bigger on-chain fee than a small one).
+    double computeBudget(const std::map<std::string, std::string>& cfg, std::string& mode, size_t outputCount) {
+        // Fee headroom: a base plus a per-output estimate. Each send pays its fee
+        // ON TOP of the amounts, so a budget equal to the whole spendable balance
+        // would leave nothing for the fee and the atomic sendmany would fail. A
+        // flat reserve under-covers a large batch, so scale it with the recipient
+        // count. Generous vs real DGB fees; it only bites near a 100% budget.
+        const double feeReserve = 0.01 + 0.0002 * (double) outputCount; // DGB
+
+        std::string rpcUser = cfgGet(cfg, "rpcuser");
+        std::string rpcPass = cfgGet(cfg, "rpcpassword");
+        int rpcPort = 14022;
+        try { rpcPort = std::stoi(cfgGet(cfg, "rpcport", "14022")); } catch (...) {}
+        double bal = getWalletBalance(rpcUser, rpcPass, rpcPort); // spendable (listunspent); -1 on RPC error
+
         double percent = 0.0;
         try { percent = std::stod(cfgGet(cfg, "poolpayoutpercent", "0")); } catch (...) { percent = 0.0; }
         if (percent > 0.0) {
             if (percent > 100.0) percent = 100.0;
-            std::string rpcUser = cfgGet(cfg, "rpcuser");
-            std::string rpcPass = cfgGet(cfg, "rpcpassword");
-            int rpcPort = 14022;
-            try { rpcPort = std::stoi(cfgGet(cfg, "rpcport", "14022")); } catch (...) {}
-            double bal = getWalletBalance(rpcUser, rpcPass, rpcPort);
             if (bal < 0.0) { mode = "balance unavailable (RPC error)"; return -1.0; }
             char m[96];
             snprintf(m, sizeof(m), "%.1f%% of %.4f DGB spendable", percent, bal);
             mode = m;
             double budget = bal * (percent / 100.0);
-            // Always keep a little unspent for the per-send network fees. Each send
-            // pays its fee ON TOP of the amount, so a budget equal to the whole
-            // spendable balance (e.g. poolpayoutpercent=100) would leave nothing for
-            // fees and the last payment would fail. This reserve covers many sends
-            // at typical DGB fee rates; it only bites when the budget approaches the
-            // full balance, so normal small percentages are unaffected.
-            const double feeReserve = 0.01; // DGB
             if (budget > bal - feeReserve) budget = bal - feeReserve;
             if (budget < 0.0) budget = 0.0;
             return budget;
         }
         double spend = 0.0;
         try { spend = std::stod(cfgGet(cfg, "poolspendperperiod", "0")); } catch (...) { spend = 0.0; }
-        mode = "poolspendperperiod (fixed)";
+        // Bound the fixed amount by spendable too (when we can read it), so it can
+        // never over-commit the atomic batch. If the RPC balance is unavailable we
+        // keep the configured amount (best-effort); an over-commit then fails the
+        // sendmany atomically - safe, nothing is stranded.
+        if (bal >= 0.0 && spend > bal - feeReserve) {
+            spend = bal - feeReserve;
+            if (spend < 0.0) spend = 0.0;
+            mode = "poolspendperperiod (capped to spendable)";
+        } else {
+            mode = "poolspendperperiod (fixed)";
+        }
         return spend;
     }
 }
@@ -418,7 +448,7 @@ void PoolDashboard::processInput() {
                     // pending so the period guard blocks a blind re-run, and tell
                     // the operator to reconcile manually. (audit M7)
                     for (const auto& pay: _pendingPayouts) {
-                        _db.recordPendingPayout(pay.first, (int64_t)(pay.second * 100000000.0));
+                        _db.recordPendingPayout(pay.first, payoutSats(pay.second));
                     }
                     addLog("  TIMEOUT - batch of " + std::to_string(_pendingPayouts.size()) +
                            " MAY have sent: " + result);
@@ -433,8 +463,8 @@ void PoolDashboard::processInput() {
                     // Success: one txid for the whole batch. Record every recipient
                     // against that shared txid.
                     for (const auto& pay: _pendingPayouts) {
-                        int64_t amtSat = (int64_t)(pay.second * 100000000.0);
-                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", pay.second);
+                        int64_t amtSat = payoutSats(pay.second);
+                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amtSat / 100000000.0);
                         addLog("  SENT " + pay.first + " " + std::string(ab) + " DGB");
                         _db.recordPayout(pay.first, amtSat, result);
                     }
@@ -463,7 +493,7 @@ void PoolDashboard::processInput() {
             auto cfg = readPoolConfig(_configPath);
             auto targets = _db.getVerifiedPayoutTargets();
             std::string budgetMode;
-            double spend = computeBudget(cfg, budgetMode);
+            double spend = computeBudget(cfg, budgetMode, targets.size());
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
 
@@ -525,7 +555,7 @@ void PoolDashboard::processInput() {
                        " (poolpayoutperiodhours=" + std::to_string(periodHours) + ").");
             } else {
                 std::string budgetMode;
-                double spend = computeBudget(cfg, budgetMode);
+                double spend = computeBudget(cfg, budgetMode, targets.size());
                 if (spend < 0) {
                     addLog("Cannot execute: could not read wallet balance (RPC error). Check rpcuser/rpcpassword/rpcport.");
                 } else if (spend == 0) {
@@ -585,8 +615,31 @@ void PoolDashboard::processInput() {
                             }
                         }
 
+                        // Dust floor: drop any aggregated payout below the network
+                        // dust threshold. A sub-dust output makes DigiByte Core
+                        // reject the ENTIRE sendmany ("Invalid amount"), and because
+                        // the batch is atomic that would strand every recipient - so
+                        // one node whose weight rounds this low must not brick the
+                        // whole payout. Such a node is effectively unpayable this
+                        // period; it becomes payable once its weight grows.
+                        // (0.0001 DGB = 10000 sats = DIGIBYTE_DUST.)
+                        {
+                            const double dustDgb = 0.0001;
+                            std::vector<std::pair<std::string, double>> kept;
+                            for (const auto& pp: _pendingPayouts) {
+                                if (pp.second < dustDgb) {
+                                    char db[48]; snprintf(db, sizeof(db), "%.8f", pp.second);
+                                    addLog("Skip " + pp.first + " - share " + std::string(db) +
+                                           " DGB is below the dust floor (weight too small this period).");
+                                } else {
+                                    kept.push_back(pp);
+                                }
+                            }
+                            _pendingPayouts.swap(kept);
+                        }
+
                         if (_pendingPayouts.empty()) {
-                            addLog("Nothing to pay: every eligible address was already paid by a peer pool this period.");
+                            addLog("Nothing to pay: every eligible address is below the dust floor or was already paid by a peer pool this period.");
                         } else {
                             addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
                             addLog("Budget: " + budgetMode);
