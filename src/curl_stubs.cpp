@@ -165,6 +165,22 @@ static CURLcode ensureSession(CurlHandle* h, DWORD timeout) {
         DWORD autologonPolicy = WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH;
         WinHttpSetOption(h->hSession, WINHTTP_OPTION_AUTOLOGON_POLICY,
                          &autologonPolicy, sizeof(autologonPolicy));
+
+        // Enable modern TLS. WinHTTP otherwise uses the OS-DEFAULT secure
+        // protocols, which on many Windows configs is still TLS 1.0/1.1 only. A
+        // request to a TLS-1.2+-only server (e.g. the pool behind Caddy) then
+        // fails the handshake and the whole call throws - surfacing as "Pool
+        // unreachable" even though a browser (its own TLS stack) reaches the site
+        // fine, and the node's other calls work because they're plain http. Opt
+        // into TLS 1.2 (+1.3 where the SDK/OS supports it); we deliberately do NOT
+        // enable the deprecated TLS 1.0/1.1.
+        DWORD secureProtocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+                              | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+#endif
+                ;
+        WinHttpSetOption(h->hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                         &secureProtocols, sizeof(secureProtocols));
     }
     // Always refresh timeouts in case they changed via CURLOPT_TIMEOUT
     WinHttpSetTimeouts(h->hSession, 5000, 5000, timeout, timeout);

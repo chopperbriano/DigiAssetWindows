@@ -1377,11 +1377,23 @@ void ConsoleDashboard::checkPspRegistration() {
         // Mirror to NodeStats so the web console can show pool reachability + node
         // count without doing its own /nodes.json fetch on the request thread.
         NodeStats::instance().setPool(true, (unsigned int)nodeCount, getConfiguredPoolBase());
-    } catch (...) {
+    } catch (const std::exception& e) {
+        // Surface WHY (was a silent catch, so "Pool unreachable" gave no clue). A
+        // TLS handshake failure here usually means old WinHTTP TLS defaults vs a
+        // TLS-1.2+ pool - see the WinHTTP secure-protocols fix in curl_stubs.cpp.
+        Log::GetInstance()->addMessage(
+                std::string("Pool /nodes.json probe failed (dashboard shows 'Pool unreachable'): ") + e.what(),
+                Log::DEBUG);
         {
             std::lock_guard<std::mutex> lock(_pspStatusMutex);
             _pspStatus = "Pool unreachable";
             // don't cache failure — retry next refresh
+        }
+        NodeStats::instance().setPool(false, 0, getConfiguredPoolBase());
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(_pspStatusMutex);
+            _pspStatus = "Pool unreachable";
         }
         NodeStats::instance().setPool(false, 0, getConfiguredPoolBase());
     }
