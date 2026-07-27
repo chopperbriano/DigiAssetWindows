@@ -160,6 +160,33 @@ namespace AssetWallet {
         return whole + "." + frac;
     }
 
+    int64_t dgbToSats(const Json::Value& amount) {
+        string s;
+        if (amount.isString() || amount.isIntegral()) s = amount.asString();
+        else if (amount.isDouble()) { char b[32]; snprintf(b, sizeof(b), "%.8f", amount.asDouble()); s = b; }
+        else throw DigiByteException(RPC_INVALID_PARAMS, "Invalid DigiByte amount");
+
+        size_t i = 0;
+        if (i < s.size() && s[i] == '+') ++i;
+        if (i < s.size() && s[i] == '-') throw DigiByteException(RPC_INVALID_PARAMS, "DigiByte amount must not be negative");
+        string whole, frac;
+        bool dot = false;
+        for (; i < s.size(); ++i) {
+            char c = s[i];
+            if (c == '.') { if (dot) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid DigiByte amount"); dot = true; }
+            else if (isdigit((unsigned char) c)) (dot ? frac : whole).push_back(c);
+            else throw DigiByteException(RPC_INVALID_PARAMS, "Invalid DigiByte amount");
+        }
+        if (whole.empty() && frac.empty()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid DigiByte amount");
+        if (frac.size() > 8) throw DigiByteException(RPC_INVALID_PARAMS, "DigiByte amount has more than 8 decimals");
+        while (frac.size() < 8) frac.push_back('0');
+        try {
+            return (whole.empty() ? 0 : (int64_t) stoll(whole)) * 100000000 + (frac.empty() ? 0 : (int64_t) stoll(frac));
+        } catch (...) {
+            throw DigiByteException(RPC_INVALID_PARAMS, "DigiByte amount out of range");
+        }
+    }
+
     uint64_t estimateMinerFee(const DigiByteTransaction& tx) {
         uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
         try {

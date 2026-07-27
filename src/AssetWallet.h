@@ -54,6 +54,16 @@ namespace AssetWallet {
     std::string satsToDecimal(uint64_t sats);
 
     /**
+     * Parses a DigiByte amount (JSON number OR string - Core accepts both) into
+     * satoshis EXACTLY, with no floating-point rounding. Used when merging two
+     * outputs that resolve to the same address in sendmany: summing them as
+     * doubles could yield e.g. 0.1+0.2 = 0.30000000000000004 (which Core rejects),
+     * and calling asDouble() on a string amount throws. Throws DigiByteException
+     * (RPC_INVALID_PARAMS) on a malformed, negative, or >8-decimal amount.
+     */
+    int64_t dgbToSats(const Json::Value& amount);
+
+    /**
      * Rough miner fee estimate in sats for a not yet funded asset transaction: the node's
      * estimatesmartfee rate(min relay rate fallback) over an approximated funded size
      * (base + op_return + outputs + one funding input + change).  DigiByte fees are tiny

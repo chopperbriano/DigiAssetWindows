@@ -13,6 +13,7 @@
 //
 
 #include "PoolDashboard.h"
+#include "PayoutMath.h"
 #include "CurlHandler.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
@@ -117,14 +118,6 @@ namespace {
         return true;
     }
 
-    // Convert a DGB amount to whole satoshis with consistent half-up rounding.
-    // Used for BOTH the sendmany amount and the ledger record so the value sent
-    // and the value recorded can never disagree (was: %.8f round vs (int64) trunc).
-    int64_t payoutSats(double dgb) {
-        if (dgb < 0.0) dgb = 0.0;
-        return (int64_t)(dgb * 100000000.0 + 0.5);
-    }
-
     // Send an ENTIRE payout batch as one sendmany transaction: every recipient is
     // paid in a single tx with a single fee, or none are. This makes the payout
     // ATOMIC - it removes the "2 sent, 1 failed" partial-payout outcome where a
@@ -147,7 +140,7 @@ namespace {
             // uses the identical rounding). Formatting the raw double with %.8f
             // rounds too, but deriving both from the same integer removes any
             // rounding-vs-truncation drift between the tx and the ledger.
-            int64_t sat = payoutSats(p.second);
+            int64_t sat = PayoutMath::payoutSats(p.second);
             char amountBuf[64];
             snprintf(amountBuf, sizeof(amountBuf), "%lld.%08lld",
                      (long long)(sat / 100000000), (long long)(sat % 100000000));
@@ -448,7 +441,7 @@ void PoolDashboard::processInput() {
                     // pending so the period guard blocks a blind re-run, and tell
                     // the operator to reconcile manually. (audit M7)
                     for (const auto& pay: _pendingPayouts) {
-                        _db.recordPendingPayout(pay.first, payoutSats(pay.second));
+                        _db.recordPendingPayout(pay.first, PayoutMath::payoutSats(pay.second));
                     }
                     addLog("  TIMEOUT - batch of " + std::to_string(_pendingPayouts.size()) +
                            " MAY have sent: " + result);
@@ -463,7 +456,7 @@ void PoolDashboard::processInput() {
                     // Success: one txid for the whole batch. Record every recipient
                     // against that shared txid.
                     for (const auto& pay: _pendingPayouts) {
-                        int64_t amtSat = payoutSats(pay.second);
+                        int64_t amtSat = PayoutMath::payoutSats(pay.second);
                         char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amtSat / 100000000.0);
                         addLog("  SENT " + pay.first + " " + std::string(ab) + " DGB");
                         _db.recordPayout(pay.first, amtSat, result);
@@ -624,10 +617,9 @@ void PoolDashboard::processInput() {
                         // period; it becomes payable once its weight grows.
                         // (0.0001 DGB = 10000 sats = DIGIBYTE_DUST.)
                         {
-                            const double dustDgb = 0.0001;
                             std::vector<std::pair<std::string, double>> kept;
                             for (const auto& pp: _pendingPayouts) {
-                                if (pp.second < dustDgb) {
+                                if (PayoutMath::isBelowDust(pp.second)) {
                                     char db[48]; snprintf(db, sizeof(db), "%.8f", pp.second);
                                     addLog("Skip " + pp.first + " - share " + std::string(db) +
                                            " DGB is below the dust floor (weight too small this period).");

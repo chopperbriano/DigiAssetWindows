@@ -113,7 +113,9 @@ set(UNIT_TESTS
     DatabaseFunctionalTests.cpp
     VersionTests.cpp
     Base58Tests.cpp
-    ChainSplitFixtureTest.cpp)
+    ChainSplitFixtureTest.cpp
+    AssetWalletTest.cpp
+    PayoutMathTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)
