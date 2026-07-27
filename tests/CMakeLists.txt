@@ -92,7 +92,9 @@ target_link_libraries(Google_Tests_run gtest gtest_main)
 
 if(WIN32 AND MSVC)
   # Disable C++20 char8_t breaking change (u8"" literals stay as const char[])
-  target_compile_options(Google_Tests_run PRIVATE /Zc:char8_t-)
+  # and force UTF-8 source/exec charset so u8"" byte sequences (emoji in the BitIO
+  # string tests) are read correctly instead of via the system codepage.
+  target_compile_options(Google_Tests_run PRIVATE /Zc:char8_t- /utf-8)
   target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
   target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
   target_link_libraries(Google_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
@@ -130,7 +132,7 @@ target_compile_definitions(Unit_Tests_run PRIVATE
     CHAIN_SPLIT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/chain-split-2026")
 
 if(WIN32 AND MSVC)
-  target_compile_options(Unit_Tests_run PRIVATE /Zc:char8_t-)
+  target_compile_options(Unit_Tests_run PRIVATE /Zc:char8_t- /utf-8)
   target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/jsoncpp/install/lib/jsoncpp_static.lib")
   target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-common.lib")
   target_link_libraries(Unit_Tests_run "${CMAKE_SOURCE_DIR}/libjson-rpc-cpp/install/lib/jsonrpccpp-client.lib")
@@ -140,3 +142,22 @@ else()
   target_link_libraries(Unit_Tests_run ssl crypto pthread)
   target_link_libraries(Unit_Tests_run /lib/x86_64-linux-gnu/libjsoncpp.so jsonrpccpp-common jsonrpccpp-client)
 endif()
+
+# ---- Test fixtures + ctest wiring --------------------------------------------
+# The suites read fixtures via paths relative to the BUILD dir (e.g.
+# ../tests/testFiles) and need a config.cfg in the working directory. Generate a
+# minimal one (dummy creds - tests that actually need a live Core/IPFS SKIP when
+# it isn't reachable) and register both suites to run FROM the build dir, so a
+# plain `ctest` in CI invokes them with the correct working directory. Only
+# written if absent, so a real local config.cfg is never clobbered.
+set(_test_config "rpcuser=test\nrpcpassword=test\nrpcport=14022\nrpcassetport=14024\nipfspath=http://localhost:5001/api/v0/\n")
+if(NOT EXISTS "${CMAKE_BINARY_DIR}/config.cfg")
+  file(WRITE "${CMAKE_BINARY_DIR}/config.cfg" "${_test_config}")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(NOT EXISTS "${CMAKE_BINARY_DIR}/bin/config.cfg")
+  file(WRITE "${CMAKE_BINARY_DIR}/bin/config.cfg" "${_test_config}")
+endif()
+
+add_test(NAME Unit_Tests_run   COMMAND Unit_Tests_run   WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME Google_Tests_run COMMAND Google_Tests_run WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

@@ -51,7 +51,7 @@ SET(SO_VERSION    0)
 # This is the SOURCE OF TRUTH for the version — it is substituted into
 # src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
 # match the win.<N> tag on every release; do NOT hand-edit the generated header.
-SET(WIN_BUILD 112)
+SET(WIN_BUILD 113)
 # NOTE: upstream added a CMAKE_*_OUTPUT_DIRECTORY -> bin/ redirect here. Not
 # adopted: this fork's release/update scripts expect build/<sub>/Release/. Revisit
 # later if we want the bin/ layout (would require updating those scripts).
@@ -91,5 +91,6 @@ endif()
 if(BUILD_TEST)
     message(STATUS "\nConfiguring Tests:")
     set(GOOGLETEST_VERSION 1.11.0)
+    enable_testing()   # so `ctest` can run the suites (registered in tests/CMakeLists.txt)
     ADD_SUBDIRECTORY(tests)
 endif()

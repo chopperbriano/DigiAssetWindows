@@ -288,9 +288,10 @@ void mctrivia::keepAliveTask() {
             log->addMessage("PSP keepalive task: unknown exception", Log::WARNING);
         }
 
-        //sleep for 20 minutes, but wake up periodically so shutdown is responsive
-        for (int i = 0; i < 120 && _keepRunning.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+        //sleep for 20 minutes, but wake up every 200ms so stop()/shutdown returns
+        //promptly (10s chunks made stop() block up to 10s - still slow to shut down)
+        for (int i = 0; i < 6000 && _keepRunning.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     }
 }
@@ -357,9 +358,10 @@ void mctrivia::permanentFetcherTask() {
         }
         probeCounter++;
 
-        // Sleep ~10 minutes between iterations, checking stop flag every 10s.
-        for (int i = 0; i < 60 && _fetcherRunning.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+        // Sleep ~10 minutes between iterations, checking the stop flag every 200ms
+        // so stop()/shutdown returns promptly (was 10s chunks -> up to 10s to stop).
+        for (int i = 0; i < 3000 && _fetcherRunning.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     }
 }

@@ -22,13 +22,15 @@ TEST(PermanentStoragePoolList, poolAccess) {
     {
         PermanentStoragePoolList list("config.cfg");
 
-        //there are currently 2 known pools: local(0) and mctrivia(1)
-        ASSERT_EQ(list.getPoolCount(), (unsigned int) 2);
+        //four known pools: local(0), mctrivia(1, legacy), digistamp(2), custompool(3)
+        ASSERT_EQ(list.getPoolCount(), (unsigned int) 4);
         EXPECT_EQ(list.getPool(0)->getName(), "Local Storage");
         EXPECT_FALSE(list.getPool(1)->getName().empty());
+        EXPECT_FALSE(list.getPool(2)->getName().empty());
+        EXPECT_FALSE(list.getPool(3)->getName().empty());
 
         //out of range throws
-        EXPECT_THROW(list.getPool(2), std::out_of_range);
+        EXPECT_THROW(list.getPool(4), std::out_of_range);
 
         //iteration sees every pool
         unsigned int count = 0;

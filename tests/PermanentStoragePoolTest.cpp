@@ -82,8 +82,9 @@ TEST(PermanentStoragePool, mctrivia_stopReturnsQuickly) {
 // The test is skipped if the database is not present.
 // ─────────────────────────────────────────────────────────────────────────────
 TEST(PermanentStoragePool, mctrivia_allAddressesRecognized) {
-    ASSERT_TRUE(utils::fileExists("../tests/testFiles/rpcTest.db"))
-        << "rpcTest.db not found — run DigiAssetTransaction.existingAssetTransactions first (requires IPFS)";
+    if (!utils::fileExists("../tests/testFiles/rpcTest.db"))
+        GTEST_SKIP() << "rpcTest.db not found — generate via DigiAssetTransaction.existingAssetTransactions "
+                        "(requires IPFS). Skipped so CI stays green.";
 
     AppMain* appMain = AppMain::GetInstance();
     Database db("../tests/testFiles/rpcTest.db");

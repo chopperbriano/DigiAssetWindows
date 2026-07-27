@@ -6,9 +6,16 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
+
+// Portable temp path (was hardcoded POSIX "/tmp/..." which doesn't exist on
+// Windows, so the file-creating tests failed there).
+static std::string tmpPath(const std::string& name) {
+    return (std::filesystem::temp_directory_path() / name).string();
+}
 
 using namespace std;
 
@@ -86,7 +93,7 @@ TEST(Utils, generateRandom_alphanumericCharsOnly) {
 
 TEST(Utils, fileExists_existingFile) {
     // Create a temp file
-    const string path = "/tmp/utils_test_exists.tmp";
+    const string path = tmpPath("utils_test_exists.tmp");
     ofstream f(path);
     f << "test";
     f.close();
@@ -96,7 +103,7 @@ TEST(Utils, fileExists_existingFile) {
 }
 
 TEST(Utils, fileExists_nonExistentFile) {
-    EXPECT_FALSE(utils::fileExists("/tmp/this_file_should_not_exist_utils_test.tmp"));
+    EXPECT_FALSE(utils::fileExists(tmpPath("this_file_should_not_exist_utils_test.tmp")));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,8 +134,8 @@ TEST(Utils, isInteger_leadingWhitespace_accepted) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST(Utils, copyFile_success) {
-    const string src = "/tmp/utils_copy_src.tmp";
-    const string dst = "/tmp/utils_copy_dst.tmp";
+    const string src = tmpPath("utils_copy_src.tmp");
+    const string dst = tmpPath("utils_copy_dst.tmp");
 
     ofstream f(src);
     f << "hello copy";
@@ -145,7 +152,7 @@ TEST(Utils, copyFile_success) {
 }
 
 TEST(Utils, copyFile_sourceMissing) {
-    EXPECT_FALSE(utils::copyFile("/tmp/nonexistent_utils_src.tmp", "/tmp/utils_copy_dst2.tmp"));
+    EXPECT_FALSE(utils::copyFile(tmpPath("nonexistent_utils_src.tmp"), tmpPath("utils_copy_dst2.tmp")));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
