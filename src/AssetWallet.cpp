@@ -86,15 +86,42 @@ namespace AssetWallet {
 
     void assertTransferableAsset(const DigiAsset& asset) {
         DigiAssetRules rules = asset.getRules();
-        // Royalty and deflation rules REQUIRE extra outputs (a royalty payment /
-        // a burn) on every transfer. Only issueasset adds rule outputs, so a
-        // transfer/burn built here omits them; DigiAsset::checkRulesPass then
-        // throws exceptionRuleFailed on replay and the asset is burned. Reject.
-        if (rules.getIfRequiresRoyalty() || rules.getRequiredBurn() > 0) {
+        if (rules.empty()) return; // no rules -> always transferable (the common case)
+
+        // The transfer builders (sendasset/sendmanyassets/burnasset) add none of
+        // the outputs a rule requires (only issueasset calls addRuleOutputs), don't
+        // guarantee signer inputs, and don't validate recipients. So any rule that
+        // DigiAsset::checkRulesPass enforces on a non-consolidation transfer would
+        // make every indexer replay the tx as an unintentional burn and DESTROY the
+        // asset. Until rule-aware transfers exist (docs/rule-aware-transfers-scope.md)
+        // we refuse up front, with a specific reason, instead of silently burning.
+        // This mirrors checkRulesPass's enforced rule set exactly.
+        if (rules.getIfRequiresRoyalty())
             throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset carries royalty or deflation rules; transferring or burning it "
-                                    "is not yet supported and would destroy the asset. Refusing.");
-        }
+                                    "This asset has a royalty rule; transferring it is not yet supported and would burn it. Refusing.");
+        if (rules.getRequiredBurn() > 0)
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has a deflation (required-burn) rule; transferring it is not yet supported and would burn it. Refusing.");
+        if (rules.getRequiredSignerWeight() > 0)
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset requires authorized signers to move; wallet-built transfers can't guarantee that and would burn it. Refusing.");
+        if (rules.getIfVoteRestricted())
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset may only be sent to approved vote addresses; compliant transfers are not yet supported and it would burn. Refusing.");
+        if (rules.getIfGeoFenced())
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has KYC/geofence rules; compliant transfers are not yet supported and it would burn. Refusing.");
+
+        // Expiry needs the current height/time. An expired asset genuinely can't
+        // move - any transfer burns it - so refuse with a clear reason.
+        Database* db = AppMain::GetInstance()->getDatabase();
+        unsigned int height = db->getBlockHeight();
+        uint64_t now = (uint64_t) std::chrono::duration_cast<std::chrono::seconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+        if (rules.getIfExpired(height, now))
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has expired and can no longer be transferred (a send would burn it). Refusing.");
     }
 
     uint64_t parseAssetAmount(const Json::Value& amount, uint8_t decimals) {

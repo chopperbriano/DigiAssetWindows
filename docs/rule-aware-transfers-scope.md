@@ -52,11 +52,17 @@ royalty support lands.
 ## Proposed phases
 
 1. **Phase 0 (done, win.109):** reject royalty/deflation transfers instead of
-   burning. *Add:* also reject the conditional cases (signer/vote/KYC when
-   unsatisfiable) so nothing burns silently — currently those still can.
-2. **Phase 1 — cheap, correct rejections:** expiry → "expired" error; vote/KYC →
-   validate recipients up front and reject with a specific reason. Allow full
-   burns of royalty/deflation assets (detect zero-change).
+   burning.
+2. **Phase 1 (done, win.110):** `assertTransferableAsset` now mirrors
+   `checkRulesPass`'s full enforced set — royalty, deflation, **signer, vote,
+   KYC/geofence, and expiry** — and rejects each with a specific reason, so no
+   enforced transfer rule can silently burn. The guard is applied to every asset
+   that lands in a *receiving* output: the sent asset(s) in `sendasset`/
+   `sendmanyassets`, and any leftover/bystander **change** assets in all three
+   methods. **Full burns are now allowed** — a burn with no leftover change is a
+   pure burn/consolidation that `checkRulesPass` permits, so `burnasset` only
+   guards when a change output would exist. *Still conservative:* vote/KYC assets
+   are rejected outright rather than validating the recipient (Phase 2 refines).
 3. **Phase 2 — royalty transfers:** add a `addTransferRuleOutputs()` builder that
    appends royalty payment outputs (mirror `addRuleOutputs`, but for transfers),
    wired into `sendasset`/`sendmanyassets`. Fund the royalty DGB from the wallet.

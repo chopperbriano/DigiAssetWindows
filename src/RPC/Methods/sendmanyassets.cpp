@@ -139,6 +139,14 @@ namespace RPC {
                 changeAssets[needed.first].setCount(changeAssets[needed.first].getCount() - needed.second);
             }
 
+            // Every asset with a positive leftover is returned to the wallet as a
+            // change output (a receive), so its transfer rules apply - guard each
+            // (covers bystander assets that rode the selected inputs). Fully-sent
+            // assets have zero leftover here and were already guarded above.
+            for (const auto& kv: changeAssets) {
+                if (kv.second.getCount() > 0) AssetWallet::assertTransferableAsset(kv.second);
+            }
+
             //group sends by recipient - the wallet's createrawtransaction rejects duplicate
             //addresses, and one output can carry several assets anyway
             std::vector<std::string> recipientOrder;

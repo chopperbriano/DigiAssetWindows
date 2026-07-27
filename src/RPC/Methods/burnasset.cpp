@@ -58,12 +58,6 @@ namespace RPC {
             }
             if (assetIndex == 1) throw DigiByteException(RPC_INVALID_PARAMS, "DigiByte can not be burned");
 
-            // A royalty/deflation asset's leftover CHANGE from a partial burn is a
-            // non-consolidation receive, so the rule check would burn it too. The
-            // transfer path can't add the required outputs, so refuse rather than
-            // silently destroy the change.
-            AssetWallet::assertTransferableAsset(asset);
-
             //parse amount in to smallest divisible units
             uint64_t amount;
             try {
@@ -118,6 +112,15 @@ namespace RPC {
                 }
             }
             changeAmount -= amount;
+
+            // Rule guard, applied only to assets that end up in a RECEIVING output.
+            // A FULL burn (no leftover change of this asset) is a pure burn, which
+            // checkRulesPass allows even for ruled assets - so it's safe and stays
+            // permitted. Only guard the burned asset when there's change to return,
+            // and always guard any OTHER assets riding the selected inputs (they're
+            // routed back to the wallet, a receive, so their own rules apply).
+            if (changeAmount > 0) AssetWallet::assertTransferableAsset(asset);
+            for (const DigiAsset& other: otherAssets) AssetWallet::assertTransferableAsset(other);
 
             //build the transaction
             DigiByteTransaction tx;

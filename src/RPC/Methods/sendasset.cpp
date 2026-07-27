@@ -127,6 +127,11 @@ namespace RPC {
             }
             changeAmount -= amount;
 
+            // Any OTHER assets riding the selected inputs are routed back to the
+            // wallet as change (a receive), so their own transfer rules apply too -
+            // guard each so a ruled bystander asset isn't silently burned.
+            for (const DigiAsset& other: otherAssets) AssetWallet::assertTransferableAsset(other);
+
             //build the transaction
             DigiByteTransaction tx;
             for (const AssetUTXO& input: inputs) tx.addInput(input);
