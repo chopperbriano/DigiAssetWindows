@@ -47,12 +47,22 @@ namespace {
 /**
  * Defines default IPFS callbacks
  */
-std::map<std::string, IPFSCallbackFunction> Database::_ipfsCallbacks = {
-        {"",
-         [](const std::string&, const std::string&, const std::string&, bool) {}} //generic do nothing callback
-};
-// One lock for every access to _ipfsCallbacks (see header note). (audit M5)
-std::mutex Database::_ipfsCallbacksMutex;
+// Construct-on-first-use: the map (seeded with the "" do-nothing callback) and
+// its lock are function-local statics, so they're built the first time ANY code
+// touches them - including a static_block registration during program init -
+// regardless of translation-unit link order. (fixes the static-init-order crash)
+std::map<std::string, IPFSCallbackFunction>& Database::ipfsCallbacks() {
+    static std::map<std::string, IPFSCallbackFunction> callbacks = {
+            {"",
+             [](const std::string&, const std::string&, const std::string&, bool) {}} //generic do nothing callback
+    };
+    return callbacks;
+}
+// One lock for every access to ipfsCallbacks() (see header note). (audit M5)
+std::mutex& Database::ipfsCallbacksMutex() {
+    static std::mutex m;
+    return m;
+}
 
 /*
 ██████╗ ██╗   ██╗██╗██╗     ██████╗     ████████╗ █████╗ ██████╗ ██╗     ███████╗███████╗
@@ -647,11 +657,11 @@ void Database::initializeClassValues() {
     //remove non-permanent IPFS callbacks and pauses from ram
     _ipfsCurrentlyPaused.clear();
     {
-        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-        auto it = _ipfsCallbacks.begin();
-        while (it != _ipfsCallbacks.end()) {
+        std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+        auto it = ipfsCallbacks().begin();
+        while (it != ipfsCallbacks().end()) {
             if (it->first[0] == '_') {
-                it = _ipfsCallbacks.erase(it);
+                it = ipfsCallbacks().erase(it);
             } else {
                 ++it;
             }
@@ -2560,8 +2570,8 @@ void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCall
     }
 
     //register callback
-    std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-    _ipfsCallbacks[callbackSymbol] = callback;
+    std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+    ipfsCallbacks()[callbackSymbol] = callback;
 }
 
 
@@ -2573,9 +2583,9 @@ void Database::registerIPFSCallback(const string& callbackSymbol, const IPFSCall
  *  std::out_of_range if no callback is registered under that symbol
  */
 IPFSCallbackFunction Database::getIPFSCallback(const string& callbackSymbol) {
-    std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-    auto it = _ipfsCallbacks.find(callbackSymbol);
-    if (it == _ipfsCallbacks.end()) throw std::out_of_range("Non existent callback");
+    std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+    auto it = ipfsCallbacks().find(callbackSymbol);
+    if (it == ipfsCallbacks().end()) throw std::out_of_range("Non existent callback");
     return it->second; // returns a copy - safe to invoke after the lock releases
 }
 
@@ -2678,8 +2688,8 @@ void Database::getNextIPFSJob(unsigned int& jobIndex, string& cid, string& sync,
         callbackSymbol += to_string(jobIndex);
     }
     {
-        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-        callback = _ipfsCallbacks[callbackSymbol]; //get callback(note there is a default callback if empty)
+        std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+        callback = ipfsCallbacks()[callbackSymbol]; //get callback(note there is a default callback if empty)
     }
 
 
@@ -2764,8 +2774,8 @@ void Database::removeIPFSJob(unsigned int jobIndex, const string& sync) {
 
     //remove callback from ram if temp callback
     if (sync == "_") {
-        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-        _ipfsCallbacks.erase("_" + to_string(jobIndex));
+        std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+        ipfsCallbacks().erase("_" + to_string(jobIndex));
     }
 }
 
@@ -2850,8 +2860,8 @@ future<string> Database::addIPFSJobPromise(const string& cid, const string& sync
 
     //register callback function
     {
-        std::lock_guard<std::mutex> lk(_ipfsCallbacksMutex); // (audit M5)
-        _ipfsCallbacks["_" + to_string(jobIndex)] = [resultPtr](const string& cid, const string& extra,
+        std::lock_guard<std::mutex> lk(ipfsCallbacksMutex()); // (audit M5)
+        ipfsCallbacks()["_" + to_string(jobIndex)] = [resultPtr](const string& cid, const string& extra,
                                                                  const string& content, bool failed) {
             if (failed) {
                 resultPtr->set_exception(std::make_exception_ptr(IPFS::exceptionTimeout()));

@@ -353,11 +353,20 @@ private:
 
     //ipfs ram db values
     std::vector<std::pair<std::string, uint64_t>> _ipfsCurrentlyPaused;
-    static std::map<std::string, IPFSCallbackFunction> _ipfsCallbacks;
-    // Guards every read/write of _ipfsCallbacks. The map is touched by up to 10
+    // Construct-on-first-use accessors (NOT static data members) for the IPFS
+    // callback registry and its lock. static_block registrations in other
+    // translation units (DigiByteDomain, PermanentStoragePoolList) call
+    // registerIPFSCallback at PROGRAM INIT, which then indexes this map + locks
+    // this mutex. As static data members those could be touched before their
+    // constructors ran (static-initialization-order fiasco) - link-order
+    // dependent, which crashed Google_Tests_run with an access violation.
+    // Function-local statics are guaranteed constructed on first use, killing the
+    // ordering dependency.
+    static std::map<std::string, IPFSCallbackFunction>& ipfsCallbacks();
+    // Guards every read/write of ipfsCallbacks(). The map is touched by up to 10
     // IPFS worker threads plus the analyzer thread; without one shared lock a
     // concurrent erase vs find/operator[] corrupts the tree. (audit M5)
-    static std::mutex _ipfsCallbacksMutex;
+    static std::mutex& ipfsCallbacksMutex();
 
     //DigiBYte Domain ram values
     std::vector<std::string> _masterDomainAssetId = {};
