@@ -96,12 +96,27 @@ static bool parseUrl(const std::string& url, ParsedUrl& out) {
         hostPort = url.substr(rest);
         path     = "/";
     }
-    size_t colon = hostPort.find(':');
-    if (colon != std::string::npos) {
-        out.host = utf8ToWide(hostPort.substr(0, colon));
-        out.port = std::stoi(hostPort.substr(colon + 1));
+    // Handle a bracketed IPv6 literal ("[::1]:14022") - its address contains
+    // colons, so a naive find(':') would mis-split it - then an optional numeric
+    // port. A non-numeric/out-of-range port keeps the scheme default instead of
+    // throwing out of parseUrl (which had no caller try/catch, so std::stoi's
+    // exception surfaced as an unexpected throw on the RPC/HTTP thread).
+    if (!hostPort.empty() && hostPort[0] == '[') {
+        size_t close = hostPort.find(']');
+        if (close == std::string::npos) return false; // malformed IPv6 literal
+        out.host = utf8ToWide(hostPort.substr(1, close - 1));
+        size_t pcolon = hostPort.find(':', close);
+        if (pcolon != std::string::npos) {
+            try { out.port = std::stoi(hostPort.substr(pcolon + 1)); } catch (...) { /* keep default */ }
+        }
     } else {
-        out.host = utf8ToWide(hostPort);
+        size_t colon = hostPort.find(':');
+        if (colon != std::string::npos) {
+            out.host = utf8ToWide(hostPort.substr(0, colon));
+            try { out.port = std::stoi(hostPort.substr(colon + 1)); } catch (...) { /* keep default */ }
+        } else {
+            out.host = utf8ToWide(hostPort);
+        }
     }
     out.path = utf8ToWide(path);
     return true;
@@ -112,6 +127,11 @@ static bool parseUrl(const std::string& url, ParsedUrl& out) {
 // Backing object for a CURL* easy handle. Holds the per-request options set via
 // curl_easy_setopt plus the persistent WinHTTP session/connection handles that
 // are kept alive across curl_easy_perform calls for keep-alive reuse.
+// Progress/abort callback type (CURLOPT_XFERINFOFUNCTION). A typedef is required
+// so it can be passed to va_arg() - an inline function-pointer type with commas
+// breaks the macro.
+typedef int (*XferInfoFn)(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t);
+
 struct CurlHandle {
     std::string            url;
     std::string            postFields;
@@ -126,6 +146,14 @@ struct CurlHandle {
     std::string            mimeBody;
     std::string            mimeContentType;
     bool                   hasMime       = false;
+
+    // Progress/abort callback (CURLOPT_XFERINFOFUNCTION). Polled during the body
+    // read so abortAllTransfers() can cut a streaming transfer short on shutdown
+    // instead of it being a no-op. int(*)(clientp, dltotal, dlnow, ultotal, ulnow),
+    // nonzero return = abort.
+    XferInfoFn             xferInfoFunc  = nullptr;
+    void*                  xferInfoData  = nullptr;
+    bool                   noProgress    = true;
 
     // Persistent WinHTTP handles — reused across curl_easy_perform calls
     HINTERNET              hSession      = nullptr;
@@ -230,6 +258,10 @@ void curl_easy_reset(CURL* handle) {
     h->mimeBody.clear();
     h->mimeContentType.clear();
     h->hasMime       = false;
+    // Progress/abort callback is per-request too (re-applied via applyAbortCheck).
+    h->xferInfoFunc  = nullptr;
+    h->xferInfoData  = nullptr;
+    h->noProgress    = true;
     // hSession, hConnect, connHost, connPort, connHttps are preserved
 }
 
@@ -278,10 +310,17 @@ CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
             if (mime) buildMultipartBody(h, mime); // sets mimeBody/mimeContentType/hasMime/isPost
             break;
         }
+        case CURLOPT_XFERINFOFUNCTION:
+            h->xferInfoFunc = va_arg(args, XferInfoFn);
+            break;
+        case CURLOPT_XFERINFODATA:
+            h->xferInfoData = va_arg(args, void*);
+            break;
+        case CURLOPT_NOPROGRESS:
+            h->noProgress = (va_arg(args, long) != 0);
+            break;
         default:
-            // consume unknown argument (treat as long/pointer). This also covers
-            // CURLOPT_XFERINFOFUNCTION / CURLOPT_NOPROGRESS (progress/abort is not
-            // wired into the WinHTTP stub) - harmless no-ops.
+            // consume unknown argument (treat as long/pointer) - harmless no-op.
             (void)va_arg(args, void*);
             break;
     }
@@ -417,18 +456,43 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
             WINHTTP_NO_HEADER_INDEX);
         h->responseCode = (long)statusCode;
 
-        // Read body via write callback
+        // Read body via write callback. Distinguish a CLEAN end of body from a
+        // dropped connection / read error: WinHttpQueryDataAvailable returning
+        // FALSE (or WinHttpReadData failing) mid-stream means the transfer was cut
+        // short, which must be reported as an error - NOT CURLE_OK. Otherwise a
+        // truncated download (e.g. a partially-received IPFS file) is written to
+        // disk and reported as complete, and callers that don't verify content
+        // (IPFS cat-to-file) silently accept corrupt/short data. Real libcurl
+        // returns CURLE_PARTIAL_FILE here.
         CURLcode result = CURLE_OK;
         if (h->writeFunc) {
             std::vector<char> buf(65536);
-            DWORD available = 0;
-            while (WinHttpQueryDataAvailable(hRequest, &available) && available > 0) {
+            for (;;) {
+                // Cooperative abort (used by IPFS::stop()/abortAllTransfers on
+                // shutdown): if the progress callback says stop, end the transfer
+                // now instead of streaming the whole body. Note this checks between
+                // chunks, so it cuts a streaming download short promptly; a request
+                // blocked with no data still ends via the WinHTTP receive timeout.
+                if (h->xferInfoFunc && !h->noProgress &&
+                    h->xferInfoFunc(h->xferInfoData, 0, 0, 0, 0) != 0) {
+                    result = CURLE_ABORTED_BY_CALLBACK;
+                    break;
+                }
+                DWORD available = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &available)) {
+                    result = CURLE_PARTIAL_FILE; // connection dropped before body finished
+                    break;
+                }
+                if (available == 0) break; // clean end of body
                 if (available > (DWORD)buf.size()) buf.resize(available);
                 DWORD bytesRead = 0;
-                if (WinHttpReadData(hRequest, buf.data(), available, &bytesRead) && bytesRead > 0) {
-                    size_t written = h->writeFunc(buf.data(), 1, bytesRead, h->writeData);
-                    if (written != bytesRead) { result = CURLE_WRITE_ERROR; break; }
+                if (!WinHttpReadData(hRequest, buf.data(), available, &bytesRead)) {
+                    result = CURLE_RECV_ERROR; // read failed mid-stream (also avoids a busy spin)
+                    break;
                 }
+                if (bytesRead == 0) break; // no more data
+                size_t written = h->writeFunc(buf.data(), 1, bytesRead, h->writeData);
+                if (written != bytesRead) { result = CURLE_WRITE_ERROR; break; }
             }
         }
 

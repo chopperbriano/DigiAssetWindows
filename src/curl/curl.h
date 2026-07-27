@@ -185,6 +185,7 @@ typedef enum {
   CURLOPT_SSL_VERIFYPEER = 64,
   CURLOPT_SSL_VERIFYHOST = 81,
   CURLOPT_XFERINFOFUNCTION = 20219,   /* progress/abort callback (curl_off_t args) - PR26 */
+  CURLOPT_XFERINFODATA = 10057,       /* clientp passed to the xferinfo callback */
   CURLOPT_MIMEPOST = 10269            /* attach a curl_mime multipart body - PR26 */
 } CURLoption;
 
