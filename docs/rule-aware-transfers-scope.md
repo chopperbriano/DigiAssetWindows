@@ -63,10 +63,22 @@ royalty support lands.
    pure burn/consolidation that `checkRulesPass` permits, so `burnasset` only
    guards when a change output would exist. *Still conservative:* vote/KYC assets
    are rejected outright rather than validating the recipient (Phase 2 refines).
+2b. **Phase 2 foundation (done, win.111):** `fundSignSend` now runs the indexer's
+   own `DigiByteTransaction::checkRulesPass()` on the fully-built transfer (chain
+   context = current tip) **before broadcasting**, and refuses if it would fail.
+   This is the authoritative safety net: no asset-burning transaction can be
+   broadcast even if a rule type is missed, and it *allows* transfers that
+   genuinely satisfy the rules — so a full send to a valid **vote/KYC** address now
+   works (those were dropped from the early reject guard; the backstop decides).
+   It is also the verification half of Phase 2/3: once we add royalty/burn outputs,
+   the same check confirms they're correct before the tx goes out (build → verify →
+   broadcast, never build → broadcast → burn).
+
 3. **Phase 2 — royalty transfers:** add a `addTransferRuleOutputs()` builder that
    appends royalty payment outputs (mirror `addRuleOutputs`, but for transfers),
    wired into `sendasset`/`sendmanyassets`. Fund the royalty DGB from the wallet.
-   Round-trip test against `checkRulesPass` with a captured fixture.
+   The checkRulesPass backstop already verifies the result; the open risk is the
+   exchange-rate-at-mining-height timing (below). Round-trip test with a fixture.
 4. **Phase 3 — deflation transfers:** add the required burn output; reconcile with
    change and fee.
 5. **Phase 4 — signer assets:** design a signing flow (single-wallet fast path

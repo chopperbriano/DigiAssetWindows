@@ -89,8 +89,6 @@ class DigiByteTransaction {
     // Replays the encoded transfer instructions to distribute input assets onto
     // outputs (type = issuance/transfer/burn); handles change and rule checks.
     void decodeAssetTransfer(BitIO& dataStream, const std::vector<AssetUTXO>& inputAssets, uint8_t type);
-    // Verifies every input asset's rules against this tx; throws on failure.
-    void checkRulesPass() const;
     // Places an asset on a given output, merging counts if aggregable.
     void addAssetToOutput(size_t output, const DigiAsset& asset);
 
@@ -172,6 +170,21 @@ public:
     void addRuleOutputs(); //adds the outputs the issued asset's rules require(call after all
                            //asset outputs and before any other extra outputs, e.g. PSP fees)
     std::string encodeAssetOpReturn() const;
+
+    // Verifies every input asset's rules against this tx's inputs/outputs at the
+    // set chain context; throws DigiAsset::exceptionRuleFailed on the first rule a
+    // transfer would violate. This is the indexer's own check - callers run it on a
+    // wallet-built transfer before broadcasting so a rule-violating (asset-burning)
+    // transaction is refused instead of sent.
+    void checkRulesPass() const;
+    // Set the chain context (block height + unix time) the rule check should use.
+    // For a not-yet-mined wallet transfer this is the current tip - the best
+    // estimate of the height/time the tx will confirm at - so checkRulesPass sees
+    // the same royalty rate / expiry state an indexer will.
+    void setChainContext(unsigned int height, uint64_t time) {
+        _height = height;
+        _time = time;
+    }
 
     // Test helpers — not for production use
     void setHeightForTesting(unsigned int h) { _height = h; }

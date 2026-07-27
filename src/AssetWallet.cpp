@@ -88,14 +88,18 @@ namespace AssetWallet {
         DigiAssetRules rules = asset.getRules();
         if (rules.empty()) return; // no rules -> always transferable (the common case)
 
-        // The transfer builders (sendasset/sendmanyassets/burnasset) add none of
-        // the outputs a rule requires (only issueasset calls addRuleOutputs), don't
-        // guarantee signer inputs, and don't validate recipients. So any rule that
-        // DigiAsset::checkRulesPass enforces on a non-consolidation transfer would
-        // make every indexer replay the tx as an unintentional burn and DESTROY the
-        // asset. Until rule-aware transfers exist (docs/rule-aware-transfers-scope.md)
-        // we refuse up front, with a specific reason, instead of silently burning.
-        // This mirrors checkRulesPass's enforced rule set exactly.
+        // Early friendly rejection for rules a wallet-built transfer can NEVER
+        // satisfy no matter the recipient - it adds none of the outputs these need
+        // (only issueasset calls addRuleOutputs) and can't guarantee signer inputs.
+        // Sending anyway makes every indexer replay the tx as an unintentional burn
+        // and DESTROY the asset, so we refuse up front with a specific reason.
+        // Royalty/deflation are Phase 2 (add the required outputs); see
+        // docs/rule-aware-transfers-scope.md.
+        //
+        // Vote / KYC / expiry are NOT rejected here: a transfer that actually
+        // satisfies them (e.g. a full send to a valid vote/KYC address) is legal,
+        // and the authoritative checkRulesPass backstop in fundSignSend allows the
+        // compliant ones and refuses the rest before any broadcast.
         if (rules.getIfRequiresRoyalty())
             throw DigiByteException(RPC_MISC_ERROR,
                                     "This asset has a royalty rule; transferring it is not yet supported and would burn it. Refusing.");
@@ -105,23 +109,6 @@ namespace AssetWallet {
         if (rules.getRequiredSignerWeight() > 0)
             throw DigiByteException(RPC_MISC_ERROR,
                                     "This asset requires authorized signers to move; wallet-built transfers can't guarantee that and would burn it. Refusing.");
-        if (rules.getIfVoteRestricted())
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset may only be sent to approved vote addresses; compliant transfers are not yet supported and it would burn. Refusing.");
-        if (rules.getIfGeoFenced())
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset has KYC/geofence rules; compliant transfers are not yet supported and it would burn. Refusing.");
-
-        // Expiry needs the current height/time. An expired asset genuinely can't
-        // move - any transfer burns it - so refuse with a clear reason.
-        Database* db = AppMain::GetInstance()->getDatabase();
-        unsigned int height = db->getBlockHeight();
-        uint64_t now = (uint64_t) std::chrono::duration_cast<std::chrono::seconds>(
-                               std::chrono::system_clock::now().time_since_epoch())
-                               .count();
-        if (rules.getIfExpired(height, now))
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset has expired and can no longer be transferred (a send would burn it). Refusing.");
     }
 
     uint64_t parseAssetAmount(const Json::Value& amount, uint8_t decimals) {
@@ -233,6 +220,33 @@ namespace AssetWallet {
         AppMain* main = AppMain::GetInstance();
         DigiByteCore* dgb = main->getDigiByteCore();
         Database* db = main->getDatabase();
+
+        // Safety backstop: run the indexer's OWN rule check on the fully-built
+        // transfer before spending a fee to broadcast it. If the transaction would
+        // violate any asset rule (royalty/deflation/signer/vote/KYC/expiry) every
+        // indexer replays it as an unintentional burn and DESTROYS the asset - so
+        // we refuse here instead of broadcasting a burn. This checks EVERY asset
+        // flowing through (including bystander/change assets) and, unlike the
+        // early per-asset guard, it also *allows* a transfer that genuinely
+        // satisfies the rules (e.g. a full transfer to a valid vote/KYC address).
+        // The chain tip is the mining-height estimate the tx will most likely
+        // confirm at. Issuances add their own rule outputs and are checked at
+        // decode, so they're skipped here.
+        if (!tx.isIssuance()) {
+            DigiByteTransaction verifyTx = tx;
+            uint64_t now = (uint64_t) std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count();
+            verifyTx.setChainContext(db->getBlockHeight(), now);
+            try {
+                verifyTx.checkRulesPass();
+            } catch (const DigiAsset::exceptionRuleFailed& e) {
+                throw DigiByteException(RPC_MISC_ERROR,
+                                        std::string("Refusing to broadcast: this transfer would fail the asset's rules "
+                                                    "and burn the asset (") +
+                                                e.what() + ").");
+            }
+        }
 
         //build createrawtransaction params.  Outputs use the array form so their order is
         //preserved exactly(transfer instructions reference outputs by index)
