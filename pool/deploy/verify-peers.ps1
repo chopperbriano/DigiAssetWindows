@@ -42,6 +42,9 @@ $ErrorActionPreference = 'Stop'
 $script:pass = 0; $script:warn = 0; $script:fail = 0
 function Ok($m)   { $script:pass++; Write-Host "[PASS] $m" -ForegroundColor Green }
 function Warn($m) { $script:warn++; Write-Host "[WARN] $m" -ForegroundColor Yellow }
+# -TestAnnounce called Say (which was never defined), crashing that path under
+# ErrorActionPreference=Stop before it could announce. (B-INST5)
+function Say($m, $c = 'Cyan') { Write-Host $m -ForegroundColor $c }
 function Bad($m)  { $script:fail++; Write-Host "[FAIL] $m" -ForegroundColor Red }
 function Section($t) { Write-Host ""; Write-Host "=== $t ===" -ForegroundColor Cyan }
 

@@ -1523,20 +1523,33 @@ void Database::clearBlocksAboveHeight(uint height) {
             "DELETE FROM kyc WHERE height>=" + lineEnd,
             "UPDATE kyc SET revoked=NULL WHERE revoked>=" + lineEnd,
             "DELETE FROM utxos WHERE heightCreated>=" + lineEnd,
-            "UPDATE utxos SET heightDestroyed=NULL WHERE heightDestroyed>=" + lineEnd,
+            // Un-spend: clear BOTH heightDestroyed and spentTXID. Leaving spentTXID
+            // set made getAssetTxHistory emit a dangling txid (NULL height) for a
+            // UTXO the reorg un-spent. (B-DB3)
+            "UPDATE utxos SET heightDestroyed=NULL, spentTXID=NULL WHERE heightDestroyed>=" + lineEnd,
             "DELETE FROM votes WHERE height>=" + lineEnd,
             "DELETE FROM blocks WHERE height>" + lineEnd,
             "UPDATE sqlite_sequence SET seq = (SELECT MAX(assetIndex) FROM assets) WHERE name = 'assets';"};
+    // Atomic (all-or-nothing) so a mid-sequence failure can't leave utxos/assets/
+    // votes/blocks mutually inconsistent (B-DB2). Non-throwing on purpose - this is
+    // also called from startupFunction, which isn't inside the analyzer's recovery
+    // try; on failure it rolls back and logs, and the analyzer re-reads state and
+    // retries. Only manages a transaction if none is already open.
+    bool ownTx = (_transactionDepth == 0);
+    if (ownTx) sqlite3_exec(_db, "BEGIN", nullptr, nullptr, nullptr);
+    bool failed = false;
     for (const string& sql: sqlCommands) {
         rc = sqlite3_exec(_db, sql.c_str(), nullptr, nullptr, &zErrMsg);
         if (rc != SQLITE_OK) {
             std::string err = zErrMsg ? zErrMsg : "unknown";
-            Log::GetInstance()->addMessage("clearBlocksAboveHeight failed: " + err + " SQL: " + sql, Log::CRITICAL);
+            Log::GetInstance()->addMessage("clearBlocksAboveHeight failed (rolled back): " + err + " SQL: " + sql, Log::CRITICAL);
             sqlite3_free(zErrMsg);
-            // Continue with remaining cleanup instead of aborting
-            // The next sync will fix any inconsistencies
+            zErrMsg = nullptr;
+            failed = true;
+            break;
         }
     }
+    if (ownTx) sqlite3_exec(_db, failed ? "ROLLBACK" : "COMMIT", nullptr, nullptr, nullptr);
 }
 
 /**
@@ -1808,6 +1821,12 @@ AssetUTXO Database::getAssetUTXO(const string& txid, unsigned int vout, unsigned
 
     //get tx data from wallet
     getrawtransaction_t txData = main->getDigiByteCore()->getRawTransaction(txid);
+    // Bounds-check before indexing: a caller-supplied vout out of range, or an
+    // output with no decoded address (OP_RETURN / non-standard), would otherwise
+    // be an out-of-range read / crash reachable from RPC. (B-DB5)
+    if (vout >= txData.vout.size() || txData.vout[vout].scriptPubKey.addresses.empty()) {
+        throw exceptionDataPruned();
+    }
     result.txid = txid;
     result.vout = vout;
     result.digibyte = txData.vout[vout].valueS;
@@ -3305,8 +3324,10 @@ bool Database::canGetAddressStats() {
  * @param timeFrame
  */
 void Database::updateStats(unsigned int timeFrame) {
-    //make sure can't be run twice at the same time
-    std::lock_guard<std::mutex> lock(_mutexGetNextIPFSJob);
+    //make sure can't be run twice at the same time. Uses its OWN mutex - it was
+    //locking _mutexGetNextIPFSJob, which needlessly stalled every IPFS worker in
+    //getNextIPFSJob for the whole (potentially long) stats build. (LOW)
+    std::lock_guard<std::mutex> lock(_mutexUpdateStats);
 
     //return if stats are not possible do to pruning being on(no stats are possible if algo stats are not possible)
     if (!canGetAlgoStats()) return;

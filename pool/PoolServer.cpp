@@ -19,6 +19,7 @@
 #include "PoolServer.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
+#include "WalletLock.h"
 #include "Version.h"
 #include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
@@ -1409,6 +1410,10 @@ std::string PoolServer::doOnchainAnnounce(bool force) {
     if (rawHex.empty() || rawHex == "null") return "error: createrawtransaction failed";
     std::string fundedHex = jsonField(rpcRaw("fundrawtransaction", "[\"" + rawHex + "\"]"), "hex");
     if (fundedHex.empty()) return "error: fundrawtransaction failed (pool wallet empty, or RPC error)";
+    // Serialize the unlock -> sign -> send -> lock sequence against the payout
+    // path (which also drives this wallet) so the two can't walletlock each other
+    // mid-spend (-13). Held until this function returns. (B-POOL3)
+    std::lock_guard<std::mutex> walletGuard(poolWalletMutex());
     if (!_walletPass.empty()) rpcRaw("walletpassphrase", "[\"" + jsonEscape(_walletPass) + "\",60]");
     std::string signedHex = jsonField(rpcRaw("signrawtransactionwithwallet", "[\"" + fundedHex + "\"]"), "hex");
     if (signedHex.empty()) { if (!_walletPass.empty()) rpcRaw("walletlock", "[]"); return "error: sign failed (wallet locked? set poolwalletpassphrase)"; }

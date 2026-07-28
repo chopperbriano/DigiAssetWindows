@@ -397,28 +397,48 @@ namespace RPC {
         // opens a socket and dribbles bytes (or none) can't park this worker
         // thread forever. On timeout read_some throws and the connection is
         // dropped by the caller's catch. (audit low)
+        // Also set a SEND timeout: a client that sends a valid request but never
+        // reads the reply would otherwise pin this worker thread forever in the
+        // blocking write (N such clients = the whole RPC wedged). (B-NET3)
 #ifdef _WIN32
-        DWORD rcvTimeout = 10000; // ms
-        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                   reinterpret_cast<const char*>(&rcvTimeout), sizeof(rcvTimeout));
+        DWORD sockTimeout = 10000; // ms
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&sockTimeout), sizeof(sockTimeout));
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sockTimeout), sizeof(sockTimeout));
 #else
-        struct timeval rcvTimeout; rcvTimeout.tv_sec = 10; rcvTimeout.tv_usec = 0;
-        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                   reinterpret_cast<const void*>(&rcvTimeout), sizeof(rcvTimeout));
+        struct timeval sockTimeout; sockTimeout.tv_sec = 10; sockTimeout.tv_usec = 0;
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const void*>(&sockTimeout), sizeof(sockTimeout));
+        setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const void*>(&sockTimeout), sizeof(sockTimeout));
 #endif
 
-        // Read the HTTP request headers
+        // Read the HTTP request headers. LOOP read_some until the blank line that
+        // terminates the headers: a single read_some can return as soon as ANY
+        // bytes arrive (headers split across TCP segments, common under load / via
+        // proxies) or the headers may exceed one 1KB buffer (long Authorization /
+        // cookies), both of which used to spuriously fail a valid request with
+        // "No request body found". Bounded so a client can't stream headers
+        // forever. (B-NET2)
+        string requestStr;
+        size_t bodyStart = string::npos;
+        const size_t MAX_HEADERS = 64 * 1024;
         char data[1024];
-        size_t length = socket.read_some(boost::asio::buffer(data, sizeof(data)));
-
-        // Empty read — no client connected (stub accept or closed connection)
-        if (length == 0) {
-            throw DigiByteException(HTTP_BAD_REQUEST, "empty");
+        while (true) {
+            size_t length = 0;
+            try {
+                length = socket.read_some(boost::asio::buffer(data, sizeof(data)));
+            } catch (const std::exception&) {
+                // connection closed / read error mid-headers
+                if (requestStr.empty()) throw DigiByteException(HTTP_BAD_REQUEST, "empty");
+                break;
+            }
+            if (length == 0) { // no client connected (stub accept or closed connection)
+                if (requestStr.empty()) throw DigiByteException(HTTP_BAD_REQUEST, "empty");
+                break;
+            }
+            requestStr.append(data, length);
+            bodyStart = requestStr.find("\r\n\r\n");
+            if (bodyStart != string::npos) break; // got the full header block
+            if (requestStr.size() > MAX_HEADERS) throw DigiByteException(HTTP_BAD_REQUEST, "Request headers too large");
         }
-
-        // Parse the HTTP request headers to determine content length
-        string requestStr(data, length);
-        size_t bodyStart = requestStr.find("\r\n\r\n");
         if (bodyStart == string::npos) {
             throw DigiByteException(HTTP_BAD_REQUEST, "Invalid HTTP request: No request body found.");
         }
@@ -484,7 +504,16 @@ namespace RPC {
         transform(lowerHeaders.begin(), lowerHeaders.end(), lowerHeaders.begin(), ::tolower);
         transform(lowerWantedHeader.begin(), lowerWantedHeader.end(), lowerWantedHeader.begin(), ::tolower);
 
-        size_t start = lowerHeaders.find(lowerWantedHeader + ": ");
+        // Match the header name only at a LINE START (start of the block, or just
+        // after a CRLF), not anywhere in the block - otherwise a value embedded in
+        // one header (e.g. "X-Foo: content-length: 3") could be returned for
+        // another, letting a crafted request desync the body-length / credential
+        // parse. (B-NET4)
+        const string needle = lowerWantedHeader + ": ";
+        size_t start = string::npos;
+        for (size_t pos = 0; (pos = lowerHeaders.find(needle, pos)) != string::npos; pos = pos + 1) {
+            if (pos == 0 || (pos >= 2 && lowerHeaders.compare(pos - 2, 2, "\r\n") == 0)) { start = pos; break; }
+        }
         if (start == string::npos) throw DigiByteException(HTTP_BAD_REQUEST, wantedHeader + " header not found");
         size_t end = lowerHeaders.find("\r\n", start);
         size_t headerLength = lowerWantedHeader.length() + 2; //+2 for ": "
@@ -501,6 +530,10 @@ namespace RPC {
     // Basic authentication function
     bool Server::basicAuth(const string& headers) {
         string authHeader = getHeader(headers, "Authorization");
+
+        // A short/garbage Authorization value must be a clean auth FAILURE, not a
+        // std::out_of_range from substr (which escaped as a generic 500).
+        if (authHeader.size() < 6) return false;
 
         // Extract and decode the base64-encoded credentials
         string base64Credentials = authHeader.substr(6); // Remove "Basic "

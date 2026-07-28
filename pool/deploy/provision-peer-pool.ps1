@@ -75,7 +75,13 @@ $PeerUrl = $PeerUrl.Trim()
 if ($PeerUrl -and $PeerUrl -notmatch '^https?://') { $PeerUrl = "https://$PeerUrl" }
 $PeerUrl = $PeerUrl.TrimEnd('/')
 
-if (-not $Token) { $Token = [Convert]::ToBase64String((1..24 | ForEach-Object { Get-Random -Maximum 256 })) }
+# Peer token gates the /peer/* API and the fee-spending on-chain announce, so it
+# must be cryptographically random - Get-Random (System.Random) is predictable. (B-INST4)
+if (-not $Token) {
+    $tokenBytes = New-Object 'System.Byte[]' 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($tokenBytes)
+    $Token = [Convert]::ToBase64String($tokenBytes)
+}
 
 # --- 1. base check: DigiByte Core RPC --------------------------------------------
 Head "1. Checking the base (DigiByte Core RPC)"
@@ -143,6 +149,9 @@ $lines = @(
 )
 if ($PeerUrl) { $lines += "poolpeers=$PeerUrl"; $lines += "poolpeerpayoutdedupe=1" }
 Set-Content -Path $poolCfg -Value $lines -Encoding ASCII
+# pool.cfg holds the RPC password + peer token - lock to SYSTEM + Administrators
+# (SIDs, so it holds on non-English Windows). (B-INST7)
+try { icacls $poolCfg /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1 | Out-Null } catch {}
 Say "  wrote $poolCfg (payouts=$payouts, discovery on, publicurl=$myUrl)" 'Green'
 
 # --- 5. Caddy (website + HTTPS + /peer/*) --------------------------------------

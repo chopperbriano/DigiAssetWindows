@@ -382,6 +382,20 @@ void WebServer::serverLoop() {
                 // Set a short timeout so we can check _stopRequested periodically
                 acceptor.accept(socket);
 
+                // Bound how long ONE client can hold this single-threaded server.
+                // Without a timeout, a client that connects and sends nothing (a
+                // slowloris or a stuck browser tab) parks the only server thread
+                // forever in http::read and the whole dashboard goes dark. (B-NET1)
+#ifdef _WIN32
+                DWORD wsTimeout = 10000; // ms
+                setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&wsTimeout), sizeof(wsTimeout));
+                setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&wsTimeout), sizeof(wsTimeout));
+#else
+                struct timeval wsTimeout; wsTimeout.tv_sec = 10; wsTimeout.tv_usec = 0;
+                setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const void*>(&wsTimeout), sizeof(wsTimeout));
+                setsockopt(socket.native_handle(), SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const void*>(&wsTimeout), sizeof(wsTimeout));
+#endif
+
                 // Read request
                 beast::flat_buffer buffer;
                 http::request<http::string_body> req;

@@ -14,6 +14,7 @@
 
 #include "PoolDashboard.h"
 #include "PayoutMath.h"
+#include "WalletLock.h"
 #include "CurlHandler.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
@@ -441,6 +442,10 @@ void PoolDashboard::processInput() {
                 // wallet is never left open. Without a passphrase an encrypted
                 // wallet returns -13 ("walletpassphrase first") per send below.
                 std::string walletPass = cfg.count("poolwalletpassphrase") ? cfg["poolwalletpassphrase"] : "";
+                // Serialize the whole unlock -> sendmany -> lock sequence against the
+                // on-chain-announce thread, which also drives this wallet; otherwise
+                // an announce could walletlock mid-payout and the send fails -13. (B-POOL3)
+                std::lock_guard<std::mutex> walletGuard(poolWalletMutex());
                 bool unlockedNow = false;
                 if (!walletPass.empty()) {
                     // Generous window (nodes * 5s + 60s) covers a slow batch.

@@ -191,6 +191,18 @@ function Get-File($url, $outFile, [int]$tries = 3) {
 
 function Get-Sha512Hex($file) { (Get-FileHash -Path $file -Algorithm SHA512).Hash.ToLower() }
 
+# Lock a secret-bearing config (RPC password, wallet passphrase, peer token) down
+# to SYSTEM + Administrators only, so a standard local user can't read the
+# credentials out of C:\DigiByte or C:\DigiAssetWindows. (B-INST7)
+function Protect-SecretFile($path) {
+    if (-not (Test-Path $path)) { return }
+    try {
+        # SIDs (not names) so this holds on non-English Windows:
+        #   *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
+        icacls $path /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1 | Out-Null
+    } catch { Log "  (could not restrict permissions on $path)" 'WARN' }
+}
+
 # Is $latest strictly newer than $current? Numeric compare when both parse as
 # versions; otherwise "different means update" (safe: after updating we store
 # the new tag, so it can't loop).
@@ -788,14 +800,38 @@ function Test-IpfsDesktopInstalled {
 function Get-DigiAssetLatestTag {
     try { return (Invoke-GitHubApi "https://api.github.com/repos/$Repo/releases/latest").tag_name } catch { return '' }
 }
+# Cheap sanity check that a downloaded file is a real Windows PE (starts with
+# 'MZ') and a plausible size - not an HTML error page, an S3 404 body, or a
+# truncated blob. (B-INST2)
+function Test-PeImage($path) {
+    try {
+        if (-not (Test-Path $path)) { return $false }
+        if ((Get-Item $path).Length -lt 65536) { return $false }
+        $fs = [System.IO.File]::OpenRead($path)
+        try { $b = New-Object byte[] 2; [void]$fs.Read($b, 0, 2) } finally { $fs.Dispose() }
+        return ($b[0] -eq 0x4D -and $b[1] -eq 0x5A)   # 'M','Z'
+    } catch { return $false }
+}
 function Install-DigiAsset {
     foreach ($f in 'DigiAssetWindows.exe','DigiAssetWindows-cli.exe') {
         $out = Join-Path $DigiAssetDir $f
+        $tmp = "$out.new"
         $wasRunning = ($f -eq 'DigiAssetWindows.exe') -and (Test-ProcRunning 'DigiAssetWindows')
-        if ($wasRunning) { Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep 2 }
-        if (-not (Get-File "https://github.com/$Repo/releases/latest/download/$f" $out)) {
+        # Download to a SIDE file first and validate it BEFORE touching the live
+        # exe, so a truncated/failed download can never leave a corrupt binary in
+        # place (the old exe keeps running). Only then stop + atomically swap. (B-INST2)
+        if (-not (Get-File "https://github.com/$Repo/releases/latest/download/$f" $tmp)) {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             throw "could not download $f"
         }
+        if (-not (Test-PeImage $tmp)) {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+            throw "downloaded $f is not a valid Windows executable (corrupt or partial download) - keeping the existing binary"
+        }
+        if ($wasRunning) { Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep 2 }
+        if (Test-Path $out) { Copy-Item $out "$out.bak" -Force -ErrorAction SilentlyContinue }  # roll-back copy
+        try { Move-Item $tmp $out -Force }
+        catch { Start-Sleep 2; Move-Item $tmp $out -Force }   # exe may still be releasing its lock
         Log "  + $f" 'OK'
     }
     Install-WebAssets
@@ -1449,6 +1485,7 @@ function Invoke-Install {
     Step 1 "Installing DigiByte Core $DigiByteVersion (wallet GUI)..."
     Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion")
     $rpc = Write-DigiByteConf
+    Protect-SecretFile $DgbConf   # digibyte.conf holds the RPC password (B-INST7)
     Restore-Snapshot   # fast-sync: extract pre-synced blockchain + chain.db before first launch (fresh install only)
     if (Get-ScheduledTask -TaskName $TaskDigiByte -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskDigiByte -Confirm:$false }  # drop legacy headless task
     if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData -conf=$DgbConf" }
@@ -1468,6 +1505,7 @@ function Invoke-Install {
     Step 3 'Installing DigiAsset for Windows (latest release)...'
     Install-DigiAsset
     Write-NodeConfig $rpc
+    Protect-SecretFile $NodeConfig   # config.cfg mirrors the RPC password (B-INST7)
     # The node depends on IPFS + DigiByte RPC - wait for them before launching so
     # it doesn't FATAL on an IPFS timeout. (The logon task, registered in step 5,
     # does the same wait every login.) Registered/launched after step 5 copies

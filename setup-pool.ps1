@@ -92,6 +92,10 @@ if ($SkipNodeInstall -or (Test-Path $nodeExe)) {
     Get-File "$Repo/setup-digiasset.ps1" $ni
     $niArg = "-NoProfile -ExecutionPolicy Bypass -File `"$ni`""
     if ($PayoutAddress) { $niArg += " -PayoutAddress `"$PayoutAddress`"" }
+    # Point the pool box's OWN node at THIS pool (local, on the raw pool port),
+    # not the public digistamp default, and skip the interactive wallet-encrypt
+    # prompt so the pool setup stays unattended. (B-INST6)
+    $niArg += " -PoolServer `"http://127.0.0.1:14028`" -NoEncryptPrompt"
     Start-Process powershell.exe -ArgumentList $niArg -Wait
     if (-not (Test-Path $nodeExe)) { throw "Node install did not produce $nodeExe. Fix the node install, then re-run with -SkipNodeInstall." }
 }
@@ -154,6 +158,9 @@ if (Test-Path $poolCfg) {
         'poolwalletpassphrase='
     )
     Set-Content -Path $poolCfg -Value $lines -Encoding ASCII
+    # pool.cfg holds the RPC password + wallet passphrase - lock to SYSTEM +
+    # Administrators (SIDs, so it holds on non-English Windows). (B-INST7)
+    try { icacls $poolCfg /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1 | Out-Null } catch {}
     Say "  + pool.cfg (treasury=$TreasuryAddress, payouts OFF)" 'Green'
 }
 

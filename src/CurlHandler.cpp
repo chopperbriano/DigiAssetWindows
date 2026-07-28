@@ -245,8 +245,9 @@ namespace CurlHandler {
         // the handle, but we still own the list here and must free it explicitly.
         curl_slist_free_all(headers);
 
-        if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
         if (res != CURLE_OK) {
+            discardHandle(); // don't reuse a connection whose request errored/timed out (B-NET5)
+            if (res == CURLE_OPERATION_TIMEDOUT) throw exceptionTimeout();
             throw runtime_error(curl_easy_strerror(res));
         }
         return statusCode;
@@ -281,11 +282,14 @@ namespace CurlHandler {
         applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
-        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            discardHandle();
-            throw exceptionTimeout();
-        }
         if (res != CURLE_OK) {
+            // The errored/aborted connection must not be reused, and a partial
+            // download must NOT be left on disk as if it were complete (the WinHTTP
+            // layer now returns a partial/recv error mid-stream, and callers like
+            // IPFS don't hash-verify the file). (B-NET5)
+            discardHandle();
+            remove(fileName.c_str());
+            if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) throw exceptionTimeout();
             throw runtime_error(curl_easy_strerror(res));
         }
     }
@@ -331,11 +335,10 @@ namespace CurlHandler {
         applyAbortCheck(curl);
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
-        if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
-            discardHandle();
-            throw exceptionTimeout();
-        }
         if (res != CURLE_OK) {
+            discardHandle();          // don't reuse the errored connection
+            remove(fileName.c_str()); // don't leave a partial download as if complete (B-NET5)
+            if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) throw exceptionTimeout();
             throw runtime_error(curl_easy_strerror(res));
         }
     }
