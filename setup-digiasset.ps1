@@ -13,7 +13,7 @@
 
     -Mode Install  (default, run it yourself the first time)
         Interactive, newbie-friendly walkthrough. Downloads and installs the
-        pinned baseline versions (DigiByte 9.26.4, kubo 0.49.0, latest
+        pinned baseline versions (DigiByte 9.26.5, kubo 0.49.0, latest
         DigiAsset for Windows), writes every config file for you, opens the
         local firewall, registers all the boot tasks, tests internet
         reachability, and installs itself as a maintenance task.
@@ -48,7 +48,7 @@ param(
     # Pinned baseline versions used for a FIRST install. Service mode then
     # tracks the latest releases and updates past these. If a pinned version
     # isn't published yet, the installer falls back to the current latest.
-    [string]$DigiByteVersion = '9.26.4',
+    [string]$DigiByteVersion = '9.26.5',
     # Fast-sync snapshot manifest (snapshot.json) URL. If set, a FRESH install
     # downloads + verifies + extracts a pre-synced DigiByte blockchain + chain.db
     # so it skips the ~week-long sync. Overrides $DefaultSnapshotUrl below.
@@ -73,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.20.0'
+$SCRIPT_VERSION = '2.21.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -564,7 +564,7 @@ function Get-Digibyted {
 
 function Resolve-DigiByteAsset($tag) {
     # DigiByte ships a win64 NSIS installer (…-win64-setup.exe), not a zip.
-    # tag like "v9.26.4"; returns @{ url; name; ver }
+    # tag like "v9.26.5"; returns @{ url; name; ver }
     $rel = $null
     try { $rel = Invoke-GitHubApi "https://api.github.com/repos/DigiByte-Core/digibyte/releases/tags/$tag" } catch {}
     if ($rel) {

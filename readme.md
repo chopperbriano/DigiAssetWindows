@@ -227,7 +227,7 @@ This disables SQLite write verification (fsync), significantly reducing sync tim
 
 ## Install DigiByte
 
-Download and install DigiByte Core Wallet v9.26.4 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.4/digibyte-9.26.4-win64-setup.exe
+Download and install DigiByte Core Wallet v9.26.5 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-win64-setup.exe
 Install to the default locations, unless you need to change the location on your hard drive. Then add the following lines to the digibyte.conf file.
 
 ```
