@@ -463,7 +463,15 @@ int main() {
     try { webServer.stop(); } catch (...) {}
     analyzer.stop();                                                                    // joins the analyzer thread
     EventBroadcaster::GetInstance()->stop();
-    db->walCheckpoint();                                                                // flush WAL into chain.db
+    // Stop the networked Permanent Storage Pool threads (keepalive/fetcher) and the
+    // IPFS worker BEFORE the WAL checkpoint. BOTH write chain.db (the fetcher pins
+    // CIDs -> Database::addIPFSJob; the IPFS worker drains the job queue), so
+    // letting them run into walCheckpoint()/std::exit races the checkpoint (the
+    // "Database ... SQL command failed" seen on shutdown) and leaves the IPFS
+    // worker touching statics that are being destroyed at exit (use-after-free).
+    if (auto* pspList = main->getPermanentStoragePoolListIfSet()) { try { pspList->stopAll(); } catch (...) {} }
+    try { ipfs.stop(); } catch (...) {}                                                 // joins the IPFS worker thread
+    db->walCheckpoint();                                                                // flush WAL into chain.db (now no other thread writes)
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 

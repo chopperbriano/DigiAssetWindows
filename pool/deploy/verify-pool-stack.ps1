@@ -174,18 +174,19 @@ if (-not $rpcUser -or -not $rpcPass) {
     }
 }
 
-# node<->pool wiring: config.cfg psp1server port must equal pool.cfg poolport
+# node<->pool wiring: config.cfg pool server port must equal pool.cfg poolport.
+# New nodes use the psp2 slot; psp1 is legacy - read psp2 first, fall back to psp1.
 if ($havePool) {
     $poolPort = $pool['poolport']; if (-not $poolPort) { $poolPort = '14028' }
-    $psp1 = $node['psp1server']
+    $psp1 = $node['psp2server']; if (-not $psp1) { $psp1 = $node['psp1server'] }
     if ($psp1 -and ($psp1 -match (':' + [regex]::Escape($poolPort) + '(/|$)'))) {
-        Ok "config.cfg psp1server points at pool.cfg poolport" ($psp1 + " -> " + $poolPort)
+        Ok "config.cfg pool server points at pool.cfg poolport" ($psp1 + " -> " + $poolPort)
     } elseif ($psp1 -and ($psp1 -match '^https?://(127\.0\.0\.1|localhost)')) {
-        Warn "psp1server is loopback but port may not match poolport" ("psp1server=" + $psp1 + "  poolport=" + $poolPort)
+        Warn "pool server is loopback but port may not match poolport" ("pool server=" + $psp1 + "  poolport=" + $poolPort)
     } elseif ($psp1) {
-        Ok "config.cfg psp1server set (remote pool URL)" $psp1
+        Ok "config.cfg pool server set (remote pool URL)" $psp1
     } else {
-        Warn "config.cfg has no psp1server" "This node will not join any remote pool."
+        Warn "config.cfg has no psp2server/psp1server" "This node will not join any remote pool."
     }
 }
 

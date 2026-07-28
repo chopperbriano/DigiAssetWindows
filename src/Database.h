@@ -43,6 +43,7 @@
 #include "KYC.h"
 #include <future>
 #include <iomanip>
+#include <atomic>
 #include <mutex>
 #include <sqlite3.h>
 #include <string>
@@ -452,7 +453,7 @@ public:
         pi.command = indexCommand.str();
         _performanceIndexes.emplace_back(pi);
     }
-    void executePerformanceIndex(int& state);
+    void executePerformanceIndex(std::atomic<int>& state);
     // True while deferred performance indexes are still waiting to be built.
     bool performanceIndexesPending() const { return !_performanceIndexes.empty(); }
 

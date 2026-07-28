@@ -51,7 +51,10 @@ function Show-Status {
     $rpcPort = 14022; if ($cfg["rpcport"]) { try { $rpcPort = [int]$cfg["rpcport"] } catch {} }
     $ipfsApi = $cfg["ipfspath"]; if (-not $ipfsApi) { $ipfsApi = "http://localhost:5001/api/v0/" }
     if (-not $ipfsApi.EndsWith("/")) { $ipfsApi += "/" }
-    $pool = $cfg["psp1server"]; if (-not $pool) { $pool = "https://pool.digistamp.co" }
+    # New nodes are configured on the psp2 (DigiStamp) slot; psp1 is the legacy
+    # slot kept only for old installs. Read psp2 first, fall back to psp1, then the
+    # public default - otherwise a correctly-configured node looks misconfigured.
+    $pool = $cfg["psp2server"]; if (-not $pool) { $pool = $cfg["psp1server"] }; if (-not $pool) { $pool = "https://pool.digistamp.co" }
     $pool = $pool.TrimEnd("/")
     $issues = @()
 
@@ -136,10 +139,11 @@ function Show-Status {
         else { Line "Pool" "--" ("{0} node(s) online (can't self-check without IPFS)" -f $count) }
     } catch { Line "Pool" "--" "pool /nodes.json unreachable" }
 
-    # --- Payout address ---
-    $payoutSet = [bool]$cfg["psp1payout"]
-    if ($payoutSet) { Line "Payout address" "OK" $cfg["psp1payout"] }
-    else { Line "Payout address" "WARN" "not set in config.cfg"; $issues += "No payout address set - you won't be paid. Set psp1payout in config.cfg." }
+    # --- Payout address --- (psp2 slot for new nodes; psp1 for legacy installs)
+    $payout = $cfg["psp2payout"]; if (-not $payout) { $payout = $cfg["psp1payout"] }
+    $payoutSet = [bool]$payout
+    if ($payoutSet) { Line "Payout address" "OK" $payout }
+    else { Line "Payout address" "WARN" "not set in config.cfg"; $issues += "No payout address set - you won't be paid. Set psp2payout in config.cfg." }
 
     Write-Host ""
     if ($issues.Count -eq 0) { Write-Host "Everything looks healthy. Leave it running." -ForegroundColor Green }

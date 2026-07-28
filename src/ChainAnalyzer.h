@@ -122,7 +122,7 @@ private:
     bool shouldStoreNonAssetUTXO() const;
 
     //state(for defaults see resetConfig() )
-    int _state = STOPPED;
+    std::atomic<int> _state{STOPPED}; // atomic: written by the analyzer thread AND the RPC/stats path
     int _height;
     std::string _nextHash;
 

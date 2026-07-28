@@ -427,8 +427,14 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
         if (!sent) {
             DWORD err = GetLastError();
             WinHttpCloseHandle(hRequest);
-            if (attempt == 0 && err != ERROR_WINHTTP_TIMEOUT) {
-                // Possibly stale keep-alive connection — reconnect and retry once
+            if (attempt == 0 && err != ERROR_WINHTTP_TIMEOUT && !h->isPost) {
+                // Possibly stale keep-alive connection — reconnect and retry once.
+                // GET ONLY: never silently re-send a POST. The Core JSON-RPC path
+                // carries money-moving calls (sendtoaddress/send); if the original
+                // POST actually reached the wallet before the connection errored, a
+                // blind retry could double-spend. A POST on a dead keep-alive
+                // connection instead fails cleanly as "not sent" and the caller
+                // decides whether to retry (GETs are idempotent, so they still do).
                 closeConnectHandle(h);
                 if (ensureConnect(h, parsed) != CURLE_OK) return CURLE_COULDNT_CONNECT;
                 continue;

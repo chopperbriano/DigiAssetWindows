@@ -977,7 +977,13 @@ void Database::reset() {
     char* zErrMsg = nullptr;
     int rc;
 
-    const char* sql = "DELETE FROM exchange;"
+    // Wrapped in a single transaction so a failure can't leave the DB half-wiped
+    // (reset() runs on deep-reorg recovery). The table is "domainsMasters" - the
+    // old "DELETE FROM domainsMaster" (missing the trailing s) hit a non-existent
+    // table, so sqlite3_exec stopped there and reset() threw EVERY time, after
+    // already deleting the tables before it: recovery bricked + DB corrupted.
+    const char* sql = "BEGIN;"
+                      "DELETE FROM exchange;"
                       "DELETE FROM exchangeWatch;"
                       "INSERT INTO \"exchangeWatch\" VALUES (\"dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh\");"
                       "INSERT INTO \"exchangeWatch\" VALUES (\"dgb1qlk3hldeynl3prqw259u8gv0jh7w5nwppxlvt3v\");"
@@ -990,13 +996,15 @@ void Database::reset() {
                       "DELETE FROM pspFiles;"
                       "DELETE FROM pspAssets;"
                       "DELETE FROM domains;"
-                      "DELETE FROM domainsMaster;"
-                      "INSERT INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);";
+                      "DELETE FROM domainsMasters;"
+                      "INSERT INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);"
+                      "COMMIT;";
 
     rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
 
     if (rc != SQLITE_OK) {
         sqlite3_free(zErrMsg);
+        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr); // don't leave a half-reset DB / open tx
         throw exceptionFailedReset();
     }
 }
@@ -3085,7 +3093,10 @@ void Database::unpinPermanent(unsigned int poolIndex) {
 
 
     int rc = sqlite3_exec(_db, sql.c_str(), Database::defaultCallback, nullptr, nullptr);
-    if (rc != SQLITE_DONE) {
+    // sqlite3_exec returns SQLITE_OK (0) on success, never SQLITE_DONE (101) - the
+    // old "!= SQLITE_DONE" check therefore threw on EVERY success, so unpin/unsub
+    // cleanup always reported a spurious failure.
+    if (rc != SQLITE_OK) {
         std::string sqlErr = sqlite3_errmsg(_db);
         handleSpecialErrors(__LINE__);
         throw exceptionFailedInsert(__LINE__, sqlErr);
@@ -3948,7 +3959,7 @@ bool Database::indexExists(const string& indexName) {
  * the queue.
  * @param state - chain-analyzer state flag set to BUSY during index creation
  */
-void Database::executePerformanceIndex(int& state) {
+void Database::executePerformanceIndex(std::atomic<int>& state) {
     //find an index that needs adding or exit if none to add
     PerformanceIndex index;
     do {

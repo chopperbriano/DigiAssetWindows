@@ -43,6 +43,7 @@ public:
     PermanentStoragePool* getPool(unsigned int poolIndex);                                                        // returns the pool at the given index (throws if out of range)
     PermanentStoragePool* getActiveNetworkedPool();                                                               // first SUBSCRIBED non-local pool (the one the node actually joined), or nullptr
     unsigned int getPoolCount();                                                                                  // number of pools in the list
+    void stopAll();                                                                                               // stop every pool's worker threads (call on shutdown BEFORE the DB checkpoint)
     void processNewMetaData(const DigiByteTransaction& tx, unsigned int assetIndex, const std::string& cid);      // entry from Chain Analyzer: detect pool membership and schedule metadata download/pin
     ///public because needs to be but should only be used by PermanentStoragePoolList.cpp
     static void

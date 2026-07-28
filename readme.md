@@ -138,7 +138,7 @@ Note: If you want to skip building from source, download the pre-built binaries 
 
 ### Prerequisites
 
-- **Visual Studio 2022** (Community or higher) with the "Desktop development with C++" workload
+- **Visual Studio 2022 or later** (Community or higher) with the "Desktop development with C++" workload
 - **CMake 3.20+** (included with VS — select "C++ CMake tools for Windows" in the installer)
 
 ### Clone the Repository

@@ -75,7 +75,7 @@ namespace RPC {
         std::string _password;
         unsigned int _port;
         std::map<std::string, bool> _allowedRPC;
-        int8_t _allowRPCDefault = -1; //unknown
+        std::atomic<int8_t> _allowRPCDefault{-1}; //unknown; atomic - lazily resolved from concurrent worker threads
         bool _showParamsOnError = false;
 
         std::atomic<bool> _stopRequested{false};

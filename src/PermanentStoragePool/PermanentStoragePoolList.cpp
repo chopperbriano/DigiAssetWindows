@@ -156,6 +156,23 @@ unsigned int PermanentStoragePoolList::getPoolCount() {
     return _pools.size();
 }
 
+// Stop every pool's worker threads. Called during shutdown BEFORE the DB WAL
+// checkpoint: the networked pools' keepalive/fetcher threads write chain.db (via
+// ipfs->pin -> Database::addIPFSJob), so if they keep running into the checkpoint
+// they race SQLite ("SQL command failed" on shutdown) and, under std::exit(0), run
+// against half-destroyed statics. stop() is safe on a pool that was never started.
+void PermanentStoragePoolList::stopAll() {
+    for (auto& pool: _pools) {
+        if (pool) {
+            try {
+                pool->stop();
+            } catch (...) {
+                // best-effort on shutdown; never let one pool block the others
+            }
+        }
+    }
+}
+
 /**
  * Adds a pool to the list(called by constructor only)
  * @param pool
