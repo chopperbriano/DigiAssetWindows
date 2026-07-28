@@ -126,6 +126,11 @@ private:
     static const size_t MAX_UTXO_CACHE = 1000000; // ~100MB at ~100 bytes/entry
     std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheActive;
     std::unordered_map<std::string, NonAssetUtxoInfo> _utxoCacheOld;
+    // Guards both utxo cache generations. The analyzer writes (createUTXO) while
+    // RPC/web threads read+erase (getAssetUTXO); an unsynchronized find/erase vs
+    // insert/rotate on these maps is UB. Held ONLY around the container ops, never
+    // across a DB/RPC call, so it stays a leaf lock. (B-DB4)
+    mutable std::mutex _utxoCacheMutex;
     Statement _stmtCheckFlag;
     Statement _stmtSetFlag;
     Statement _stmtGetBlockHeight;
@@ -340,9 +345,11 @@ private:
     int getFlagInt(const std::string& flag, int defaultValue);  //defaultValue is optional
     void setFlagInt(const std::string& flag, int state);
     std::map<std::string, int> _flagState;
+    mutable std::mutex _flagStateMutex;  // analyzer + RPC race the map; leaf lock (B-DB4)
 
     //exchangeWatch table
     std::vector<std::string> _exchangeWatchAddresses;
+    mutable std::mutex _exchangeWatchMutex;  // guards the RAM watch buffer; leaf lock (B-DB4)
 
     //TestHelpers
     static int defaultCallback(void* NotUsed, int argc, char** argv, char** azColName);
@@ -371,6 +378,7 @@ private:
 
     //DigiBYte Domain ram values
     std::vector<std::string> _masterDomainAssetId = {};
+    mutable std::mutex _masterDomainMutex;  // const readers vs analyzer append; leaf lock (B-DB4)
 
     //private stats functions
     void addStatsPerformanceIndexes();

@@ -1290,10 +1290,11 @@ std::vector<AssetBasics> Database::getLastAssetsIssued(unsigned int amount, unsi
  *  exceptionFailedSelect
  */
 int Database::getFlagInt(const string& flag, int defaultValue=INT_MIN) {
-    //try to get from ram
-    try {
-        return _flagState.at(flag); //will throw out of range error if not present
-    } catch (const out_of_range& e) {
+    //try to get from ram (leaf lock, released before any DB call) (B-DB4)
+    {
+        std::lock_guard<std::mutex> lk(_flagStateMutex);
+        auto it = _flagState.find(flag);
+        if (it != _flagState.end()) return it->second;
     }
 
     //get from database
@@ -1307,8 +1308,12 @@ int Database::getFlagInt(const string& flag, int defaultValue=INT_MIN) {
     }
 
     //store in ram and return
-    _flagState[flag] = checkFlag.getColumnInt(0);
-    return _flagState[flag];
+    int val = checkFlag.getColumnInt(0);
+    {
+        std::lock_guard<std::mutex> lk(_flagStateMutex);
+        _flagState[flag] = val;
+    }
+    return val;
 }
 
 /**
@@ -1365,8 +1370,11 @@ void Database::setFlagInt(const std::string& flag, int state) {
         throw exceptionFailedUpdate(); //failed to check database
     }
 
-    //store in ram
-    _flagState[flag] = state;
+    //store in ram (B-DB4)
+    {
+        std::lock_guard<std::mutex> lk(_flagStateMutex);
+        _flagState[flag] = state;
+    }
 }
 
 /**
@@ -1592,12 +1600,15 @@ void Database::createUTXO(const AssetUTXO& value, unsigned int heightCreated, bo
     if (value.assets.empty() && getBeenPrunedNonAssetUTXOHistory()) {
         // Cache address + value so getAssetUTXO can return it without an RPC call
         std::string key = value.txid + ":" + std::to_string(value.vout);
-        _utxoCacheActive[key] = {value.address, value.digibyte};
-        // Rotate generations when active cache gets too large
-        if (_utxoCacheActive.size() > MAX_UTXO_CACHE) {
-            _utxoCacheOld = std::move(_utxoCacheActive);
-            _utxoCacheActive.clear();
-            _utxoCacheActive.reserve(MAX_UTXO_CACHE / 2);
+        {
+            std::lock_guard<std::mutex> lk(_utxoCacheMutex);   // (B-DB4)
+            _utxoCacheActive[key] = {value.address, value.digibyte};
+            // Rotate generations when active cache gets too large
+            if (_utxoCacheActive.size() > MAX_UTXO_CACHE) {
+                _utxoCacheOld = std::move(_utxoCacheActive);
+                _utxoCacheActive.clear();
+                _utxoCacheActive.reserve(MAX_UTXO_CACHE / 2);
+            }
         }
         return; //non asset utxo and we aren't storing those
     }
@@ -1778,28 +1789,33 @@ AssetUTXO Database::getAssetUTXO(const string& txid, unsigned int vout, unsigned
         if (exists) return result;
     }
 
-    // Check if this was a known non-asset UTXO that we skipped storing
+    // Check if this was a known non-asset UTXO that we skipped storing. Hold the
+    // cache lock across both generations' find+erase so a concurrent createUTXO
+    // rotate can't invalidate the iterator mid-read. (B-DB4)
     std::string cacheKey = txid + ":" + std::to_string(vout);
-    // Check active cache first, then old generation
-    auto cacheIt = _utxoCacheActive.find(cacheKey);
-    if (cacheIt != _utxoCacheActive.end()) {
-        result.txid = txid;
-        result.vout = vout;
-        result.address = cacheIt->second.address;
-        result.digibyte = cacheIt->second.digibyte;
-        result.assets.clear();
-        _utxoCacheActive.erase(cacheIt);
-        return result;
-    }
-    cacheIt = _utxoCacheOld.find(cacheKey);
-    if (cacheIt != _utxoCacheOld.end()) {
-        result.txid = txid;
-        result.vout = vout;
-        result.address = cacheIt->second.address;
-        result.digibyte = cacheIt->second.digibyte;
-        result.assets.clear();
-        _utxoCacheOld.erase(cacheIt);
-        return result;
+    {
+        std::lock_guard<std::mutex> lk(_utxoCacheMutex);
+        // Check active cache first, then old generation
+        auto cacheIt = _utxoCacheActive.find(cacheKey);
+        if (cacheIt != _utxoCacheActive.end()) {
+            result.txid = txid;
+            result.vout = vout;
+            result.address = cacheIt->second.address;
+            result.digibyte = cacheIt->second.digibyte;
+            result.assets.clear();
+            _utxoCacheActive.erase(cacheIt);
+            return result;
+        }
+        cacheIt = _utxoCacheOld.find(cacheKey);
+        if (cacheIt != _utxoCacheOld.end()) {
+            result.txid = txid;
+            result.vout = vout;
+            result.address = cacheIt->second.address;
+            result.digibyte = cacheIt->second.digibyte;
+            result.assets.clear();
+            _utxoCacheOld.erase(cacheIt);
+            return result;
+        }
     }
 
     //UTXO not in DB and not in cache — in pruning mode this means it's a non-asset UTXO
@@ -2229,19 +2245,22 @@ std::vector<AssetCount> Database::getAddressHoldings(const string& address) {
  * @return
  */
 bool Database::isWatchAddress(const string& address) {
-    //if to many watch addresses to buffer effectively use database
-    if (_exchangeWatchAddresses.empty()) {
-        LockedStatement isWatchAddress{_stmtIsWatchAddress};
-        isWatchAddress.bindText(1, address);
-        int rc = isWatchAddress.executeStep();
-        return (rc == SQLITE_ROW);
+    //check the RAM buffer if it's in use (leaf lock, released before any DB call) (B-DB4)
+    {
+        std::lock_guard<std::mutex> lk(_exchangeWatchMutex);
+        if (!_exchangeWatchAddresses.empty()) {
+            for (const string& watchAddress: _exchangeWatchAddresses) {
+                if (watchAddress == address) return true;
+            }
+            return false;
+        }
     }
 
-    //check if watch address
-    for (const string& watchAddress: _exchangeWatchAddresses) {
-        if (watchAddress == address) return true;
-    }
-    return false;
+    //too many watch addresses to buffer (or none) -> query the database
+    LockedStatement isWatchAddress{_stmtIsWatchAddress};
+    isWatchAddress.bindText(1, address);
+    int rc = isWatchAddress.executeStep();
+    return (rc == SQLITE_ROW);
 }
 
 /**
@@ -2266,7 +2285,9 @@ void Database::addWatchAddress(const string& address) {
         throw exceptionFailedInsert(__LINE__, sqlErr);
     }
 
-    //add to watch buffer if using buffer
+    //add to watch buffer if using buffer (isWatchAddress above already released
+    //the lock, so this is not nested) (B-DB4)
+    std::lock_guard<std::mutex> lk(_exchangeWatchMutex);
     if (_exchangeWatchAddresses.empty()) return;
     if (_exchangeWatchAddresses.size() == DIGIBYTECORE_DATABASE_CHAIN_WATCH_MAX) {
         _exchangeWatchAddresses.clear(); //got to big won't use buffer anymore
@@ -2981,6 +3002,7 @@ string Database::getDomainAssetId(const std::string& domain, bool returnErrorIfR
  * historical one), which are the assets authorized to publish domain mappings.
  */
 bool Database::isMasterDomainAssetId(const std::string& assetId) const {
+    std::lock_guard<std::mutex> lk(_masterDomainMutex);   // (B-DB4)
     for (const string& id: _masterDomainAssetId) {
         if (id == assetId) return true;
     }
@@ -2992,7 +3014,8 @@ bool Database::isMasterDomainAssetId(const std::string& assetId) const {
  * (the most recent one in the master list).
  */
 bool Database::isActiveMasterDomainAssetId(const std::string& assetId) const {
-    return (_masterDomainAssetId.back() == assetId);
+    std::lock_guard<std::mutex> lk(_masterDomainMutex);   // (B-DB4)
+    return (!_masterDomainAssetId.empty() && _masterDomainAssetId.back() == assetId);
 }
 
 /**
@@ -3003,9 +3026,15 @@ bool Database::isActiveMasterDomainAssetId(const std::string& assetId) const {
  *  exceptionFailedUpdate, exceptionFailedInsert
  */
 void Database::setMasterDomainAssetId(const string& assetId) {
+    // Snapshot the current active master under the lock, then do the DB writes
+    // with the lock released (leaf lock never held across a DB call). (B-DB4)
+    std::string lastDomain;
+    {
+        std::lock_guard<std::mutex> lk(_masterDomainMutex);
+        lastDomain = _masterDomainAssetId.empty() ? "" : _masterDomainAssetId.back();
+    }
     {
         LockedStatement setDomainMasterAssetId{_stmtSetDomainMasterAssetId_a};
-        string lastDomain = _masterDomainAssetId.back();
         setDomainMasterAssetId.bindText(1, lastDomain);
         int rc = setDomainMasterAssetId.executeStep();
         if (rc != SQLITE_DONE) {
@@ -3021,7 +3050,10 @@ void Database::setMasterDomainAssetId(const string& assetId) {
         handleSpecialErrors(__LINE__);
         throw exceptionFailedInsert(__LINE__, sqlErr);
     }
-    _masterDomainAssetId.push_back(assetId);
+    {
+        std::lock_guard<std::mutex> lk(_masterDomainMutex);   // (B-DB4)
+        _masterDomainAssetId.push_back(assetId);
+    }
 }
 
 void Database::setDomainCompromised() {
@@ -3029,7 +3061,8 @@ void Database::setDomainCompromised() {
 }
 
 bool Database::isDomainCompromised() const {
-    return (_masterDomainAssetId.back().empty());
+    std::lock_guard<std::mutex> lk(_masterDomainMutex);   // (B-DB4)
+    return (_masterDomainAssetId.empty() || _masterDomainAssetId.back().empty());
 }
 
 /**

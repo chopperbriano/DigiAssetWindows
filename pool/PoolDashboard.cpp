@@ -464,6 +464,13 @@ void PoolDashboard::processInput() {
                 int failed = 0;
                 int ambiguous = 0;
                 bool sawLocked = false;
+                // B-POOL4: arm a DURABLE once-per-period guard BEFORE broadcasting.
+                // If the tx goes out but the per-recipient ledger writes below fail
+                // (or the process dies between the two), getLastPayoutAt() still sees
+                // this row and blocks a re-run - so we never double-pay. Released
+                // only on a clean atomic failure (nothing sent) so a failed attempt
+                // doesn't burn the operator's payout period.
+                int64_t periodGuardId = _db.beginPayoutPeriod();
                 std::string result = sendMany(rpcUser, rpcPass, rpcPort, _pendingPayouts);
                 if (result.substr(0, 7) == "TIMEOUT") {
                     // Ambiguous: the batch MAY have broadcast. Record EVERY row as
@@ -478,6 +485,8 @@ void PoolDashboard::processInput() {
                     ambiguous = (int)_pendingPayouts.size();
                 } else if (result.substr(0, 5) == "ERROR") {
                     // Atomic failure: nothing was sent, so no recipient is stranded.
+                    // Release the period guard so the operator can retry this period. (B-POOL4)
+                    _db.abortPayoutPeriod(periodGuardId);
                     if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
                     addLog("  FAIL (nothing sent - atomic batch): " + result);
                     failed = (int)_pendingPayouts.size();

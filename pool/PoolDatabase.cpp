@@ -428,6 +428,42 @@ void PoolDatabase::recordPendingPayout(const std::string& payoutAddress, int64_t
     sqlite3_finalize(stmt);
 }
 
+int64_t PoolDatabase::beginPayoutPeriod() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    // Durable once-per-period guard written BEFORE the payout broadcast. It
+    // advances getLastPayoutAt() (MAX owedAt) immediately, so even if the tx
+    // broadcasts but the per-recipient ledger rows fail to write - or we crash
+    // between broadcast and record - a re-run is still blocked and we can't
+    // double-pay real money. paidTxid/paidAt NULL keeps this sentinel out of
+    // every paid total, the payout count, and the public recent-payouts list
+    // (all of which filter paidTxid IS NOT NULL). Returns the row id, or -1 on
+    // failure. (B-POOL4)
+    const char* sql =
+        "INSERT INTO payouts_ledger (payoutAddress, amountDgbSat, owedAt, paidTxid, paidAt) "
+        "VALUES ('__PERIOD_GUARD__', 0, ?, NULL, NULL);";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(stmt, 1, now);
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    if (!ok) return -1;
+    return sqlite3_last_insert_rowid(_db);
+}
+
+void PoolDatabase::abortPayoutPeriod(int64_t guardId) {
+    if (guardId < 0) return;
+    std::lock_guard<std::mutex> lk(_mutex);
+    // Remove the pre-broadcast guard ONLY when the send cleanly failed (nothing
+    // left the wallet), so a failed attempt doesn't consume the payout period. (B-POOL4)
+    const char* sql = "DELETE FROM payouts_ledger WHERE id = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_int64(stmt, 1, guardId);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 double PoolDatabase::getPaidTotalDgb() {
     std::lock_guard<std::mutex> lk(_mutex);
     const char* sql = "SELECT COALESCE(SUM(amountDgbSat), 0) FROM payouts_ledger WHERE paidTxid IS NOT NULL;";

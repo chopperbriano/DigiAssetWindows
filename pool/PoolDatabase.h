@@ -145,6 +145,14 @@ public:
     void recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,
                       const std::string& txid);
 
+    // Durable once-per-period guard around a payout broadcast. beginPayoutPeriod()
+    // writes a sentinel ledger row (advancing getLastPayoutAt) and returns its id
+    // BEFORE the send, so a tx that broadcasts but fails to record can't be
+    // re-run into a double-pay. abortPayoutPeriod(id) removes it iff the send
+    // cleanly failed (nothing left the wallet). (B-POOL4)
+    int64_t beginPayoutPeriod();
+    void abortPayoutPeriod(int64_t guardId);
+
     // Ledger totals for dashboard display.
     double getPaidTotalDgb();        // sum of all paid-out DGB
     unsigned int getPaidCount();     // number of payout transactions

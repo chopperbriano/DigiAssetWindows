@@ -24,6 +24,7 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
+#include <jsoncpp/json/json.h>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -235,6 +237,13 @@ namespace {
                 case '\n': out += "\\n";  break;
                 case '\r': out += "\\r";  break;
                 case '\t': out += "\\t";  break;
+                // Escape <, >, & as \uXXXX too: still valid JSON (a parser decodes
+                // them back to the same char) but a raw HTML sink on the landing
+                // page can never see a literal "<script>". Defense-in-depth for the
+                // untrusted peer/discovered-pool strings we splice into stats.json.
+                case '<':  out += "\\u003c"; break;
+                case '>':  out += "\\u003e"; break;
+                case '&':  out += "\\u0026"; break;
                 default:
                     if ((unsigned char) c < 0x20) {
                         char b[8];
@@ -1023,6 +1032,50 @@ namespace {
         if (slash != std::string::npos) u = u.substr(0, slash);
         return u;
     }
+    // Re-parse an UNTRUSTED nodes[] array from a peer / discovered pool and rebuild
+    // it from a strict whitelist (pool host + numeric lat/lon + escaped city/country),
+    // capping the count. Previously the peer's array was tagged with a naive
+    // brace-replace and spliced VERBATIM into our public /pool/stats.json, so a
+    // hostile pool could return broken JSON (corrupting the endpoint for everyone)
+    // or inject markup that the landing-page map renders (stored XSS). jsoncpp is a
+    // hardened parser; anything malformed or off-whitelist yields "[]". (B-POOL2)
+    std::string sanitizeNodesArray(const std::string& rawArr, const std::string& poolHost) {
+        const size_t MAX_NODES = 500;      // a peer can't bloat our public json
+        Json::CharReaderBuilder rb;
+        Json::Value root;
+        std::string errs;
+        std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+        if (!reader->parse(rawArr.data(), rawArr.data() + rawArr.size(), &root, &errs) || !root.isArray())
+            return "[]";
+        const std::string tagHost = jsonEscape(poolHost);
+        std::string out = "[";
+        bool first = true;
+        size_t n = 0;
+        for (const auto& node : root) {
+            if (n >= MAX_NODES) break;
+            if (!node.isObject() || !node.isMember("lat") || !node.isMember("lon")) continue;
+            const Json::Value& lat = node["lat"];
+            const Json::Value& lon = node["lon"];
+            if (!lat.isNumeric() || !lon.isNumeric()) continue;
+            double dlat = lat.asDouble(), dlon = lon.asDouble();
+            if (!(dlat >= -90.0 && dlat <= 90.0 && dlon >= -180.0 && dlon <= 180.0)) continue;  // also rejects NaN
+            std::string city = (node.isMember("city") && node["city"].isString()) ? node["city"].asString() : "";
+            std::string country = (node.isMember("country") && node["country"].isString()) ? node["country"].asString() : "";
+            if (city.size() > 100) city.resize(100);
+            if (country.size() > 100) country.resize(100);
+            char buf[64];
+            if (!first) out += ",";
+            first = false;
+            out += "{\"pool\":\"" + tagHost + "\",\"lat\":";
+            snprintf(buf, sizeof(buf), "%.6f", dlat); out += buf;
+            out += ",\"lon\":";
+            snprintf(buf, sizeof(buf), "%.6f", dlon); out += buf;
+            out += ",\"city\":\"" + jsonEscape(city) + "\",\"country\":\"" + jsonEscape(country) + "\"}";
+            n++;
+        }
+        out += "]";
+        return out;
+    }
     // ASCII -> lowercase hex (for OP_RETURN data).
     std::string toHex(const std::string& s) {
         static const char* H = "0123456789abcdef";
@@ -1181,13 +1234,9 @@ void PoolServer::peerSyncLoop() {
                 st.nodesActive = (unsigned int) peerJsonNum(statusBody, "nodesActive", 0);
                 st.treasuryBalance = peerJsonNum(statusBody, "treasuryBalance", 0);
                 st.paidTotal = peerJsonNum(statusBody, "paidTotal", 0);
-                // Tag this peer's nodes with the peer host for the merged map.
-                std::string nodesArr = peerJsonArray(statusBody, "nodes");
-                std::string tag = "{\"pool\":\"" + jsonEscape(urlHost(peer)) + "\",";
-                std::string tagged;
-                tagged.reserve(nodesArr.size() + 48);
-                for (char ch: nodesArr) { if (ch == '{') tagged += tag; else tagged += ch; }
-                taggedNodes = tagged;
+                // Sanitize (jsoncpp parse + whitelist + escape + cap) this
+                // UNTRUSTED peer's nodes before it reaches our public map. (B-POOL2)
+                taggedNodes = sanitizeNodesArray(peerJsonArray(statusBody, "nodes"), urlHost(peer));
             }
             {
                 std::lock_guard<std::mutex> lk(_peerMutex);
@@ -1247,12 +1296,9 @@ bool PoolServer::probePool(const std::string& url, DiscoveredPool& out, std::str
                        std::chrono::system_clock::now().time_since_epoch()).count();
     out.nodesActive = (unsigned int) peerJsonNum(body, "activeNodes", 0);
     out.treasuryBalance = peerJsonNum(body, "treasuryBalance", 0);
-    std::string nodesArr = peerJsonArray(body, "nodes");
-    std::string tag = "{\"pool\":\"" + jsonEscape(urlHost(url)) + "\",";
-    std::string tagged;
-    tagged.reserve(nodesArr.size() + 48);
-    for (char ch: nodesArr) { if (ch == '{') tagged += tag; else tagged += ch; }
-    outNodesJson = tagged;
+    // Sanitize the UNTRUSTED discovered pool's nodes before it reaches our
+    // public map (jsoncpp parse + whitelist + escape + cap). (B-POOL2)
+    outNodesJson = sanitizeNodesArray(peerJsonArray(body, "nodes"), urlHost(url));
     return true;
 }
 
