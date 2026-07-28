@@ -141,7 +141,6 @@ set(SOURCE_FILES
         Database.cpp
         sqlite3.c
         curl_stubs.cpp
-        openssl_stubs.cpp
         DigiByteCore.cpp
         Blob.cpp
         BitIO.cpp
