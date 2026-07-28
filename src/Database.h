@@ -394,6 +394,7 @@ public:
     //performance related
     void startTransaction();
     void endTransaction();
+    void abortTransaction();  // rollback + reset depth; call on the recovery path after a mid-transaction throw
     void walCheckpoint();       //flushes WAL back to main db and truncates the WAL file
     void
     disableWriteVerification(); //on power failure not all commands may be written.  If using need to check at startup

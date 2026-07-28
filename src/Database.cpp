@@ -887,6 +887,20 @@ void Database::endTransaction() {
 }
 
 /**
+ * Rolls back any in-progress transaction and resets the nesting depth to 0.
+ * MUST be called on the recovery path when a block throws MID-transaction:
+ * otherwise the BEGIN stays open and _transactionDepth stays >=1, so the next
+ * outermost endTransaction never matches depth==1 and NOTHING is ever committed
+ * again (silent data loss + unbounded WAL growth) until the process restarts.
+ * Only the analyzer thread transacts, so no locking is needed here.
+ */
+void Database::abortTransaction() {
+    if (_transactionDepth == 0) return;                        // nothing open
+    sqlite3_exec(_db, "ROLLBACK", nullptr, nullptr, nullptr);  // best-effort; ignore result
+    _transactionDepth = 0;
+}
+
+/**
  * Flushes the WAL back to the main database file and truncates the WAL.
  * Call periodically during heavy writes to prevent unbounded WAL growth.
  *

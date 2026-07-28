@@ -354,6 +354,10 @@ void ChainAnalyzer::mainFunction() {
         _errorCount = 0;      // reset on success
         _lastError.clear();
     } catch (const std::exception& e) {
+        // Roll back any transaction left open by the throw BEFORE re-entering, or
+        // the leaked BEGIN/_transactionDepth would stop all future commits (silent
+        // data loss). Safe even if none is open.
+        try { AppMain::GetInstance()->getDatabase()->abortTransaction(); } catch (...) {}
         // Capture the real cause + block for the recovery line logged on re-entry.
         _lastError = e.what();
         if (_lastError.empty()) _lastError = std::string("unlabeled exception (") + typeid(e).name() + ")";
@@ -362,6 +366,7 @@ void ChainAnalyzer::mainFunction() {
             ": " + _lastError, Log::DEBUG);
         throw; // re-throw so the Threaded framework re-enters mainFunction() to recover
     } catch (...) {
+        try { AppMain::GetInstance()->getDatabase()->abortTransaction(); } catch (...) {}
         // Non-std::exception failure - still record something useful, never "unknown".
         _lastError = "non-standard (non-std::exception) failure";
         _lastErrorHeight = _height + 1;

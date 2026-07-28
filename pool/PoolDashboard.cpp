@@ -118,6 +118,30 @@ namespace {
         return true;
     }
 
+    // Ask DigiByte Core whether an address is valid (checksum-correct, right
+    // network). Used to drop a bad payout address BEFORE the atomic sendmany, so a
+    // single fat-fingered or hostile registration can't make Core reject the whole
+    // batch and strand every honest recipient - every period, until manually found.
+    // Returns Core's isvalid verdict; on an RPC error returns `onError` (default
+    // true = keep the address, since a Core outage fails the send anyway and we
+    // don't want a transient blip to silently drop everyone).
+    bool coreValidatesAddress(const std::string& rpcUser, const std::string& rpcPass, int rpcPort,
+                              const std::string& address, bool onError = true) {
+        if (rpcUser.empty()) return onError;
+        // The caller charset-validates (isValidDgbAddress) first, so there's no
+        // quote/injection risk interpolating the address into the JSON body here.
+        std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"validateaddress\",\"params\":[\"" + address + "\"]}";
+        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string resp;
+        long status = 0;
+        try { status = CurlHandler::postJson(url, body, resp, 8000); }
+        catch (...) { return onError; }
+        if (status < 200 || status >= 300) return onError;
+        if (resp.find("\"isvalid\":true") != std::string::npos) return true;
+        if (resp.find("\"isvalid\":false") != std::string::npos) return false;
+        return onError;
+    }
+
     // Send an ENTIRE payout batch as one sendmany transaction: every recipient is
     // paid in a single tx with a single fee, or none are. This makes the payout
     // ATOMIC - it removes the "2 sent, 1 failed" partial-payout outcome where a
@@ -519,6 +543,9 @@ void PoolDashboard::processInput() {
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
             std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+            std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+            int rpcPort = 14022;
+            try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
 
             // Once-per-period spend guard: the budget is a *per period* amount,
             // so refuse a second payout until the period has elapsed. This stops
@@ -630,8 +657,27 @@ void PoolDashboard::processInput() {
                             _pendingPayouts.swap(kept);
                         }
 
+                        // Address-validity filter: drop any payout address Core
+                        // rejects (checksum-invalid / wrong network) BEFORE the
+                        // atomic sendmany. Otherwise one bad address (fat-fingered or
+                        // hostile registration) makes Core reject the ENTIRE batch
+                        // and strands every honest recipient - every period. Charset
+                        // gate first (cheap), then Core validateaddress (checksum).
+                        {
+                            std::vector<std::pair<std::string, double>> kept;
+                            for (const auto& pp: _pendingPayouts) {
+                                if (isValidDgbAddress(pp.first) &&
+                                    coreValidatesAddress(rpcUser, rpcPass, rpcPort, pp.first)) {
+                                    kept.push_back(pp);
+                                } else {
+                                    addLog("Skip " + pp.first + " - invalid payout address (dropped so it can't fail the whole batch).");
+                                }
+                            }
+                            _pendingPayouts.swap(kept);
+                        }
+
                         if (_pendingPayouts.empty()) {
-                            addLog("Nothing to pay: every eligible address is below the dust floor or was already paid by a peer pool this period.");
+                            addLog("Nothing to pay: every eligible address is below the dust floor, invalid, or was already paid by a peer pool this period.");
                         } else {
                             addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
                             addLog("Budget: " + budgetMode);

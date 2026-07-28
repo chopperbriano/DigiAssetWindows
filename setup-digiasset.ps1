@@ -602,7 +602,10 @@ function Install-DigiByteBinaries($asset) {
     # NSIS silent install. /D=<dir> MUST be the last arg and cannot be quoted, so
     # the install dir must have no spaces (default C:\DigiByte is fine).
     Log "  installing DigiByte $($asset.ver) silently to $DigiByteDir (this can take a minute)..."
-    Start-Process -FilePath $inst -ArgumentList @('/S', "/D=$DigiByteDir") -Wait
+    $proc = Start-Process -FilePath $inst -ArgumentList @('/S', "/D=$DigiByteDir") -Wait -PassThru
+    if ($proc -and $proc.ExitCode -ne 0) {
+        throw "DigiByte installer exited with code $($proc.ExitCode) - the install may be incomplete (locked files?)."
+    }
     Start-Sleep -Seconds 3
     $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $found) { throw "DigiByte installed but digibyted.exe was not found under $DigiByteDir." }
@@ -622,8 +625,11 @@ function Stop-DigiByteGracefully {
                 -Body '{"jsonrpc":"1.0","id":"stop","method":"stop","params":[]}' | Out-Null
         } catch {}
     }
-    for ($i = 0; $i -lt 30 -and (Test-ProcRunning 'digibyted'); $i++) { Start-Sleep -Seconds 2 }
-    Get-Process digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Wait for BOTH the daemon and the GUI wallet to exit (either can be the one
+    # running), then force-kill whichever is left - otherwise the binary swap below
+    # hits a locked digibyte-qt.exe and silently produces a half-updated install.
+    for ($i = 0; $i -lt 30 -and ((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')); $i++) { Start-Sleep -Seconds 2 }
+    Get-Process digibyted, digibyte-qt -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Start-DigiByte {
@@ -653,6 +659,13 @@ function Start-DigiByteWallet {
     if (-not (Test-Path $qt)) { return $false }
     Add-ProgramAllowRule 'DigiByte wallet (digibyte-qt)' $qt
     if (-not (Test-ProcRunning 'digibyte-qt')) {
+        # If the Service-mode updater left the headless daemon running, stop it
+        # first so the GUI can take the datadir without a lock conflict (they share
+        # one datadir; only one may hold it).
+        if (Test-ProcRunning 'digibyted') {
+            Get-Process digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            for ($w = 0; $w -lt 15 -and (Test-ProcRunning 'digibyted'); $w++) { Start-Sleep -Seconds 1 }
+        }
         Start-Process $qt -ArgumentList "-datadir=$DgbData -conf=$DgbConf"   # neither path has spaces
     }
     return $true
@@ -1751,6 +1764,13 @@ function Invoke-Service {
             Stop-DigiByteGracefully
             Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
             $state.digibyte = $latest.TrimStart('v'); Write-State $state
+            # Restart the headless daemon NOW so the node isn't left with no wallet/
+            # RPC until the next logon (a SYSTEM task can't relaunch the GUI into the
+            # user session). digibyted restores RPC immediately; the user-session
+            # task swaps to the GUI wallet at next logon (Start-DigiByteWallet stops
+            # this daemon first, so there's no datadir-lock conflict).
+            Start-DigiByte | Out-Null
+            Log "  DigiByte daemon restarted after update." 'OK'
         }
     } catch { $problems += "DigiByte update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
