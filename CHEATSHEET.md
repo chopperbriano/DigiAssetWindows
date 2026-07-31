@@ -6,6 +6,47 @@ Pick your role below — you only need the scripts in your section.
 
 ---
 
+## 0. One-liners (no repo checkout needed)
+
+Paste into an **Administrator PowerShell** — or right-click > Run with PowerShell,
+they all self-elevate. Nothing to clone, nothing to unzip.
+
+**The full DigiAsset node** — DigiByte + IPFS + the node and its dashboard. This is
+the one most people want:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
+```
+
+**Just a DigiByte Core wallet, seeded** — installs DigiByte, writes its config, and
+fast-syncs it from the published snapshot so it starts near the chain tip instead of
+syncing for days. No IPFS, no node, no pool:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-digibyte.ps1 -OutFile "$env:TEMP\install-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-digibyte.ps1"
+```
+
+**Already have DigiByte Core? Seed it only** — skips the install and just downloads,
+verifies, and extracts the snapshot into an existing data directory. Prompts for the
+folder and sanity-checks it first (**[O]verride / [R]e-enter / [C]ancel** if it
+doesn't look like a DigiByte directory):
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
+```
+
+> **Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.**
+> `install-digibyte.ps1` checks and warns before committing to the download.
+>
+> Handy switches for the two DigiByte scripts: `-DataDir "$env:APPDATA\DigiByte"`
+> (stock DigiByte layout instead of `C:\DigiByte\Data`) and `-Force` (unattended).
+> `install-digibyte.ps1` also takes `-Headless` (run `digibyted`, no GUI), `-Lean`
+> (skip the optional service indexes), `-SkipSeed` (sync from genesis), and
+> `-NoStartOnLogon`. Re-running is safe: an existing `digibyte.conf` is topped up,
+> never overwritten, and an existing blockchain is left alone.
+
+---
+
 ## 1. I run a NODE (host DigiAssets, earn payouts)
 
 | Do this | Command |
@@ -65,13 +106,10 @@ Pick your role below — you only need the scripts in your section.
 
 > `make-snapshot.ps1` is the low-level piece-builder — `publish-snapshot.ps1` calls it for you. Only run it directly to debug.
 
-**Seed a standalone DigiByte wallet (no repo needed).** Anyone can fast-sync a plain DigiByte Core wallet with one line in an **Administrator PowerShell**. It prompts for the data folder, sanity-checks it (and offers **[O]verride / [R]e-enter / [C]ancel** if it doesn't look like a DigiByte directory), then downloads + extracts:
-
-```powershell
-iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
-```
-
-Add `-DataDir "$env:APPDATA\DigiByte"` to skip the prompt, or `-Force` for unattended runs.
+**Pointing someone at your snapshot?** They don't need this repo — send them the
+standalone one-liners in **[§0](#0-one-liners-no-repo-checkout-needed)**:
+`install-digibyte.ps1` if they have no DigiByte yet (installs *and* seeds), or
+`seed-digibyte.ps1` if they already run DigiByte Core and only need the chain data.
 
 ---
 

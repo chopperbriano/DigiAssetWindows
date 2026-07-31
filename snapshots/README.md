@@ -113,8 +113,9 @@ empty. So keep `-BaseUrl` here in sync with the installer's baked-in URL.
 ## Seed a standalone DigiByte wallet (any user)
 `seed-digibyte.ps1` is the only script here a **regular user** runs — it fast-syncs
 a plain DigiByte Core wallet (no DigiAsset node required) from the same published
-snapshot. Install DigiByte Core, start it once and close it (so the data directory
-exists), then run this single line in an **Administrator PowerShell**:
+snapshot. It expects DigiByte Core to already be installed: start it once and close
+it (so the data directory exists), then run this single line in an
+**Administrator PowerShell**:
 
 ```powershell
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
@@ -123,6 +124,10 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snap
 The `master` raw URL above always fetches the newest script. For a release-pinned
 copy instead, download it from the release:
 `https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download/seed-digibyte.ps1`
+
+> **No DigiByte installed yet?** Send them `install-digibyte.ps1` instead — it
+> installs DigiByte Core, writes its config, *and* seeds it from this same
+> snapshot, in one line. See **[§0 of the cheatsheet](../CHEATSHEET.md#0-one-liners-no-repo-checkout-needed)**.
 
 It:
 1. Fetches the manifest and shows the snapshot height / download size.
