@@ -153,7 +153,7 @@ _All documentation-only; no runtime/security impact. Grouped separately._
 - `NODE-SETUP.md:97` — calls port 8090 "local-only," but `WebServer.cpp:134` binds all interfaces (and the installer's `-Profile Any` firewall rule makes it LAN-reachable). Either bind 127.0.0.1 (recommended — see §4) or document that it binds all interfaces.
 
 **Route/version drift:**
-- `readme.md:206` — manual-install points at DigiByte v8.22.2; installer pins v9.26.4 (`setup-digiasset.ps1:51`). Update to 9.26.x or link "latest."
+- ~~`readme.md:206` — manual-install points at DigiByte v8.22.2; installer pins v9.26.4 (`setup-digiasset.ps1:51`). Update to 9.26.x or link "latest."~~ **RESOLVED (win.119):** both now track the same pin (9.26.5).
 - `pool/deploy/README.md:9` — proxied-route list omits `/pool/stats.json`, which the landing page depends on and `Caddyfile:23` includes. Add it (a hand-transcribed proxy would break the stats/map page).
 - `ARCHITECTURE.md:186` — documents `GET/POST /list/<floor>.json`; server routes `POST /list/` only (PoolServer.cpp:579), GET falls to 404. Drop the `GET/`. (Cited line 188 is inaccurate; the text is on 186.)
 

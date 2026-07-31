@@ -29,13 +29,35 @@ Your node hosts DigiAsset content and automatically joins the **DigiStamp pool**
 (`pool.digistamp.co`), which verifies it and pays it DGB for hosting. You don't
 run or manage a pool — it's already run for you. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
 
-## ⚡ Fast-sync a DigiByte Core wallet (standalone)
+## ⚡ Install a DigiByte Core wallet, seeded (standalone)
 
-Running (or installing) **DigiByte Core on its own** and want to skip the
-week-long initial sync? This one script downloads the same pre-synced blockchain
-snapshot the node installer uses, verifies its SHA256, and extracts it into your
-DigiByte data directory. It **prompts you for the location and sanity-checks it
-first**, so you can't accidentally unpack the chain into the wrong folder. In an
+Want **just DigiByte Core** — no IPFS, no DigiAsset node, no pool — up and
+running near the chain tip instead of syncing for days? This one script does the
+whole job: installs DigiByte Core, writes a complete `digibyte.conf`, seeds the
+blockchain from the same pre-synced snapshot the node installer uses, opens the
+firewall for P2P, and starts the wallet. In an **Administrator PowerShell**:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-digibyte.ps1 -OutFile "$env:TEMP\install-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-digibyte.ps1"
+```
+
+It self-elevates, so you can also just right-click > Run with PowerShell. Useful
+switches: `-DataDir "$env:APPDATA\DigiByte"` for the stock DigiByte layout,
+`-Headless` to run `digibyted` instead of the GUI wallet, `-Lean` to skip the
+optional service indexes, `-SkipSeed` to sync from genesis, and `-Force` for a
+fully unattended run. Re-running is safe — an existing `digibyte.conf` is topped
+up rather than overwritten (your RPC password survives), and an existing
+blockchain is left alone.
+
+> Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.
+> The script checks first and warns you before committing to the download.
+
+### Already have DigiByte Core installed?
+
+Then you only need the **seeding** half. This older script skips the install and
+just downloads + verifies + extracts the snapshot into an existing data
+directory. It **prompts you for the location and sanity-checks it first**, so you
+can't accidentally unpack the chain into the wrong folder. In an
 **Administrator PowerShell**:
 
 ```powershell
@@ -45,18 +67,23 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snap
 > Prefer a release-pinned copy? The same script also ships as a release asset:
 > `https://github.com/chopperbriano/DigiAssetWindows/releases/latest/download/seed-digibyte.ps1`
 
-Install DigiByte Core, start it once and close it (so the data directory exists),
-then run the line above. It offers a detected default (`%APPDATA%\DigiByte` for
-stock DigiByte Core, `C:\DigiByte\data` for the DigiAsset layout), warns and asks
-for confirmation if the folder doesn't look like a DigiByte data directory, then
+Start DigiByte Core once and close it (so the data directory exists), then run
+the line above. It offers a detected default (`%APPDATA%\DigiByte` for stock
+DigiByte Core, `C:\DigiByte\data` for the DigiAsset layout), warns and asks for
+confirmation if the folder doesn't look like a DigiByte data directory, then
 downloads + extracts. Pass `-DataDir "$env:APPDATA\DigiByte"` to skip the prompt,
-or `-Force` for unattended use. (The full node installer above already does this
-for you — you only need this script for a **standalone** DigiByte wallet.)
+or `-Force` for unattended use.
+
+> Which one do I want? **Nothing installed yet → `install-digibyte.ps1`**
+> (it installs *and* seeds). **DigiByte already installed → `seed-digibyte.ps1`.**
+> **Want the full DigiAsset node → `setup-digiasset.ps1`**, which already does
+> all of this for you.
 
 ## Repository layout
 | Path | What |
 |---|---|
 | `setup-digiasset.ps1` | **Node installer — the one-liner. This is what you run.** |
+| `install-digibyte.ps1` | Standalone **DigiByte Core only**: install + configure + seed. No IPFS/node/pool. |
 | `node/` | Node operator helpers: `monitor-node.ps1`, `stop-node.ps1`, `update-binaries.ps1`. |
 | `snapshots/` | Fast-sync tooling: `make-snapshot.ps1` (create), `seed-digibyte.ps1` (consume — prompts for + validates the DigiByte data folder). |
 | `pool/`, `setup-pool.ps1` | Pool-server code + installer. **Operator-only — you don't need these**; the DigiStamp pool is already run for you. |
