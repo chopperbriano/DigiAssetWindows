@@ -143,6 +143,7 @@ private:
     Statement _stmtAddWatchAddress;
     Statement _stmtGetSpendingAddress;
     Statement _stmtAddExchangeRate;
+    Statement _stmtReplaceExchangeRate;
     Statement _stmtAddKYC;
     Statement _stmtRevokeKYC;
     Statement _stmtPruneUTXOs;
@@ -240,6 +241,7 @@ public:
         result += printStatementInfo("_stmtAddWatchAddress", _stmtAddWatchAddress);
         result += printStatementInfo("_stmtGetSpendingAddress", _stmtGetSpendingAddress);
         result += printStatementInfo("_stmtAddExchangeRate", _stmtAddExchangeRate);
+        result += printStatementInfo("_stmtReplaceExchangeRate", _stmtReplaceExchangeRate);
         result += printStatementInfo("_stmtAddKYC", _stmtAddKYC);
         result += printStatementInfo("_stmtRevokeKYC", _stmtRevokeKYC);
         result += printStatementInfo("_stmtPruneUTXOs", _stmtPruneUTXOs);
