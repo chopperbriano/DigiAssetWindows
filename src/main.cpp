@@ -51,13 +51,36 @@ namespace {
 // fatal setup failures (bad config, database won't open), 1 on an uncaught
 // exception. Note: the happy path never falls through to `return 0` - it calls
 // std::exit(0) after teardown to kill the detached RPC/web-server threads.
-int main() {
+// Takes argc/argv for --bootgen / --help (upstream 1ddf933).
+int main(int argc, char* argv[]) {
 
   try {
     struct bootStrap {
         string cid;
         unsigned int height;
     };
+
+    /*
+     * Parse command line
+     */
+    bool bootGenMode = false; //--bootgen: sync to the tip, make the db a single clean file, then exit
+    for (int i = 1; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--bootgen") {
+            bootGenMode = true;
+        } else if ((arg == "--help") || (arg == "-h")) {
+            cout << "DigiAsset Core " << getVersionString() << "\n"
+                 << "Usage: digiasset_core [options]\n"
+                 << "  --bootgen   Sync to the chain tip, then compact the database into a single\n"
+                 << "              shareable file and shut down.  Used to build the IPFS bootstrap\n"
+                 << "              image.  The RPC server and event stream stay off.\n"
+                 << "  --help      Show this message\n";
+            return 0;
+        } else {
+            cerr << "Unknown option: " << arg << "\nTry --help\n";
+            return 1;
+        }
+    }
 
     //make sure only one instance
     InstanceLock lock("digiasset_core");
@@ -195,6 +218,9 @@ int main() {
      * Print starting message
      */
     log->addMessage("Starting " + getProductVersionString());
+    if (bootGenMode) {
+        log->addMessage("Bootstrap generation mode.  Will shut down once fully synced");
+    }
 
     /*
      * Get database filename from config (default "chain.db")
@@ -407,31 +433,44 @@ int main() {
      * (stop() joins its accept thread before we tear the process down).
      */
     std::shared_ptr<RPC::Server> rpcServer;
-    try {
-        log->addMessage("Starting RPC Server");
-        rpcServer = std::make_shared<RPC::Server>();
-        main->setRpcServer(rpcServer.get());
-        rpcServer->start();
-    } catch (const std::exception& e) {
-        log->addMessage(std::string("RPC server failed: ") + e.what(), Log::CRITICAL);
+    if (bootGenMode) {
+        //bootgen builds an image to hand to other people - keep every external
+        //writer off chain.db while we do it (upstream 1ddf933 does the same).
+        log->addMessage("Skipping RPC server (bootgen mode)");
+    } else {
+        try {
+            log->addMessage("Starting RPC Server");
+            rpcServer = std::make_shared<RPC::Server>();
+            main->setRpcServer(rpcServer.get());
+            rpcServer->start();
+        } catch (const std::exception& e) {
+            log->addMessage(std::string("RPC server failed: ") + e.what(), Log::CRITICAL);
+        }
     }
 
     /**
      * Start event stream (TCP newline-delimited JSON events; config eventport, 0 disables)
-     */
-    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
-                                           config.getString("eventbind", "127.0.0.1"));
-
-    /**
-     * Start Web Server
+     * and the Web Server.
+     *
+     * In bootgen mode both stay off, along with the RPC server above, so nothing
+     * outside this process can touch chain.db while we are building an image to
+     * share. (Upstream 1ddf933 gates the RPC server here; ours starts earlier as
+     * a shared_ptr, so it is gated at its own site instead.)
      */
     WebServer webServer("config.cfg");
-    try {
-        log->addMessage("Starting Web Server");
-        main->setWebServer(&webServer);
-        webServer.start();
-    } catch (const std::exception& e) {
-        log->addMessage(std::string("Web server failed: ") + e.what(), Log::CRITICAL);
+    if (bootGenMode) {
+        log->addMessage("Skipping event stream and web server (bootgen mode)");
+    } else {
+        EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
+                                               config.getString("eventbind", "127.0.0.1"));
+
+        try {
+            log->addMessage("Starting Web Server");
+            main->setWebServer(&webServer);
+            webServer.start();
+        } catch (const std::exception& e) {
+            log->addMessage(std::string("Web server failed: ") + e.what(), Log::CRITICAL);
+        }
     }
 
     /**
@@ -442,10 +481,27 @@ int main() {
     } catch (const std::exception& e) {
         log->addMessage(std::string("Chain Analyzer start failed: ") + e.what(), Log::CRITICAL);
     }
+    // Upstream's wait loop is NOT taken here: we already have our own below that
+    // also honours the dashboard's [Q] quit and our g_shutdown signal handler
+    // (registered earlier, per INTEGRATION-mctrivia.md §5). The bootgen
+    // stop-when-synced condition is grafted into that loop instead.
+    bool bootGenComplete = false;
 
     // Wait for shutdown signal (Ctrl+C or Q key)
     while (!g_shutdown && !dashboard.quitRequested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        //bootgen stops on its own the moment the analyzer reaches the chain tip.
+        //Blocks keep arriving so there is no point chasing the tip - the image
+        //being a block or two behind costs a new node nothing. (upstream 1ddf933)
+        if (bootGenMode && (analyzer.getSync() == ChainAnalyzer::SYNCED)) {
+            bootGenComplete = true;
+            break;
+        }
+    }
+    unsigned int bootGenHeight = bootGenComplete ? analyzer.getSyncHeight() : 0;
+    if (bootGenMode) {
+        log->addMessage(bootGenComplete ? "Sync complete.  Stopping to generate bootstrap image"
+                                        : "Shutdown signal received.  Stopping");
     }
 
     // Graceful shutdown. Order matters: stop EVERYTHING that could still touch the
@@ -471,14 +527,35 @@ int main() {
     // worker touching statics that are being destroyed at exit (use-after-free).
     if (auto* pspList = main->getPermanentStoragePoolListIfSet()) { try { pspList->stopAll(); } catch (...) {} }
     try { ipfs.stop(); } catch (...) {}                                                 // joins the IPFS worker thread
-    db->walCheckpoint();                                                                // flush WAL into chain.db (now no other thread writes)
+    if (bootGenComplete) {
+        //make the db file self contained and as small as possible so it can be shared as is
+        db->compactForDistribution();
+    } else {
+        db->walCheckpoint();                                                            // flush WAL into chain.db (now no other thread writes)
+    }
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // Force exit — any remaining detached threads won't hold the process open
     dashboard.stop();
     std::cout << "\033[?25h" << std::flush;
+
+    if (bootGenComplete) {
+        //MUST delete before std::exit: exit() does not unwind, so ~Database()
+        //would never run and it is the destructor that closes sqlite and removes
+        //the leftover -shm (_deleteSidecarsOnClose). Skipping it would leave the
+        //sidecar beside chain.db and defeat the whole point of bootgen. Only done
+        //on this path - the normal shutdown deliberately exits without unwinding.
+        delete db;
+        db = nullptr;
+        main->setDatabase(nullptr);
+        std::cout << "\nBootstrap image ready: " << dbFilename << " (synced to block " << bootGenHeight << ")\n"
+                  << "There should be no " << dbFilename << "-wal or " << dbFilename << "-shm file beside it.\n"
+                  << "Add it to IPFS, then update officialBootstrap in src/main.cpp with the new CID and\n"
+                  << "height " << bootGenHeight << ", and move the CID it replaces into oldBootstrapCIDs.\n";
+    }
     std::exit(0);
+
 
     return 0;
 
