@@ -25,8 +25,9 @@ Building this project produces up to 4 binaries (all placed in `bin/`):
 7. [Upgrading DigiAsset Core](#upgrading-digiasset-core)
 8. [Documentation](#documentation)
 9. [Event Stream](#event-stream)
-10. [Other Notes](#other-notes)
-11. [Special Thanks](#special-thanks)
+10. [Generating a Bootstrap Image](#generating-a-bootstrap-image)
+11. [Other Notes](#other-notes)
+12. [Special Thanks](#special-thanks)
 
 ## Requirements
 
@@ -420,6 +421,31 @@ listens on localhost unless you explicitly set `eventbind`.
 
 The daemon shuts down cleanly on `ctrl+c`, SIGTERM or the `shutdown` RPC method
 (database flushed and closed before exit).
+
+## Generating a Bootstrap Image
+
+New installs can download a prebuilt database from IPFS instead of syncing the whole chain
+themselves (`bootstrapchainstate` in the config).  `--bootgen` builds that image:
+
+```
+./digiasset_core --bootgen
+```
+
+It syncs normally and shuts itself down as soon as it reaches the chain tip.  New blocks
+keep arriving, so the image may end up a block or two behind by the time it is published —
+that is fine, a new node just syncs the remainder itself.  The RPC server and event stream
+stay off for the whole run so nothing outside the process can write to the database while
+the image is being made.
+
+On shutdown the database is folded out of WAL mode and vacuumed, so what is left on disk is
+a single self contained file with no `chain.db-wal` or `chain.db-shm` beside it — safe to
+add to IPFS as is.  Because a normal run keeps the database in WAL mode, copying `chain.db`
+out from under a running daemon does *not* give you a usable image; use this flag.
+
+Vacuuming temporarily needs about as much free disk space as the database itself.  The
+synced block height is printed at the end; put it, along with the CID you get from
+`ipfs add`, into `officialBootstrap` in `src/main.cpp`, and move the CID it replaces into
+`oldBootstrapCIDs` so existing nodes unpin it.
 
 ## Other Notes
 

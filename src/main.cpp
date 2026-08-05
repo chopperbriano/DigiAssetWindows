@@ -21,11 +21,33 @@ namespace {
     }
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
     struct bootStrap {
         string cid;
         unsigned int height;
     };
+
+    /*
+     * Parse command line
+     */
+    bool bootGenMode = false; //--bootgen: sync to the tip, make the db a single clean file, then exit
+    for (int i = 1; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--bootgen") {
+            bootGenMode = true;
+        } else if ((arg == "--help") || (arg == "-h")) {
+            cout << "DigiAsset Core " << getVersionString() << "\n"
+                 << "Usage: digiasset_core [options]\n"
+                 << "  --bootgen   Sync to the chain tip, then compact the database into a single\n"
+                 << "              shareable file and shut down.  Used to build the IPFS bootstrap\n"
+                 << "              image.  The RPC server and event stream stay off.\n"
+                 << "  --help      Show this message\n";
+            return 0;
+        } else {
+            cerr << "Unknown option: " << arg << "\nTry --help\n";
+            return 1;
+        }
+    }
 
     //make sure only one instance
     InstanceLock lock("digiasset_core");
@@ -134,6 +156,9 @@ int main() {
      * Print starting message
      */
     log->addMessage("Starting DigiAsset Core " + getVersionString());
+    if (bootGenMode) {
+        log->addMessage("Bootstrap generation mode.  Will shut down once fully synced");
+    }
 
     /*
      * Get database filename from config (default "chain.db")
@@ -272,23 +297,27 @@ int main() {
 
     /**
      * Start event stream(TCP newline delimited JSON events.  config eventport, 0 disables)
-     */
-    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
-                                           config.getString("eventbind", "127.0.0.1"));
-
-    /**
-     * Start RPC Server
+     * and the RPC Server.
+     * In bootgen mode both stay off so nothing outside this process can touch the database
+     * while we are building an image to share.
      */
     RPC::Server* server = nullptr;
-    try {
-        // Create and start the Bitcoin RPC server
-        log->addMessage("Starting RPC Server");
-        server = new RPC::Server();
-        main->setRpcServer(server);
-        server->start();
+    if (bootGenMode) {
+        log->addMessage("Skipping event stream and RPC server(bootgen mode)");
+    } else {
+        EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
+                                               config.getString("eventbind", "127.0.0.1"));
 
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        try {
+            // Create and start the Bitcoin RPC server
+            log->addMessage("Starting RPC Server");
+            server = new RPC::Server();
+            main->setRpcServer(server);
+            server->start();
+
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+        }
     }
 
     /*
@@ -296,10 +325,21 @@ int main() {
      */
     std::signal(SIGINT, handleShutdownSignal);
     std::signal(SIGTERM, handleShutdownSignal);
+
+    //in bootgen mode we stop on our own the moment the analyzer reaches the chain tip.  Blocks
+    //keep arriving so there is no point chasing the tip - the image being a block or two behind
+    //costs a new node nothing.
+    bool bootGenComplete = false;
     while (!shutdownRequested) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (bootGenMode && (analyzer.getSync() == ChainAnalyzer::SYNCED)) {
+            bootGenComplete = true;
+            break;
+        }
     }
-    log->addMessage("Shutdown signal received.  Stopping");
+    unsigned int bootGenHeight = analyzer.getSyncHeight();
+    log->addMessage(bootGenComplete ? "Sync complete.  Stopping to generate bootstrap image"
+                                    : "Shutdown signal received.  Stopping");
 
     //order matters: stop everything that could touch the database before flushing/closing it
     if (server != nullptr) server->stop(); //no new RPC calls; joins all RPC threads
@@ -307,9 +347,20 @@ int main() {
     ipfs.stop();                           //joins the IPFS job threads
     EventBroadcaster::GetInstance()->stop();
     delete server;
-    db->walCheckpoint(); //flush WAL into chain.db so the db file is complete on its own
-    delete psp;          //closes the pools' own sqlite handles
-    delete db;           //closes the chain.db sqlite handles
+    delete psp; //pools share the chain.db handles, nothing of their own to close
+    if (bootGenComplete) {
+        //make the db file self contained and as small as possible so it can be shared as is
+        db->compactForDistribution();
+    } else {
+        db->walCheckpoint(); //flush WAL into chain.db so the db file is complete on its own
+    }
+    delete db; //closes the chain.db sqlite handles
     log->addMessage("Shutdown complete");
+    if (bootGenComplete) {
+        cout << "\nBootstrap image ready: " << dbFilename << " (synced to block " << bootGenHeight << ")\n"
+             << "There should be no " << dbFilename << "-wal or " << dbFilename << "-shm file beside it.\n"
+             << "Add it to IPFS, then update officialBootstrap in src/main.cpp with the new CID and\n"
+             << "height " << bootGenHeight << ", and move the CID it replaces into oldBootstrapCIDs.\n";
+    }
     return 0;
 }

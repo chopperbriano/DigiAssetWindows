@@ -13,6 +13,7 @@
 #include "utils.h"
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -680,6 +681,7 @@ void Database::initializeClassValues() {
  */
 Database::Database(const string& newFileName) {
     bool firstRun = !utils::fileExists(newFileName);
+    _fileName = newFileName;
 
     //open database
     int rc;
@@ -735,6 +737,14 @@ Database::Database(const string& newFileName) {
 Database::~Database() {
     if (_dbCheckpoint) sqlite3_close_v2(_dbCheckpoint);
     sqlite3_close_v2(_db);
+
+    //compactForDistribution() left the file in rollback mode, so SQLite no longer cleans up the
+    //shared memory file it made back when the db was in WAL mode.  Remove the leftovers by hand so
+    //what remains on disk really is one file.
+    if (_deleteSidecarsOnClose) {
+        std::remove((_fileName + "-wal").c_str()); //normally already gone, removed here just in case
+        std::remove((_fileName + "-shm").c_str());
+    }
 }
 
 /*
@@ -824,6 +834,69 @@ void Database::walCheckpoint() {
                             "), WAL will be retried next checkpoint", Log::DEBUG);
         }
     }
+}
+
+/**
+ * Turns the database into a single self contained file suitable for sharing as a bootstrap image.
+ *
+ * In WAL mode a database is really 3 files(chain.db, chain.db-wal, chain.db-shm) and the -wal can
+ * hold committed data that is not in the main file yet.  This folds everything back into the main
+ * file, switches the file out of WAL mode so no -wal is recreated, then VACUUMs to shrink and
+ * defragment the result.  After this the main file on its own is a complete database.
+ *
+ * Only call after every other thread that could touch the database has been stopped.  Leaving WAL
+ * mode needs exclusive access to the file so any other connection will make it fail.
+ *
+ * VACUUM temporarily needs free disk space roughly equal to the size of the database.
+ */
+void Database::compactForDistribution() {
+    Log* log = Log::GetInstance();
+
+    //make sure nothing is left half written
+    while (_transactionDepth > 0) endTransaction();
+
+    //fold the WAL back into the main file
+    log->addMessage("Flushing write ahead log into database");
+    walCheckpoint();
+
+    //leaving WAL mode needs exclusive access so the checkpoint connection has to go first
+    if (_dbCheckpoint != nullptr) {
+        sqlite3_close_v2(_dbCheckpoint);
+        _dbCheckpoint = nullptr;
+    }
+
+    //switch to rollback journalling.  This does a final checkpoint and deletes the -wal and -shm
+    //files.  The pragma reports the mode it ended up in rather than erroring, so read the result.
+    string resultingMode;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, "PRAGMA journal_mode = DELETE;", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* mode = sqlite3_column_text(stmt, 0);
+            if (mode != nullptr) resultingMode = reinterpret_cast<const char*>(mode);
+        }
+        sqlite3_finalize(stmt);
+    }
+    if (resultingMode != "delete") {
+        log->addMessage("Could not leave WAL mode(still \"" + resultingMode +
+                                "\").  Database file will not be self contained",
+                        Log::CRITICAL);
+        return;
+    }
+
+    //shrink and defragment so the shared file is as small as possible
+    log->addMessage("Compacting database.  This may take a while");
+    char* zErrMsg = nullptr;
+    int rc = sqlite3_exec(_db, "VACUUM;", nullptr, nullptr, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        string errStr = (zErrMsg != nullptr) ? zErrMsg : "unknown";
+        if (zErrMsg != nullptr) sqlite3_free(zErrMsg);
+        log->addMessage("VACUUM failed: " + errStr + ".  Database is still valid but not compacted", Log::WARNING);
+    } else {
+        log->addMessage("Database compacted");
+    }
+
+    //the -wal is already gone but the -shm from before the mode switch is not; clear both on close
+    _deleteSidecarsOnClose = true;
 }
 
 /**
