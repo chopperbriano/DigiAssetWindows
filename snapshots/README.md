@@ -12,7 +12,7 @@ at the bottom).
 |---|---|
 | `setup-cloudflare-snapshots.ps1` | **Run once.** Installs rclone + configures your Cloudflare R2 remote from your keys, then publishing needs no arguments. |
 | `publish-snapshot.ps1` | **The one you run each time.** Build both archives → upload to R2 → rebuild + upload `snapshot.json` → verify. Can schedule itself weekly. |
-| `make-snapshot.ps1` | The building block: creates the archives + `*-part.json` (and, with `-Component manifest`, `snapshot.json`). `publish-snapshot.ps1` calls this. |
+| `make-snapshot.ps1` | The building block: creates the archives + `*-part.json` (and, with `-Component manifest`, `snapshot.json`). `publish-snapshot.ps1` calls this. **It uploads nothing** — run it directly only to debug, then finish with `publish-snapshot.ps1 -SkipBuild`. |
 | `seed-digibyte.ps1` | **Standalone consumer** (any user, no repo needed): seeds *any* DigiByte wallet from the published snapshot. **Prompts for the data directory and validates it before extracting**; `-DataDir` / `-Force` skip the prompts. See [below](#seed-a-standalone-digibyte-wallet-any-user). |
 | `snapshot-digibyte-datadir.ps1` | **Local / LAN fleet provisioning.** `-Mode Snapshot` archives one healthy box's `blocks`+`chainstate`+`indexes` (wallet excluded); `-Mode Restore` applies it to another box directly (file or `\\share`) — no R2 round-trip, no reindex, no re-sync. Restored nodes inherit the built indexes. |
 
@@ -52,6 +52,20 @@ powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1
 It stops DigiByte + the node briefly for a clean, **in-sync** snapshot (chain.db
 can't drift ahead of the blockchain because both are captured together), restarts
 them, uploads everything, refreshes `snapshot.json`, and verifies it's live.
+
+### Already built the archives? Publish without recompressing
+If a build succeeded but the publish didn't — you ran `make-snapshot.ps1` directly,
+an upload failed, or you cancelled partway — don't spend another 20-60 minutes
+recompressing the same ~34 GB. This uploads what's already in `C:\DigiAssetSnapshots`,
+rebuilds `snapshot.json`, and verifies it live:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -SkipBuild
+```
+Each archive is checked against its `*-part.json` (expected filename **and** exact
+byte count) before anything is uploaded, so an interrupted or half-copied archive is
+caught locally instead of being published and breaking fast-sync for every new node.
+`-SkipBuild` is refused with `-Schedule`: a recurring job that never rebuilds would
+republish the same frozen snapshot forever.
 
 ## Schedule it (weekly or daily)
 ```powershell

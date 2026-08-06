@@ -111,6 +111,32 @@ Say "=== Make DigiAsset fast-sync snapshot ($Component)  (v$ScriptVersion) ===" 
 if ($Component -ne 'manifest' -and -not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw "tar.exe not found (needs Windows 10 1803+ / Windows 11)." }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+# --- Resolve BaseUrl NOW, not after the archives are built -------------------
+# The manifest step needs the public R2 URL. It used to prompt for it inside
+# New-Manifest, which runs LAST - so `-Component both` compressed ~34 GB for
+# 20-60 minutes and only THEN blocked on a Read-Host, with nobody watching.
+# Resolve it here instead: prefer what the caller passed, fall back to the
+# publicUrl saved by setup-cloudflare-snapshots.ps1, and only prompt as a last
+# resort - before any archiving starts.
+if ($Component -in 'both','manifest') {
+    if (-not $BaseUrl) {
+        $cfgFile = Join-Path $PSScriptRoot 'snapshot-config.json'
+        if (Test-Path $cfgFile) {
+            try {
+                $sc = Get-Content $cfgFile -Raw | ConvertFrom-Json
+                if ($sc.publicUrl) { $BaseUrl = $sc.publicUrl; Say "  base URL from snapshot-config.json: $BaseUrl" 'Gray' }
+            } catch { Say "  (couldn't read $cfgFile)" 'Yellow' }
+        }
+    }
+    if (-not $BaseUrl) {
+        if ($NonInteractive) { throw "manifest needs -BaseUrl in non-interactive mode (the public R2 URL)." }
+        Say "`nThe manifest records the public URL nodes download from. Asking now so a long" 'Yellow'
+        Say "archive run doesn't finish and then stop here waiting for an answer." 'Yellow'
+        $BaseUrl = (Read-Host "Enter your R2 public base URL (e.g. https://pub-xxxx.r2.dev)")
+    }
+    if (-not $BaseUrl) { throw "no R2 public base URL given - cannot write the manifest." }
+}
+
 function Read-Cfg($path){ $h=@{}; if(Test-Path $path){ foreach($l in Get-Content $path){ $t=$l.Trim(); if($t -and -not $t.StartsWith('#')){ $i=$t.IndexOf('='); if($i -gt 0){ $h[$t.Substring(0,$i).Trim()]=$t.Substring($i+1).Trim() } } } }; return $h }
 
 # --- DigiByte component ---------------------------------------------------
@@ -269,7 +295,19 @@ switch ($Component) {
 
 Say "`n===== Done ($Component) =====" 'Green'
 Say "Output folder: $OutDir" 'White'
-if ($Component -in 'digibyte','both')  { Say "  upload: digibyte-*.tar.gz  +  digibyte-part.json" 'Gray' }
-if ($Component -in 'chaindb','both')   { Say "  upload: digiasset-chaindb-*.tar.gz  +  chaindb-part.json" 'Gray' }
-if ($Component -in 'manifest','both')  { Say "  upload: snapshot.json  (do this LAST, after both parts are up)" 'Gray' }
-Say "Upload with:  rclone copy $OutDir\ r2:<your-bucket>/ --progress" 'Cyan'
+
+# Be blunt about this: make-snapshot only BUILDS files. Running it and walking
+# away used to look like a completed publish, while the live snapshot.json still
+# pointed at the previous snapshot and nobody noticed for days.
+Say "`n*** NOTHING HAS BEEN UPLOADED. These files are still only on this PC. ***" 'Yellow'
+Say "Nodes keep fast-syncing from the PREVIOUS snapshot until you upload them." 'Yellow'
+
+Say "`nEasiest way to finish - one command that uploads, republishes, and verifies:" 'Cyan'
+Say "  .\publish-snapshot.ps1 -SkipBuild" 'White'
+Say "  (-SkipBuild reuses what you just built instead of recompressing it all again)" 'Gray'
+
+Say "`nOr by hand - archives FIRST, snapshot.json LAST:" 'Cyan'
+if ($Component -in 'digibyte','both')  { Say "  upload: digibyte.tar.gz  +  digibyte-part.json" 'Gray' }
+if ($Component -in 'chaindb','both')   { Say "  upload: digiasset-chaindb.tar.gz  +  chaindb-part.json" 'Gray' }
+if ($Component -in 'manifest','both')  { Say "  upload: snapshot.json  (LAST - publishing it first points nodes at files that aren't up yet)" 'Gray' }
+Say "  rclone copy $OutDir\ r2:<your-bucket>/ --progress" 'White'

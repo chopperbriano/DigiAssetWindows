@@ -26,6 +26,10 @@
 
     # also delete superseded archives from R2 so the bucket doesn't grow forever
     powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -PruneRemote
+
+    # already built the archives (e.g. ran make-snapshot.ps1 directly, or an upload
+    # failed)? publish what's on disk instead of recompressing ~34 GB again:
+    powershell -ExecutionPolicy Bypass -File .\publish-snapshot.ps1 -SkipBuild
 #>
 [CmdletBinding()]
 param(
@@ -41,6 +45,12 @@ param(
     [int]   $KeepLocal    = 1,        # keep newest N local .tar.gz of each kind
     [switch]$PruneRemote,             # delete superseded archives from R2 too
     [switch]$NoManifest,              # upload the archive(s) only; do NOT rebuild/replace snapshot.json
+    # Skip step 1 and publish the archives ALREADY sitting in -OutDir. For when a
+    # build succeeded but the publish didn't (make-snapshot.ps1 run directly, an
+    # upload that failed, a cancelled run) - recompressing ~34 GB to republish the
+    # exact same bytes is 20-60 wasted minutes. Every archive is size-checked
+    # against its part file before anything is uploaded.
+    [switch]$SkipBuild,
     [switch]$Schedule,                # register a scheduled task instead of running now
     [ValidateSet('Weekly','Daily')][string]$Cadence = 'Weekly',
     [string]$ScheduleDay  = 'Sunday', # weekly cadence only: which day to run
@@ -79,6 +89,7 @@ if (-not $admin) {
         $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
         if ($NoManifest)  { $fwd += ' -NoManifest' }
+        if ($SkipBuild)   { $fwd += ' -SkipBuild' }
         if ($Hidden)      { $fwd += ' -Hidden' }
         if ($Schedule)    { $fwd += " -Schedule -Cadence $Cadence -ScheduleDay $ScheduleDay -ScheduleTime $ScheduleTime" }
         Start-Process powershell.exe -Verb RunAs -ArgumentList $fwd; return
@@ -86,6 +97,12 @@ if (-not $admin) {
 }
 
 # --- Schedule mode: register the weekly task and exit ------------------------
+# -SkipBuild is a one-off recovery switch, never a scheduled mode: a recurring
+# task that never rebuilds would re-upload the same frozen archives forever while
+# looking like it was publishing fresh ones.
+if ($Schedule -and $SkipBuild) {
+    throw "-SkipBuild cannot be combined with -Schedule: the scheduled job must build a fresh snapshot each run, or it would republish the same stale archives forever. Register the task without -SkipBuild."
+}
 if ($Schedule) {
     # Visible by default (Minimized) so a console shows in the taskbar and you can
     # open it to watch a run live; -Hidden restores the old invisible behavior.
@@ -153,6 +170,41 @@ Say '==============================================================' 'Cyan'
 # the R2 URL via Read-Host and blocked the hidden scheduled run until timeout.
 # The manifest is built once, correctly, in Step 3 (which passes -BaseUrl).
 $step1Component = if ($Component -eq 'both') { 'archives' } else { $Component }
+if ($SkipBuild) {
+    Step 1 'Reusing the archives already in the output folder (-SkipBuild)'
+    # Validate before uploading anything. The part file is authoritative for BOTH
+    # the archive's name and its expected byte count, so a build that was killed
+    # part-way (or an archive someone half-copied in) is caught HERE rather than
+    # being published and breaking fast-sync for every new node.
+    $wantParts = switch ($Component) {
+        'digibyte' { @('digibyte-part.json') }
+        'chaindb'  { @('chaindb-part.json') }
+        default    { @('digibyte-part.json','chaindb-part.json') }
+    }
+    foreach ($pn in $wantParts) {
+        $pf = Join-Path $OutDir $pn
+        if (-not (Test-Path $pf)) {
+            throw "-SkipBuild: $pn not found in $OutDir. There is nothing built to publish - run without -SkipBuild to build it first."
+        }
+        $part = $null
+        try { $part = Get-Content $pf -Raw | ConvertFrom-Json } catch {}
+        if (-not $part -or -not $part.file) { throw "-SkipBuild: $pn is unreadable or has no 'file' field. Rebuild without -SkipBuild." }
+        $af = Join-Path $OutDir $part.file
+        if (-not (Test-Path $af)) {
+            throw "-SkipBuild: $pn refers to $($part.file), which is not in $OutDir. Rebuild without -SkipBuild."
+        }
+        $actual = (Get-Item $af).Length
+        $expect = [int64]$part.sizeBytes
+        if ($expect -gt 0 -and $actual -ne $expect) {
+            throw "-SkipBuild: $($part.file) is $('{0:N0}' -f $actual) bytes but $pn records $('{0:N0}' -f $expect) - the local archive is incomplete (interrupted build?). Rebuild without -SkipBuild."
+        }
+        $age = ((Get-Date) - (Get-Item $af).LastWriteTime)
+        Say ("  OK  {0}  ({1:N1} GB, height {2:N0}{3}, built {4:N1}h ago)" -f `
+                $part.file, ($actual/1GB), [int]$part.height, `
+                $(if ($part.version) { ", DigiByte $($part.version)" } else { '' }), $age.TotalHours) 'Green'
+    }
+    Say '  archives verified against their part files - nothing rebuilt.' 'Green'
+} else {
 Step 1 'Building snapshot archives (stops + restarts DigiByte / the node)'
 # Build the argument list and only add -DataDir when it's set. Passing an EMPTY
 # -DataDir through `powershell.exe -File` drops the empty token, so make-snapshot
@@ -164,6 +216,7 @@ if ($DataDir) { $snapArgs += @('-DataDir',$DataDir) }
 if ($Height -gt 0) { $snapArgs += @('-Height', "$Height") }
 & powershell.exe @snapArgs
 if ($LASTEXITCODE -ne 0) { throw "make-snapshot failed (exit $LASTEXITCODE)." }
+}
 
 # --- 2. Upload archives + part files -----------------------------------------
 Step 2 "Uploading archives to $remote"

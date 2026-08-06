@@ -98,6 +98,7 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snap
 |---|---|
 | **One-time R2 setup** | `snapshots\setup-cloudflare-snapshots.ps1 -AccountId XXX -AccessKeyId XXX -SecretAccessKey XXX` |
 | **Publish a fresh snapshot** (build + upload + manifest) | `snapshots\publish-snapshot.ps1` |
+| **Publish archives you already built** (skips the ~45 min recompress) | `snapshots\publish-snapshot.ps1 -SkipBuild` |
 | Publish ONLY the DigiByte chain (no chain.db on this box) | `snapshots\publish-snapshot.ps1 -Component digibyte` |
 | Schedule it weekly (Sun 3am) | `snapshots\publish-snapshot.ps1 -Schedule` |
 | Schedule it **daily** (3am) | `snapshots\publish-snapshot.ps1 -Schedule -Cadence Daily` |
@@ -105,6 +106,8 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snap
 | Copy a synced data dir across your own LAN | `snapshots\snapshot-digibyte-datadir.ps1 -Mode Snapshot` / `-Mode Restore` |
 
 > `make-snapshot.ps1` is the low-level piece-builder — `publish-snapshot.ps1` calls it for you. Only run it directly to debug.
+> It **builds files locally and uploads nothing**, so if you run it by hand, finish with
+> `publish-snapshot.ps1 -SkipBuild` to actually publish what it made.
 
 **Pointing someone at your snapshot?** They don't need this repo — send them the
 standalone one-liners in **[§0](#0-one-liners-no-repo-checkout-needed)**:
