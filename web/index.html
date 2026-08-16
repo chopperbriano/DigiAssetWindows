@@ -462,7 +462,17 @@ function applyStatus(d){
   var sv=d.services||{};
   setPill('svcCore', sv.digibyteCore?'green':'red', sv.digibyteCore?'Online':'Offline');
   setPill('svcDb', sv.database?'green':'red', sv.database?'Ready':'N/A');
-  setPill('svcIpfs', (d.ipfs&&d.ipfs.connected)?'green':'amber', (d.ipfs&&d.ipfs.connected)?'Connected':'N/A');
+  // ipfs.connected is now LIVE reachability, so distinguish the three real
+  // states: not configured at all, configured but not yet probed, and probed
+  // but the daemon isn't answering. Previously anything other than "connected"
+  // showed "N/A", which read as "not set up" when the daemon had actually died.
+  (function(){
+    var ip=d.ipfs||{};
+    if(!ip.configured) setPill('svcIpfs','amber','N/A');
+    else if(ip.connected) setPill('svcIpfs','green','Connected');
+    else if(!ip.probed) setPill('svcIpfs','gray','checking…');
+    else setPill('svcIpfs','red','Unreachable');
+  })();
   setPill('svcRpc', (sv.rpc&&sv.rpc.online)?'green':'red', (sv.rpc&&sv.rpc.online)?('Port '+sv.rpc.port):'Off');
   setPill('svcWeb', (sv.web&&sv.web.running)?'green':'gray', (sv.web&&sv.web.running)?('Port '+sv.web.port):'—');
   if(sv.rpc&&sv.rpc.port) document.getElementById('assetPort').textContent=sv.rpc.port;

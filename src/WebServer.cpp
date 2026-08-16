@@ -14,6 +14,7 @@
 #include "Config.h"
 #include "CurlHandler.h"
 #include "DigiByteCore.h"
+#include "IPFS.h"   // complete type needed for the liveness getters below
 #include "Log.h"
 #include "NodeStats.h"
 #include "Version.h"
@@ -209,7 +210,15 @@ std::string WebServer::statusJson() {
     // ---- IPFS / bitswap + coverage (cached in NodeStats by the dashboard) --
     auto snap = NodeStats::instance().snapshot();
     Json::Value ipfs;
-    ipfs["connected"] = (app->getIPFSIfSet() != nullptr);
+    // Live reachability, not "an IPFS object was constructed". The old
+    // pointer-null test latched true at startup and could never go false, so
+    // this reported connected=true with the daemon stopped. "probed" lets a
+    // client tell "not asked yet" from "asked, and it's down". Same source the
+    // dashboard reads, so the console and this JSON can't disagree.
+    IPFS* ipfsPtr = app->getIPFSIfSet();
+    ipfs["configured"] = (ipfsPtr != nullptr);
+    ipfs["probed"] = (ipfsPtr != nullptr) && ipfsPtr->hasProbedApi();
+    ipfs["connected"] = (ipfsPtr != nullptr) && ipfsPtr->isApiReachable();
     Json::Value bitswap;
     bitswap["probed"] = snap.bitswapProbed;
     bitswap["available"] = snap.bitswapAvailable;

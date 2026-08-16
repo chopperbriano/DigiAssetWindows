@@ -19,6 +19,8 @@
 #include "DigiAssetRules.h"
 #include "DigiByteCore_Types.h"
 #include "Threaded.h"
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -52,6 +54,37 @@ private:
     mutable std::set<std::string> _pinnedCache;
     mutable std::mutex _pinnedCacheMutex;
     mutable bool _pinnedCacheLoaded = false;
+
+    // --- Live API reachability --------------------------------------------
+    // Whether the local IPFS daemon is answering RIGHT NOW. Maintained by every
+    // request that passes through _command(), plus an idle heartbeat, so it can
+    // go back to false when the daemon dies.
+    //
+    // This exists because callers used to infer "IPFS is up" from
+    // AppMain::getIPFSIfSet() != nullptr, which only proves an IPFS object was
+    // constructed at startup and can never become false again - the dashboard
+    // showed "IPFS: Connected" while its own bitswap probe simultaneously
+    // reported "IPFS API unreachable".
+    //
+    // mutable + atomic: the sync getters (isPinned/getSize/addFile/getPeerId)
+    // and _command() itself are const, and these are read from the dashboard
+    // and web-server threads while the worker thread writes them. Same reason
+    // _pinnedCache below is mutable.
+    mutable std::atomic<bool> _apiProbed{false};      //has any call completed yet?
+    mutable std::atomic<bool> _apiReachable{false};   //last known state
+    mutable std::atomic<int64_t> _apiLastOkMs{0};     //steady_clock ms of last success
+    mutable std::atomic<int64_t> _apiLastTryMs{0};    //steady_clock ms of last heartbeat attempt
+
+    // Record the outcome of an API call. Only an actual success proves the node
+    // is up, and only an explicit connect failure proves it is down - anything
+    // else (HTTP error, malformed JSON, a pin that timed out after 20 minutes)
+    // leaves the flag untouched rather than guessing.
+    void _markApiUp() const;
+    void _markApiDown() const;
+    // Called from the worker loop when there are no jobs. With nothing flowing,
+    // no other call would refresh the flag and it would go stale, so this fires
+    // one cheap "version" request at most every 30s.
+    void _heartbeatIfIdle() const;
 
     ///timeout times are in seconds
     unsigned int _timeoutPin = 1200;
@@ -152,6 +185,16 @@ public:
     // Returns this node's dialable multiaddr (peerId) for the pool server, using
     // getIP + the /id response filtered to addresses that are actually ours.
     std::string getPeerId() const;
+
+    //liveness
+    // True once we have actually learned something about the daemon (one call
+    // has succeeded or failed to connect). Lets callers show "checking..."
+    // instead of claiming the node is down before the first request.
+    bool hasProbedApi() const { return _apiProbed.load(std::memory_order_relaxed); }
+    // Whether the local IPFS API answered most recently. This is real
+    // reachability - NOT "an IPFS object exists" - so it becomes false when the
+    // daemon stops and true again when it comes back.
+    bool isApiReachable() const { return _apiReachable.load(std::memory_order_relaxed); }
 
 
     /*

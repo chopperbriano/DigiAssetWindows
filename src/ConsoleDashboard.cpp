@@ -557,7 +557,21 @@ void ConsoleDashboard::render() {
     // Connection status
     bool dgbOnline = (dgb != nullptr);
     bool dbOnline = (db != nullptr);
-    bool ipfsOnline = (app->getIPFSIfSet() != nullptr);
+    // IPFS: report LIVE reachability, not merely "an IPFS object was constructed".
+    // getIPFSIfSet() is a plain raw-pointer getter, so the old check latched to
+    // "Connected" the moment IPFS was set up and could never go back - it still
+    // said Connected with IPFS Desktop closed, while the Serving row below (a real
+    // HTTP probe) simultaneously reported "IPFS API unreachable". Exactly the stale
+    // -pointer trap already documented for RPC::Server a few lines down.
+    //
+    // IPFS now tracks this itself (every _command() result plus an idle
+    // heartbeat), so read it from there: one source of truth shared with the web
+    // server's /status JSON, and it stays correct even if the bitswap probe is
+    // unavailable.
+    IPFS* ipfsPtr = app->getIPFSIfSet();
+    bool ipfsSet = (ipfsPtr != nullptr);
+    bool ipfsProbed = ipfsSet && ipfsPtr->hasProbedApi();
+    bool ipfsReachable = ipfsSet && ipfsPtr->isApiReachable();
 
     // RPC: probe the actual listen socket. AppMain stores a raw pointer to
     // RPC::Server that becomes dangling if the detached accept-loop thread
@@ -667,9 +681,14 @@ void ConsoleDashboard::render() {
             rpcVal = "Off";
             rpcColor = FG_RED;
         }
+        std::string ipfsVal;
+        const char* ipfsColor;
+        if (!ipfsSet)           { ipfsVal = "N/A";         ipfsColor = FG_YELLOW; }
+        else if (!ipfsProbed)   { ipfsVal = "checking..."; ipfsColor = FG_CYAN;   }
+        else if (ipfsReachable) { ipfsVal = "Connected";   ipfsColor = FG_GREEN;  }
+        else                    { ipfsVal = "Unreachable"; ipfsColor = FG_RED;    }
         out << ERASE_LINE << "  "
-            << cell("IPFS", ipfsOnline ? "Connected" : "N/A",
-                    ipfsOnline ? FG_GREEN : FG_YELLOW, COL1_LABEL_W, COL1_VALUE_W)
+            << cell("IPFS", ipfsVal, ipfsColor, COL1_LABEL_W, COL1_VALUE_W)
             << cell("RPC Server", rpcVal, rpcColor, COL2_LABEL_W, 0)
             << "\n"; totalRows++;
     }

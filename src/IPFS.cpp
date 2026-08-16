@@ -120,7 +120,10 @@ void IPFS::mainFunction() {
     IPFSCallbackFunction callback;
     db->getNextIPFSJob(jobIndex, cid, sync, extra, maxSleep, callback);
     if (jobIndex == 0) {
-        //no waiting jobs so pause briefly before checking again
+        //no waiting jobs so pause briefly before checking again. While idle
+        //nothing else touches the API, so refresh the liveness flag here or it
+        //would stay stuck at its last value (self-throttled to one call/30s).
+        _heartbeatIfIdle();
         chrono::milliseconds dura(100);
         this_thread::sleep_for(dura);
         return;
@@ -273,18 +276,74 @@ string IPFS::cidToSha256(const string& cid) {
  * @param outputPath - if present will treat result as binary data and save it to a file
  * @return
  */
+/**
+ * Record that the daemon answered. Only called on an actual successful request.
+ */
+void IPFS::_markApiUp() const {
+    _apiLastOkMs.store(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count(),
+                       std::memory_order_relaxed);
+    _apiReachable.store(true, std::memory_order_relaxed);
+    _apiProbed.store(true, std::memory_order_relaxed);
+}
+
+/**
+ * Record that the daemon could not be reached. Only called for a genuine
+ * connect failure - see _command() for why a timeout does NOT come here.
+ */
+void IPFS::_markApiDown() const {
+    _apiReachable.store(false, std::memory_order_relaxed);
+    _apiProbed.store(true, std::memory_order_relaxed);
+}
+
+/**
+ * Keep the liveness flag honest while the job queue is empty.
+ *
+ * Without this the flag would freeze at its last value: with no downloads or
+ * pins queued nothing calls the API, so a daemon that died an hour ago would
+ * still read as reachable. Fires at most one cheap "version" request every 30s,
+ * and only when we haven't already had a success in that window - so a busy
+ * node adds no traffic at all. The attempt timestamp is updated separately from
+ * the success timestamp so a daemon that is DOWN gets retried every 30s rather
+ * than on every 100ms pass of the idle loop.
+ */
+void IPFS::_heartbeatIfIdle() const {
+    int64_t nowMs = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+    if (_apiProbed.load(std::memory_order_relaxed) &&
+        (nowMs - _apiLastOkMs.load(std::memory_order_relaxed)) < 30000) {
+        return; //a real request succeeded recently - nothing to prove
+    }
+    if ((nowMs - _apiLastTryMs.load(std::memory_order_relaxed)) < 30000) return; //don't hammer a dead daemon
+    _apiLastTryMs.store(nowMs, std::memory_order_relaxed);
+    try {
+        _command("version", {}, 5000); //updates the flag via _markApiUp/_markApiDown
+    } catch (...) {
+        //flag already recorded; a heartbeat failure is not an error worth raising
+    }
+}
+
 string IPFS::_command(const string& command, const map<string, string>& data, unsigned int timeout, const string& outputPath) const {
     string url = _nodePrefix + command;
     try {
-        if (outputPath.empty()) return CurlHandler::post(url, data, timeout);
+        if (outputPath.empty()) {
+            string result = CurlHandler::post(url, data, timeout);
+            _markApiUp();
+            return result;
+        }
         CurlHandler::postDownload(url, outputPath, data, timeout);
+        _markApiUp();
     } catch (const CurlHandler::exceptionTimeout& e) {
-        //replace CurlHandler error with IPFS error
+        //A timeout is NOT proof the daemon is down - a legitimate pin is allowed
+        //20 minutes and a download an hour. Leave the flag alone rather than
+        //reporting a healthy-but-busy node as unreachable.
         throw exceptionTimeout();
     } catch (const std::exception& e) {
         if (string(e.what()) == "Couldn't connect to server" ||
-            string(e.what()) == "Could not connect to server")
+            string(e.what()) == "Could not connect to server") {
+                _markApiDown();
                 throw exceptionNoConnection();
+        }
+        //Any other failure (HTTP error, bad payload, ...) says nothing reliable
+        //about reachability, so leave the flag as it was.
         throw;
     }
     return "";
