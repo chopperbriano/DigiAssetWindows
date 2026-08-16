@@ -1611,11 +1611,34 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                     } else if (type=="nulldata") {
                         //do nothing
                     } else if (type=="nonstandard") {
-                        cerr << "nonstandard: " << txid << "\n";
-                        //do nothing
+                        // Nothing to extract: a non-template script carries no address,
+                        // exactly like nulldata. This is NOT an error.
+                        //
+                        // The common case is a DigiDollar data carrier: OP_RETURN (0x6a)
+                        // followed by opcode 0xbf, which is past OP_NOP10 (0xb9) and so
+                        // isn't a data push - that's precisely why the script fails the
+                        // nulldata template and lands here. Those ride in COINBASE
+                        // outputs, so a full sync hits thousands of them.
+                        //
+                        // This used to print to stderr unconditionally, which wrecked the
+                        // ConsoleDashboard: stderr bypasses the TUI entirely, so the text
+                        // landed wherever the cursor happened to be and smeared over the
+                        // status bar. Log.cpp can't be used here (the cli links
+                        // DigiByteCore.cpp but NOT Log.cpp), so gate the diagnostic behind
+                        // an env var - same pattern as DGBCORE_DEBUG_URL above.
+                        if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
+                            const bool digiDollar = (hex.rfind("6abf", 0) == 0);
+                            cerr << (digiDollar ? "nonstandard (DigiDollar): " : "nonstandard: ")
+                                 << txid << " hex=" << hex << "\n";
+                        }
                     } else {
-                        utils::printJson(val);
-                        cerr << "Unexpected scriptPubKey.hex format: " << hex << "\n";
+                        // A script type we have no handler for at all. Also silenced by
+                        // default for the same TUI reason - printJson here dumped an entire
+                        // JSON object over the dashboard.
+                        if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
+                            utils::printJson(val);
+                            cerr << "Unexpected scriptPubKey.hex format: " << hex << "\n";
+                        }
                     }
                 }
             } else {
