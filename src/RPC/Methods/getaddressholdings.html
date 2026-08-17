@@ -28,13 +28,22 @@ http://opensource.org/licenses/MIT. -->
                 <pre class="literal-block">
 JSON object with asset indexes as keys and quantities as values:
 {
-    "1": 100000,   // Example for DigiByte if included
+    "1": 100000,        // Example for DigiByte if included
     "2": 150,
     "3": 300,
     ...
+    "digidollar": 2500  // DigiDollar held, in cents. Only present if non zero.
 }
 </pre
                 >
+                <p>
+                    DigiDollar is not a DigiAsset and has no assetIndex, so it is
+                    reported under the reserved non numeric key
+                    <tt>digidollar</tt>, in cents (100 == $1.00). The key is only
+                    present when the address holds DigiDollar, so callers
+                    iterating this object must either expect a non numeric key or
+                    filter for it explicitly.
+                </p>
             </div>
             <div class="section" id="examples">
                 <h2>Examples</h2>

@@ -34,6 +34,7 @@ public:
     void setPruneUTXOHistory(bool shouldPrune);
     void setPruneVoteHistory(bool shouldPrune);
     void setStoreNonAssetUTXO(bool shouldStore);
+    void setTrackDigiDollar(bool shouldTrack);
 
     //running state modifiers
     void restart(); //erases all data and starts syncing over
@@ -96,6 +97,7 @@ private:
     bool shouldPruneUTXOHistory() const;
     bool shouldPruneVoteHistory() const;
     bool shouldStoreNonAssetUTXO() const;
+    bool shouldTrackDigiDollar() const;
 
     //state(for defaults see resetConfig() )
     int _state = STOPPED;
@@ -109,6 +111,7 @@ private:
     bool _pruneUTXOHistory;     //if true prune "utxos"
     bool _pruneVoteHistory;     //if true prune "votes
     bool _storeNonAssetUTXOs;   //if false won't bother storing NonAsset UTXOS
+    bool _trackDigiDollar;      //if false won't index DigiDollar balances, vaults or oracle prices
     bool _verifyDatabaseWrite;  //if set to false will write without checking
     bool _showAllBlockSyncTime; //if true will not collapse blocks of 100 together when behind
 
@@ -131,6 +134,12 @@ private:
     void phaseRewind();
     void phaseSync();
     void phasePrune();
+    void phaseDigiDollarBackfill();
+
+    //highest oracle epoch already recorded.  Every block in an epoch republishes the same
+    //commitment, so this lets the sync loop skip fetching the coinbase 39 times out of 40.
+    unsigned int _lastOracleEpoch = 0;
+    void captureOracleCommitment(unsigned int height, const std::string& coinbaseTxid);
 
     //process sub functions
     void processTX(const std::string& txid, unsigned int height);

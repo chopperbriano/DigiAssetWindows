@@ -58,6 +58,20 @@ private:
 public:
     WalletVersion coreVersion();
 
+    /**
+     * Node version as the integer getnetworkinfo reports, using DigiByte Core's own encoding of
+     * 10000*major + 100*minor + build.  v9.26.5 is 92605.
+     * @return the version, or 0 if the node did not answer
+     */
+    int getNodeVersion();
+
+    /**
+     * Oldest node this build will index against.  DigiDollar activated at block 23,869,440 and
+     * only v9.26.2 and later can validate it; v9.26.4 added pruned node support and v9.26.5 fixed
+     * a multi minute oracle scan at node startup, so that is the version we require.
+     */
+    static const int MINIMUM_NODE_VERSION = 92605;
+
 
     std::string printProfilingInfo() {
         long long totalDuration = _runTime;

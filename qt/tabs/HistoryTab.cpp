@@ -77,19 +77,27 @@ void HistoryTab::updateHistory() {
             std::string address = tx["address"].asString();
             QString category = QString::fromStdString(tx["category"].asString());
 
-            //decode the transaction to see if a DigiAsset moved to this row's output
+            //decode the transaction to see if a DigiAsset or DigiDollar moved to this row's output
             QString assetText;
             int confirmations = tx["confirmations"].asInt();
             const std::map<std::string, AssetMove> byAddress = txAssets(txid, confirmations);
             auto it = byAddress.find(address);
-            bool isAsset = (it != byAddress.end());
-            if (isAsset) {
+            bool isAsset = false;
+            if (it != byAddress.end()) {
                 const AssetMove &move = it->second;
-                double amount = static_cast<double>(move.count) / std::pow(10.0, move.decimals);
-                QString name = _icons->name(move.assetIndex);
-                if (name.isEmpty()) name = "asset " + QString::number(move.assetIndex);
-                assetText = name + "  " + QString::number(amount, 'f', move.decimals);
-                category = "asset " + category; //e.g. "asset receive", "asset send"
+                if (move.assetIndex != 0) {
+                    isAsset = true;
+                    double amount = static_cast<double>(move.count) / std::pow(10.0, move.decimals);
+                    QString name = _icons->name(move.assetIndex);
+                    if (name.isEmpty()) name = "asset " + QString::number(move.assetIndex);
+                    assetText = name + "  " + QString::number(amount, 'f', move.decimals);
+                    category = "asset " + category; //e.g. "asset receive", "asset send"
+                } else if (move.digidollarCents != 0) {
+                    //DigiDollar has no icon or assetIndex, so it only fills in the text
+                    assetText = "DigiDollar  $" +
+                                QString::number(static_cast<double>(move.digidollarCents) / 100.0, 'f', 2);
+                    category = "DigiDollar " + category;
+                }
             }
 
             QString when = QDateTime::fromSecsSinceEpoch(tx["time"].asInt64()).toString("yyyy-MM-dd hh:mm");
@@ -157,14 +165,21 @@ std::map<std::string, HistoryTab::AssetMove> HistoryTab::txAssets(const std::str
         args.append(true); //verbose - includes DigiAssets data
         Json::Value tx = _dgbCore.sendcommand("getrawtransaction", args);
         for (const auto &vout: tx["vout"]) {
-            if (!vout.isMember("assets") || !vout["assets"].isArray() || vout["assets"].empty()) continue;
+            bool hasAssets = vout.isMember("assets") && vout["assets"].isArray() && !vout["assets"].empty();
+            //DigiDollar outputs carry 0 DGB and no assets, so they only appear through this field
+            uint64_t cents = vout.isMember("digidollar") ? vout["digidollar"].asUInt64() : 0;
+            if (!hasAssets && (cents == 0)) continue;
+
             const Json::Value &spk = vout["scriptPubKey"];
-            //take the first asset on the output(outputs carry a single asset in practice)
-            const Json::Value &asset = vout["assets"][0];
             AssetMove move;
-            move.assetIndex = asset["assetIndex"].asUInt64();
-            move.count = asset["count"].asUInt64();
-            move.decimals = asset["decimals"].asUInt();
+            move.digidollarCents = cents;
+            if (hasAssets) {
+                //take the first asset on the output(outputs carry a single asset in practice)
+                const Json::Value &asset = vout["assets"][0];
+                move.assetIndex = asset["assetIndex"].asUInt64();
+                move.count = asset["count"].asUInt64();
+                move.decimals = asset["decimals"].asUInt();
+            }
             //index by every address on the output so it matches the listtransactions row address
             if (spk.isMember("address")) {
                 byAddress[spk["address"].asString()] = move;

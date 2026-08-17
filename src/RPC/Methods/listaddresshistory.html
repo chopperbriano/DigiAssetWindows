@@ -28,6 +28,13 @@ http://opensource.org/licenses/MIT. -->
 JSON array of strings, each representing a transaction ID:
 ["txid1", "txid2", "txid3", ...]
 </pre>
+<p>
+Transactions that only moved DigiDollar are included. This matters because a DigiDollar output
+carries 0 DGB and no DigiAssets, so with <tt>storenonassetutxo=0</tt> it never reaches the normal
+UTXO table &mdash; an address whose only activity was DigiDollar would otherwise report an empty
+history. They are only included from the DigiDollar activation height (23,869,440) onward, and
+only when the daemon is running with <tt>trackdigidollar=1</tt>.
+</p>
 </div>
 <div class="section" id="examples">
 <h2>Examples</h2>

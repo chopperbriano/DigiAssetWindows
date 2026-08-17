@@ -4,6 +4,7 @@
 
 #include "DigiByteCore.h"
 #include "Config.h"
+#include "DigiDollar.h"
 #include "utils.h"//todo delete
 #include <fstream>
 #include <iostream>
@@ -1308,8 +1309,22 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                     } else if (type=="nulldata") {
                         //do nothing
                     } else if (type=="nonstandard") {
-                        cerr << "nonstandard: " << txid << "\n";
-                        //do nothing
+                        //Since DigiDollar activated, the miner that closes an oracle epoch adds a
+                        //price commitment to the coinbase:  OP_RETURN OP_ORACLE <0x03> <bundle>.
+                        //OP_ORACLE (0xbf) is not push only so Solver() reports "nonstandard"
+                        //rather than "nulldata".  It is an unspendable data carrier with no
+                        //address and no value, so relabel it and move on - roughly two thirds of
+                        //blocks carry one and logging each would drown out real errors.
+                        if (DigiDollar::isOracleCommitmentScript(hex)) {
+                            output.scriptPubKey.type = "oracle";
+                        } else {
+                            //genuinely unexpected now that oracle commitments are classified, so
+                            //it is worth a line - same handling as the unknown type branch below
+                            cerr << "nonstandard: " << txid << "\n";
+                        }
+                    } else if (type=="witness_unknown") {
+                        //a witness version this node does not understand.  Unspendable to us and
+                        //carries no address, so there is nothing to record.
                     } else {
                         utils::printJson(val);
                         cerr << "Unexpected scriptPubKey.hex format: " << hex << "\n";
@@ -1648,4 +1663,15 @@ DigiByteCore::WalletVersion DigiByteCore::coreVersion() {
     if (_walletVersion!=unknown) return _walletVersion;
     getrawtransaction("0378a92db8025318a129c83e2ee0766a5908550ef7b4619e8a325c9c69873a4b",true); //force wallet version to be set
     return _walletVersion;
+}
+
+int DigiByteCore::getNodeVersion() {
+    try {
+        Value params(Json::arrayValue);
+        Value result = sendcommand("getnetworkinfo", params);
+        if (!result.isMember("version")) return 0;
+        return result["version"].asInt();
+    } catch (const exception& e) {
+        return 0; //treat an unanswerable node as unknown rather than as too old
+    }
 }

@@ -3,9 +3,12 @@
 //
 
 #include "AppMain.h"
+#include "DigiAssetConstants.h"
+#include "DigiDollar.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"
 #include <jsoncpp/json/value.h>
+#include <stdexcept>
 
 namespace RPC {
     namespace Methods {
@@ -61,6 +64,24 @@ namespace RPC {
                 entry["value"]=rate.value;
                 result.append(entry);
                 response.addInvalidateOnAddressChange(rate.address); //result good until new exchange rate published
+            }
+
+            //Append the DigiDollar oracle DGB/USD rate.
+            //It is published in the coinbase by the miners rather than by an address, so it has no
+            //entry in the exchange table and is listed under the reserved "DigiDollar" key.  That
+            //string is not a valid DigiByte address, so it can never collide with a published rate.
+            //No addInvalidateOnAddressChange for it - nothing about an address changing affects it,
+            //and the block based cache expiry below already covers the epoch it belongs to.
+            try {
+                DigiDollarRate ddRate = db->getDigiDollarRateAtHeight(height);
+                Value entry=Json::objectValue;
+                entry["height"]=ddRate.height;
+                entry["address"]=DigiAssetConstants::DIGIDOLLAR_RATE_ADDRESS;
+                entry["index"]=DigiAssetConstants::DIGIDOLLAR_RATE_INDEX;
+                entry["value"]=DigiDollar::priceToExchangeRate(ddRate.price);
+                result.append(entry);
+            } catch (const std::out_of_range& e) {
+                //no oracle price recorded at or below this height - simply not listed
             }
 
             //return response

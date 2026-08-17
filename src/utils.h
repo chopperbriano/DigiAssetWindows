@@ -28,6 +28,13 @@ namespace utils {
     size_t estimateJsonMemoryUsage(const Json::Value& value);
     uint64_t mod256by64(const std::array<uint8_t, 32>& numerator, uint64_t divisor);
 
+    /**
+     * Renders a fixed point integer as a decimal string, e.g. toDecimalString(12345, 2) == "123.45".
+     * Used for the display-only "amount" fields in RPC output - the authoritative value is always
+     * the integer alongside it, never this string.
+     */
+    std::string toDecimalString(uint64_t value, unsigned int decimals);
+
     bool getAnswerBool();
     int getAnswerInt(int min=std::numeric_limits<int>::min(), int max=std::numeric_limits<int>::max());
     std::string getAnswerString(const std::string& regexPattern = "");

@@ -24,16 +24,52 @@ Building this project produces up to 4 binaries (all placed in `bin/`):
 6. [Set DigiAsset Core to Run at Boot](#set-digiasset-core-to-run-at-boot)
 7. [Upgrading DigiAsset Core](#upgrading-digiasset-core)
 8. [Documentation](#documentation)
-9. [Event Stream](#event-stream)
-10. [Generating a Bootstrap Image](#generating-a-bootstrap-image)
-11. [Other Notes](#other-notes)
-12. [Special Thanks](#special-thanks)
+9. [DigiDollar](#digidollar)
+10. [Event Stream](#event-stream)
+11. [Generating a Bootstrap Image](#generating-a-bootstrap-image)
+12. [Other Notes](#other-notes)
+13. [Special Thanks](#special-thanks)
 
 ## Requirements
 
-- **DigiByte Core v8.22.2** with `txindex=1`.  Wallet support must be enabled (it is in the
-  official release binaries) if you want to create or send assets — the
-  `issueasset`/`sendasset`/`getwalletbalances` methods and the wallet RPC passthrough need it.
+- **DigiByte Core v9.26.5 or newer** with `txindex=1` (default since v9.26.3).  Wallet support
+  must be enabled (it is in the official release binaries) if you want to create or send assets —
+  the `issueasset`/`sendasset`/`getwalletbalances` methods and the wallet RPC passthrough need it.
+
+  v9.26.5 is a hard minimum, not a recommendation.  DigiAsset Core refuses to sync against an
+  older node and exits on startup.  There are two independent reasons:
+
+  **DigiDollar.**  DigiDollar activated on mainnet at block **23,869,440** (17 July 2026) and
+  DigiAsset Core indexes DigiDollar balances, collateral vaults and the oracle DGB/USD rate.
+  DigiDollar activated as a BIP9 *soft* fork, so a v8.x node still follows the same chain and
+  still answers RPC — it simply cannot validate DigiDollar, so anything it reports about those
+  transactions is untrustworthy.  v9.26.4 was the first release that works with `prune=`, and
+  v9.26.5 fixed a multi-minute oracle scan hang at node startup.
+
+  **The Groestl incident.**  On 28 June 2026, starting at block 23,751,096, an attacker
+  exploited a consensus check that had been accidentally dropped during the v8 Bitcoin Core
+  rebase and mined the retired Groestl algorithm at floor difficulty.  v8/v9 software accepted
+  those blocks while v7.17.3 and older rejected them and forked onto a separate chain.  The fix
+  (`algolock`, backstop height 23,808,000, buried at 23,869,440) rejects retired-algorithm
+  blocks going forward but **grandfathers the exploit blocks already in the chain**.  Canonical
+  DigiByte history therefore permanently contains Groestl blocks that v7.17.3 and older nodes
+  reject outright.  Those nodes cannot follow the current chain at all and must reindex or
+  resync after upgrading.
+
+  Verified against canonical chain data rather than taken from the incident report: across a
+  351 block sample of the attack window, 16% of blocks are Groestl, the first is at exactly
+  23,751,096, and there are none before the attack or after `algolock`.  The two coinbase
+  payout addresses (`dgb1qy5epvfs535a96tygn945a3a85lauh3ddu9v63y` and
+  `D8S5JWaCrpFsryGG1c9AzWKhbS7e7VZ4r8`) received 392,616.56 DGB across 1,514 outputs and have
+  since been emptied.  Claims in the upstream release notes about whether funds were taken or
+  transactions reversed concern orphaned blocks, which cannot be checked from canonical
+  history — this project takes no position on them.
+
+  One visible consequence for `algostats`: `ALGO_GROESTL` is algo id **2**, which was empty for
+  every block between 2019 and June 2026.  For time windows covering the incident, index 2 of
+  the `algo` array is populated instead of `null`.  That data is correct — do not treat a
+  non-null index 2 as a bug.
+
 - **IPFS (kubo)** running on the same machine (asset metadata storage).
 - **cmake 3.24+** and a C++14 capable compiler.
 - Roughly 100GB of disk space for the DigiByte chain plus the DigiAsset database.
@@ -66,9 +102,9 @@ place the following at the end (if swap.img is already there replace it)
 ### Install DigiByte
 
 ```bash
-wget https://github.com/DigiByte-Core/digibyte/releases/download/v8.22.2/digibyte-8.22.2-x86_64-linux-gnu.tar.gz
-tar -xf digibyte-8.22.2-x86_64-linux-gnu.tar.gz
-rm digibyte-8.22.2-x86_64-linux-gnu.tar.gz
+wget https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-x86_64-linux-gnu.tar.gz
+tar -xf digibyte-9.26.5-x86_64-linux-gnu.tar.gz
+rm digibyte-9.26.5-x86_64-linux-gnu.tar.gz
 mkdir .digibyte
 nano .digibyte/digibyte.conf
 ```
@@ -109,7 +145,7 @@ Group=<your-username>
 
 Type=forking
 PIDFile=/home/<your-username>/.digibyte/digibyted.pid
-ExecStart=/home/<your-username>/digibyte-8.22.2/bin/digibyted -daemon -pid=/home/<your-username>/.digibyte/digibyted.pid \
+ExecStart=/home/<your-username>/digibyte-9.26.5/bin/digibyted -daemon -pid=/home/<your-username>/.digibyte/digibyted.pid \
 -conf=/home/<your-username>/.digibyte/digibyte.conf -datadir=/home/<your-username>/.digibyte
 
 Restart=always
@@ -238,9 +274,12 @@ Tested on macOS (Intel and Apple Silicon) with [Homebrew](https://brew.sh).
 
 ### Install DigiByte
 
-Download and install [digibyte-8.22.2-osx.dmg](https://github.com/DigiByte-Core/digibyte/releases/download/v8.22.2/digibyte-8.22.2-osx.dmg),
-then create `~/Library/Application Support/DigiByte/digibyte.conf` with the same settings as
-the Ubuntu section above (rpcuser, rpcpassword, rpcport=14022, txindex=1, server=1).
+v9.26.5 ships macOS builds as a zip rather than a dmg, with separate archives per architecture.
+Download [digibyte-9.26.5-arm64-apple-darwin.zip](https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-arm64-apple-darwin.zip)
+on Apple Silicon or [digibyte-9.26.5-x86_64-apple-darwin.zip](https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-x86_64-apple-darwin.zip)
+on Intel, then create `~/Library/Application Support/DigiByte/digibyte.conf` with the same
+settings as the Ubuntu section above (rpcuser, rpcpassword, rpcport=14022, server=1).
+`txindex=1` is the default from v9.26.3 onward, so the line is optional.
 
 ### Install dependencies
 
@@ -307,7 +346,7 @@ cmake --build build --config Release
 ```
 
 The binary is written to `build\Release\digiasset_core.exe`.  You will also need a
-DigiByte Core node (v8.22.2) and an [IPFS (kubo)](https://docs.ipfs.tech/install/) node
+DigiByte Core node (v9.26.5+) and an [IPFS (kubo)](https://docs.ipfs.tech/install/) node
 running, the same as on other platforms.
 
 ## Configure DigiAsset Core
@@ -401,6 +440,71 @@ Highlights:
 - Any method the daemon doesn't recognize is transparently forwarded to the DigiByte Core
   wallet, so the standard DigiByte/Bitcoin RPC api is available through the same port too.
 
+## DigiDollar
+
+DigiAsset Core indexes [DigiDollar](https://github.com/orgs/DigiByte-Core/discussions/319),
+the native USD stablecoin that activated on DigiByte mainnet at block **23,869,440**.
+Three things are tracked:
+
+- **Balances.**  DigiDollar lives on pay-to-taproot outputs that carry 0 DGB, with the
+  amount declared in the transaction's `OP_RETURN`.  Because such an output holds no DGB
+  and no DigiAssets, it is invisible to the normal UTXO path when `storenonassetutxo=0`,
+  so it gets its own table.  All amounts are in **cents** (100 = $1.00), which is the
+  unit the protocol itself uses.
+- **Collateral vaults.**  A mint locks DGB in a timelocked taproot vault and issues
+  DigiDollar against it; a redemption burns the DigiDollar and releases the DGB.  Tracking
+  both sides is what makes total supply and the system collateralization ratio computable.
+- **The oracle DGB/USD price.**  Roughly two thirds of blocks carry a MuSig2 signed price
+  commitment in the coinbase, as `OP_RETURN OP_ORACLE <0x03> <bundle>`.  Because `OP_ORACLE`
+  (`0xbf`) is not push-only, DigiByte Core classifies that output as `nonstandard` rather
+  than `nulldata` — DigiAsset Core relabels it `oracle`.  Every block inside a 40 block
+  epoch republishes the same value, so only one commitment per epoch is stored.
+
+### RPC
+
+| Method | What it adds |
+| --- | --- |
+| `getdigidollarinfo` | Current price, circulating supply, locked collateral, collateralization ratio |
+| `digidollarstats` | The same figures over time, alongside mint/redeem/transfer counts |
+| `getaddressholdings` | Extra `digidollar` key holding the address balance in cents |
+| `getwalletbalances` | Extra `digidollar` object alongside `digibyte` and `assets` |
+| `gettxout` | Extra `digidollar` field: cents carried by that output |
+| `getrawtransaction` | Extra `digidollar` object (type, cents, vault) and per-output `digidollar` |
+| `getexchangerates` | Extra entry with `"address": "DigiDollar"`, `"index": 0` |
+| `getdgbequivalent` | Accepts `"DigiDollar"` as the address to convert USD at the oracle rate |
+| `listaddresshistory` | Now includes transactions that only moved DigiDollar |
+
+Every one of those methods has its documentation page updated under `digiasset_core-web`.
+
+### GUI
+
+`digiasset_core-qt` shows DigiDollar in three places:
+
+- **Balances** — the wallet's DigiDollar balance sits beside the DigiByte balance rather than in
+  the asset table, since it is a native balance with no assetIndex, assetId or icon.  It is hidden
+  when the wallet holds none.
+- **Sync** — a DigiDollar panel with the oracle price, how many of the 35 oracle slots signed it,
+  circulating supply, locked collateral and the collateralization ratio.  It says so explicitly
+  while a backfill is still running, so partial figures are not mistaken for the real state.  The
+  oracle rate also appears among the exchange rates, labelled `USD (DigiDollar oracle)`.
+- **History** — transactions that moved DigiDollar are labelled `DigiDollar receive` / `DigiDollar
+  send` with the dollar amount, alongside the existing asset labelling.
+
+### Indexing and the first run after upgrading
+
+Set `trackdigidollar=0` in `config.cfg` to skip all of this.
+
+DigiDollar history can only be reconstructed by replaying blocks, so the first run after
+upgrading an already synced node **rewinds to block 23,869,440 and re-syncs forward**.
+That is a long unattended operation and it is logged as a warning when it starts.  It
+happens once.  Turning `trackdigidollar` off and back on again forces it to happen again,
+because a gap in DigiDollar history cannot be filled in by later blocks.
+
+A node that has pruned UTXO history past the activation height cannot be rewound that far.
+It logs a CRITICAL message and leaves DigiDollar unindexed rather than destroying the sync;
+resync from scratch or set `trackdigidollar=0`.  `getdigidollarinfo` reports
+`"indexed": false` whenever the figures it returns are incomplete for this reason.
+
 ## Event Stream
 
 The daemon pushes events to any TCP client as newline delimited JSON (default port
@@ -414,7 +518,14 @@ The daemon pushes events to any TCP client as newline delimited JSON (default po
 ```
 
 Event types: `newBlock` (near chain tip only), `assetIssued`, `assetTransfer`,
-`assetBurn` and `balanceChanged`.  Writes never block the daemon — clients that fall
+`assetBurn`, `balanceChanged`, `digiDollarMint`, `digiDollarTransfer` and
+`digiDollarRedeem`.  The three DigiDollar events carry a `cents` field holding the
+DigiDollar moved, in cents:
+
+```
+{"event":"digiDollarTransfer","cents":200,"addresses":["dgb1p..."],"txid":"08da...","height":24045731}
+```
+  Writes never block the daemon — clients that fall
 behind are disconnected, so treat the stream as a wake-up signal and re-query the RPC
 api for authoritative state.  The stream has no authentication and therefore only
 listens on localhost unless you explicitly set `eventbind`.

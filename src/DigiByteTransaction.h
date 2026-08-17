@@ -25,6 +25,9 @@ class DigiByteTransaction {
     const static unsigned int KYC_REVOKE = 11;
     const static unsigned int EXCHANGE_PUBLISH = 20;
     const static unsigned int ENCRYPTED_KEY = 30;
+    const static unsigned int DIGIDOLLAR_MINT = 40;
+    const static unsigned int DIGIDOLLAR_TRANSFER = 41;
+    const static unsigned int DIGIDOLLAR_REDEEM = 42;
 
 
     std::vector<AssetUTXO> _inputs;
@@ -53,12 +56,23 @@ class DigiByteTransaction {
     //type DigiAsset_* Only
     unsigned char _assetTransactionVersion;
 
+    //type DIGIDOLLAR_* Only
+    //_ddOutputs holds (vout index, amount in cents) for every DigiDollar bearing output.
+    //_ddVaultOutput is the collateral vout of a mint, or -1.
+    std::vector<std::pair<uint16_t, uint64_t>> _ddOutputs;
+    int _ddVaultOutput = -1;
+    uint64_t _ddCollateral = 0;
+    uint64_t _ddMinted = 0;
+    unsigned int _ddLockHeight = 0;
+    uint8_t _ddLockTier = 0;
+
 
     //tx process TestHelpers
     bool decodeAssetTX(const getrawtransaction_t& txData, int dataIndex);
     bool decodeExchangeRate(const getrawtransaction_t& txData, int dataIndex);
     bool decodeKYC(const getrawtransaction_t& txData, int dataIndex);
     bool decodeEncryptedKeyTx(const getrawtransaction_t& txData, int dataIndex);
+    bool decodeDigiDollar(const getrawtransaction_t& txData);
     void storeUnknown(const getrawtransaction_t& txData, int dataIndex); //todo need to store locally and then add to database when called
 
     //asset process TestHelpers
@@ -97,6 +111,11 @@ public:
     bool isKYCRevoke() const;
     bool isKYCIssuance() const;
     KYC getKYC() const;
+
+    bool isDigiDollarTransaction() const;
+    bool isDigiDollarMint() const;
+    bool isDigiDollarRedeem() const;
+    const std::vector<std::pair<uint16_t, uint64_t>>& getDigiDollarOutputs() const { return _ddOutputs; }
 
     bool isExchangeTransaction() const;
     size_t getExchangeRateCount() const;

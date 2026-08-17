@@ -26,6 +26,7 @@ set(TESTS
         IPFS.cpp
         Base58Tests.cpp
         DigiAssetTest.cpp
+        DigiDollarTest.cpp
         DigiAssetRulesTest.cpp
         DigiAssetTransactionTest.cpp
         DigiByteTransactionBuilderTest.cpp

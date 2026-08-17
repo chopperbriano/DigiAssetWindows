@@ -1,0 +1,97 @@
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="stylesheet" type="text/css" href="/css/style.css" />
+    </head>
+    <body>
+        <div class="document" id="getdigidollarinfo">
+            <h1 class="title">getdigidollarinfo</h1>
+            <!-- This file is licensed under the MIT License (MIT) available on
+http://opensource.org/licenses/MIT. -->
+            <tt class="docutils literal">getdigidollarinfo</tt>
+            <p>
+                Returns the current state of the DigiDollar system: the oracle
+                DGB/USD price, how much DigiDollar is in circulation, and how
+                much DGB is locked in collateral vaults backing it.
+            </p>
+            <p class="info">
+                DigiDollar activated on mainnet at block 23,869,440 on 17 July
+                2026. Nothing is reported below that height.
+            </p>
+            <div class="section" id="input">
+                <h2>Input Parameters</h2>
+                <ul>
+                    <li>
+                        <tt>block height</tt> (unsigned int, optional): Return the
+                        oracle price that was current at this height. Supply and
+                        collateral figures are always current regardless, because
+                        they are not stored per height.
+                    </li>
+                </ul>
+            </div>
+            <div class="section" id="output">
+                <h2>Output Format</h2>
+                <pre class="literal-block">
+{
+    "active": bool,             // DigiDollar has activated on the chain we synced
+    "activationHeight": integer,// 23869440 on mainnet
+    "indexed": bool,            // false if this node has not finished indexing
+                                // DigiDollar history - every figure below is then incomplete
+    "price": {                  // omitted if no oracle commitment recorded yet
+        "microUSDPerDGB": integer, // raw published value. 4216 means $0.004216 per DGB
+        "usdPerDGB": double,       // same value as a decimal, display only
+        "satsPerUSD": integer,     // DGB sats one USD is worth (same convention as getexchangerates)
+        "height": integer,         // block the commitment was first seen in
+        "epoch": integer,          // oracle epoch, which is height/40
+        "time": integer,           // unix time the oracles sampled the price, not the block time
+        "oracles": integer         // how many of the 35 oracle slots signed this price
+    },
+    "supply": {
+        "cents": integer,       // DigiDollar in circulation, in cents
+        "amount": string,       // same value as decimal dollars
+        "holders": integer      // addresses holding a non zero balance
+    },
+    "collateral": {
+        "sats": integer,        // DGB locked in unredeemed vaults
+        "amount": string,       // same value in decimal DGB
+        "vaults": integer,      // unredeemed vault count
+        "ratio": double         // collateral value / circulating value.
+                                // omitted when no oracle price is known
+    },
+    "lifetime": {
+        "mintedCents": integer,   // total ever minted
+        "redeemedCents": integer  // total released by redemptions
+    }
+}
+</pre
+                >
+                <p>
+                    All DigiDollar amounts are in cents, which is the unit the
+                    protocol itself uses. The <tt>amount</tt> strings are for
+                    display only - the integer beside each one is authoritative.
+                </p>
+            </div>
+            <div class="section" id="examples">
+                <h2>Examples</h2>
+                <pre class="literal-block">
+digiasset_core-cli getdigidollarinfo
+</pre
+                >
+                <pre class="literal-block">
+digiasset_core-cli getdigidollarinfo 23900000
+</pre
+                >
+                <pre class="literal-block">
+curl --user myusername --data-binary '{"jsonrpc": "1.0", "id":"curltest", "method": "getdigidollarinfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:14024/
+</pre
+                >
+            </div>
+        </div>
+
+        <script src="/js/main.js"></script>
+        <footer class="fixed-bottom">
+            <p class="copyright">© Copyright DigiByte Project 2024</p>
+        </footer>
+    </body>
+</html>

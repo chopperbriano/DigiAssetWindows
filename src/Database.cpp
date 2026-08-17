@@ -7,6 +7,7 @@
 #include "AppMain.h"
 #include "Blob.h"
 #include "DigiAsset.h"
+#include "DigiAssetConstants.h"
 #include "DigiByteDomain.h"
 #include "Log.h"
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
@@ -86,7 +87,8 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         "INSERT INTO \"flags\" VALUES (\"wasPrunedUTXOHistory\",-1);"
                         "INSERT INTO \"flags\" VALUES (\"wasPrunedVoteHistory\",-1);"
                         "INSERT INTO \"flags\" VALUES (\"wasPrunedNonAssetUTXOHistory\",0);"
-                        "INSERT INTO \"flags\" VALUES (\"dbVersion\",6);"
+                        "INSERT INTO \"flags\" VALUES (\"ddSyncHeight\",0);"
+                        "INSERT INTO \"flags\" VALUES (\"dbVersion\",7);"
 
                         "CREATE TABLE \"kyc\" (\"address\" TEXT NOT NULL, \"country\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"hash\" BLOB NOT NULL, \"height\" INTEGER NOT NULL, \"revoked\" INTEGER, PRIMARY KEY(\"address\"));"
 
@@ -116,9 +118,21 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         //Encrypted keys table
                         "CREATE TABLE \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
 
+                        //DigiDollar tables(see the 6 to 7 migration below for column meanings)
+                        "CREATE TABLE \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
+                        "CREATE INDEX idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
+                        "CREATE INDEX idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
+                        "CREATE TABLE \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
+                        "CREATE INDEX idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
+                        "CREATE INDEX idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
+                        "CREATE TABLE \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
+                        "CREATE INDEX idx_ddoracle_height ON ddoracle(height);"
+
                         "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
-                skipUpToVersion = 6; //tell not to execute steps until version 6 to 7 transition
+                skipUpToVersion = 7; //fresh database is already current, skip every migration step
                 if (rc != SQLITE_OK) {
                     sqlite3_free(zErrMsg);
                     throw exceptionFailedToCreateTable();
@@ -168,6 +182,53 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                                   "CREATE TABLE \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
                                   "UPDATE \"flags\" set \"value\"=6 WHERE \"key\"=\"dbVersion\";"
                                   "COMMIT;";
+                rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
+                if (rc != SQLITE_OK) {
+                    sqlite3_free(zErrMsg);
+                    throw exceptionFailedToCreateTable();
+                }
+            },
+
+
+            //Define what is changed from version 6 to version 7
+            [&]() {
+                //DigiDollar activated on mainnet at block 23,869,440.  These three tables hold
+                //everything we index for it.  ddSyncHeight starts below the activation height so
+                //ChainAnalyzer knows it must rewind and rescan the DigiDollar era - see
+                //ChainAnalyzer::phaseDigiDollarBackfill().
+                char* zErrMsg = nullptr;
+                int rc;
+
+                const char* sql =
+                        "BEGIN TRANSACTION;"
+
+                        //unspent DigiDollar.  amount is in DigiDollar cents(100 == $1.00).
+                        //Keyed on txid/vout rather than including address because a DigiDollar
+                        //output has exactly one owner and we look these up by outpoint on spend.
+                        "CREATE TABLE \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
+                        "CREATE INDEX idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
+                        "CREATE INDEX idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
+
+                        //collateral vaults created by mints.  collateral is DGB sats locked,
+                        //minted is DigiDollar cents issued against it.
+                        "CREATE TABLE \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
+                        "CREATE INDEX idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
+                        "CREATE INDEX idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
+
+                        //oracle price feed.  price is micro USD per DGB exactly as published, and
+                        //time is when the oracles sampled it, not the block time.  Roughly two
+                        //thirds of blocks republish the commitment for the epoch they fall in, so
+                        //this is keyed on epoch and keeps the first sighting - one row per 40
+                        //blocks, about 13k rows a year, rather than one row per block.  height is
+                        //the block we first saw it in and is what the reorg path deletes on.
+                        "CREATE TABLE \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
+                        "CREATE INDEX idx_ddoracle_height ON ddoracle(height);"
+
+                        "INSERT INTO \"flags\" VALUES (\"ddSyncHeight\",0);"
+                        "UPDATE \"flags\" set \"value\"=7 WHERE \"key\"=\"dbVersion\";"
+                        "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
                 if (rc != SQLITE_OK) {
                     sqlite3_free(zErrMsg);
@@ -351,6 +412,9 @@ void Database::initializeClassValues() {
                                          "    WHERE a.assetId = ? AND u1.issuance = 1 AND u2.spentTXID IS NOT NULL\n"
                                          ") GROUP BY txid\n"
                                          "ORDER BY height ASC;");
+    //The ddutxos arms are not redundant with the utxos arms.  A DigiDollar output holds 0 DGB and
+    //no DigiAssets, so with storenonassetutxo=0 it never reaches the utxos table at all and an
+    //address whose only activity is DigiDollar would otherwise report an empty history.
     _stmtGetAddressTxHistory.prepare(_db, "SELECT tx\n"
                                           "FROM (\n"
                                           "    SELECT * FROM (\n"
@@ -363,6 +427,20 @@ void Database::initializeClassValues() {
                                           "    SELECT * FROM (\n"
                                           "        SELECT spentTXID AS tx, heightDestroyed AS height\n"
                                           "        FROM utxos\n"
+                                          "        WHERE address=? AND spentTXID IS NOT NULL AND heightDestroyed >= ? AND heightDestroyed <= ?\n"
+                                          "        LIMIT ?\n"
+                                          "    )\n"
+                                          "    UNION\n"
+                                          "    SELECT * FROM (\n"
+                                          "        SELECT txid AS tx, heightCreated AS height\n"
+                                          "        FROM ddutxos\n"
+                                          "        WHERE address=? AND heightCreated >=? AND heightCreated <=?\n"
+                                          "        LIMIT ?\n"
+                                          "    )\n"
+                                          "    UNION\n"
+                                          "    SELECT * FROM (\n"
+                                          "        SELECT spentTXID AS tx, heightDestroyed AS height\n"
+                                          "        FROM ddutxos\n"
                                           "        WHERE address=? AND spentTXID IS NOT NULL AND heightDestroyed >= ? AND heightDestroyed <= ?\n"
                                           "        LIMIT ?\n"
                                           "    )\n"
@@ -470,6 +548,28 @@ void Database::initializeClassValues() {
 
     //statement to get current exchange rate(1 rate)
     _stmtGetCurrentExchangeRate.prepare(_db, "SELECT value FROM exchange WHERE address=? AND [index]=? ORDER BY height DESC LIMIT 1;");
+
+
+    //DigiDollar statements
+    //OR REPLACE on the create paths so re-processing a block after an unclean shutdown is
+    //idempotent, matching how the block repair step at startup expects to be able to redo work
+    _stmtCreateDDUTXO.prepare(_db, "INSERT OR REPLACE INTO ddutxos (txid,vout,address,amount,heightCreated,heightDestroyed,spentTXID) VALUES (?,?,?,?,?,NULL,NULL);");
+    _stmtSpendDDUTXO.prepare(_db, "UPDATE ddutxos SET heightDestroyed=?, spentTXID=? WHERE txid=? AND vout=?;");
+    _stmtGetDDUTXO.prepare(_db, "SELECT amount FROM ddutxos WHERE txid=? AND vout=? AND heightDestroyed IS NULL;");
+    _stmtGetDDBalance.prepare(_db, "SELECT COALESCE(SUM(amount),0) FROM ddutxos WHERE address=? AND heightDestroyed IS NULL;");
+    _stmtGetDDUTXOs.prepare(_db, "SELECT txid,vout,amount,heightCreated FROM ddutxos WHERE address=? AND heightDestroyed IS NULL ORDER BY heightCreated ASC;");
+
+    _stmtCreateDDVault.prepare(_db, "INSERT OR REPLACE INTO ddvaults (txid,vout,address,collateral,minted,lockHeight,lockTier,heightCreated,heightRedeemed,redeemedTXID) VALUES (?,?,?,?,?,?,?,?,NULL,NULL);");
+    _stmtRedeemDDVault.prepare(_db, "UPDATE ddvaults SET heightRedeemed=?, redeemedTXID=? WHERE txid=? AND vout=?;");
+    _stmtGetDDVault.prepare(_db, "SELECT minted FROM ddvaults WHERE txid=? AND vout=? AND heightRedeemed IS NULL;");
+    //second bind is an include-redeemed toggle so one statement serves both callers
+    _stmtGetDDVaults.prepare(_db, "SELECT txid,vout,collateral,minted,lockHeight,lockTier,heightCreated,heightRedeemed IS NOT NULL FROM ddvaults WHERE address=? AND (heightRedeemed IS NULL OR ?=1) ORDER BY heightCreated ASC;");
+
+    //OR IGNORE: every block in an epoch republishes the same consensus commitment, keep the first
+    _stmtAddDDRate.prepare(_db, "INSERT OR IGNORE INTO ddoracle (epoch,height,price,time,participants) VALUES (?,?,?,?,?);");
+    _stmtGetDDRateAtHeight.prepare(_db, "SELECT height,epoch,price,time,participants FROM ddoracle WHERE height<=? ORDER BY height DESC LIMIT 1;");
+    _stmtGetDDRateHistory.prepare(_db, "SELECT height,epoch,price,time,participants FROM ddoracle WHERE height>=? AND height<=? ORDER BY height ASC LIMIT ?;");
+    _stmtGetDDLastEpoch.prepare(_db, "SELECT COALESCE(MAX(epoch),0) FROM ddoracle;");
 
 
     //statement to insert new kyc record
@@ -941,8 +1041,12 @@ void Database::reset() {
                       "DELETE FROM pspFiles;"
                       "DELETE FROM pspAssets;"
                       "DELETE FROM domains;"
-                      "DELETE FROM domainsMaster;"
-                      "INSERT INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);";
+                      "DELETE FROM domainsMasters;"
+                      "INSERT INTO \"domainsMasters\" VALUES (\"Ua7Bd7UVtrzavSHhpHxHZ2nzS2hGaHXRMT9sqy\",true);"
+                      "DELETE FROM ddutxos;"
+                      "DELETE FROM ddvaults;"
+                      "DELETE FROM ddoracle;"
+                      "UPDATE \"flags\" set \"value\"=0 WHERE \"key\"=\"ddSyncHeight\";";
 
     rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
 
@@ -1434,6 +1538,13 @@ void Database::clearBlocksAboveHeight(uint height) {
             "DELETE FROM utxos WHERE heightCreated>=" + lineEnd,
             "UPDATE utxos SET heightDestroyed=NULL WHERE heightDestroyed>=" + lineEnd,
             "DELETE FROM votes WHERE height>=" + lineEnd,
+            //DigiDollar - same create/destroy pattern as utxos.  Missing these would leave
+            //phantom DigiDollar balances and vaults behind after every reorg.
+            "DELETE FROM ddutxos WHERE heightCreated>=" + lineEnd,
+            "UPDATE ddutxos SET heightDestroyed=NULL, spentTXID=NULL WHERE heightDestroyed>=" + lineEnd,
+            "DELETE FROM ddvaults WHERE heightCreated>=" + lineEnd,
+            "UPDATE ddvaults SET heightRedeemed=NULL, redeemedTXID=NULL WHERE heightRedeemed>=" + lineEnd,
+            "DELETE FROM ddoracle WHERE height>=" + lineEnd,
             "DELETE FROM blocks WHERE height>" + lineEnd,
             "UPDATE sqlite_sequence SET seq = (SELECT MAX(assetIndex) FROM assets) WHERE name = 'assets';"};
     for (const string& sql: sqlCommands) {
@@ -1960,7 +2071,16 @@ std::vector<std::string> Database::getAddressTxList(const string& address, unsig
     getAddressTxHistory.bindInt64(6, minHeight);
     getAddressTxHistory.bindInt64(7, maxHeight);
     getAddressTxHistory.bindInt64(8, limit * 2);
-    getAddressTxHistory.bindInt64(9, limit);
+    //same four bindings again for the two ddutxos arms
+    getAddressTxHistory.bindText(9, address);
+    getAddressTxHistory.bindInt64(10, minHeight);
+    getAddressTxHistory.bindInt64(11, maxHeight);
+    getAddressTxHistory.bindInt64(12, limit * 2);
+    getAddressTxHistory.bindText(13, address);
+    getAddressTxHistory.bindInt64(14, minHeight);
+    getAddressTxHistory.bindInt64(15, maxHeight);
+    getAddressTxHistory.bindInt64(16, limit * 2);
+    getAddressTxHistory.bindInt64(17, limit);
     while (getAddressTxHistory.executeStep() == SQLITE_ROW) {
         Blob txid = getAddressTxHistory.getColumnBlob(0);
         results.push_back(txid.toHex());
@@ -2194,6 +2314,267 @@ double Database::getCurrentExchangeRate(const ExchangeRate& rate) {
     getCurrentExchangeRate.bindInt(2, rate.index);
     if (getCurrentExchangeRate.executeStep() != SQLITE_ROW) throw out_of_range("Unknown Exchange Rate");
     return getCurrentExchangeRate.getColumnDouble(0);
+}
+
+/*
+██████╗ ██╗ ██████╗ ██╗██████╗  ██████╗ ██╗     ██╗      █████╗ ██████╗
+██╔══██╗██║██╔════╝ ██║██╔══██╗██╔═══██╗██║     ██║     ██╔══██╗██╔══██╗
+██║  ██║██║██║  ███╗██║██║  ██║██║   ██║██║     ██║     ███████║██████╔╝
+██║  ██║██║██║   ██║██║██║  ██║██║   ██║██║     ██║     ██╔══██║██╔══██╗
+██████╔╝██║╚██████╔╝██║██████╔╝╚██████╔╝███████╗███████╗██║  ██║██║  ██║
+╚═════╝ ╚═╝ ╚═════╝ ╚═╝╚═════╝  ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+ */
+
+void Database::createDigiDollarUTXO(const string& txid, uint16_t vout, const string& address,
+                                    uint64_t amount, unsigned int heightCreated) {
+    if (address.empty()) return; //nothing we could ever attribute a balance to
+    if (amount == 0) return;     //a zero value DigiDollar output carries nothing
+
+    LockedStatement createDDUTXO{_stmtCreateDDUTXO};
+    Blob blobTXID = Blob(txid);
+    createDDUTXO.bindBlob(1, blobTXID);
+    createDDUTXO.bindInt(2, vout);
+    createDDUTXO.bindText(3, address);
+    createDDUTXO.bindInt64(4, static_cast<int64_t>(amount));
+    createDDUTXO.bindInt(5, heightCreated);
+    int rc = createDDUTXO.executeStep();
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedInsert();
+    }
+}
+
+uint64_t Database::spendDigiDollarUTXO(const string& txid, uint16_t vout, unsigned int height,
+                                       const string& spentTXID) {
+    //look the amount up first so callers can keep a running supply total without a second query
+    uint64_t amount = getDigiDollarOnUTXO(txid, vout);
+    if (amount == 0) return 0;
+
+    LockedStatement spendDDUTXO{_stmtSpendDDUTXO};
+    Blob blobSpender = Blob(spentTXID);
+    Blob blobTXID = Blob(txid);
+    spendDDUTXO.bindInt(1, height);
+    spendDDUTXO.bindBlob(2, blobSpender);
+    spendDDUTXO.bindBlob(3, blobTXID);
+    spendDDUTXO.bindInt(4, vout);
+    int rc = spendDDUTXO.executeStep();
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedUpdate();
+    }
+    return amount;
+}
+
+uint64_t Database::getDigiDollarOnUTXO(const string& txid, uint16_t vout) {
+    LockedStatement getDDUTXO{_stmtGetDDUTXO};
+    Blob blobTXID = Blob(txid);
+    getDDUTXO.bindBlob(1, blobTXID);
+    getDDUTXO.bindInt(2, vout);
+    if (getDDUTXO.executeStep() != SQLITE_ROW) return 0;
+    return static_cast<uint64_t>(getDDUTXO.getColumnInt64(0));
+}
+
+bool Database::isDigiDollarUTXO(const string& txid, uint16_t vout) {
+    return getDigiDollarOnUTXO(txid, vout) != 0;
+}
+
+uint64_t Database::getDigiDollarBalance(const string& address) {
+    LockedStatement getDDBalance{_stmtGetDDBalance};
+    getDDBalance.bindText(1, address);
+    if (getDDBalance.executeStep() != SQLITE_ROW) return 0;
+    return static_cast<uint64_t>(getDDBalance.getColumnInt64(0));
+}
+
+vector<DigiDollarUTXO> Database::getDigiDollarUTXOs(const string& address) {
+    vector<DigiDollarUTXO> results;
+    LockedStatement getDDUTXOs{_stmtGetDDUTXOs};
+    getDDUTXOs.bindText(1, address);
+    while (getDDUTXOs.executeStep() == SQLITE_ROW) {
+        DigiDollarUTXO utxo;
+        utxo.txid = getDDUTXOs.getColumnBlob(0).toHex();
+        utxo.vout = static_cast<uint16_t>(getDDUTXOs.getColumnInt(1));
+        utxo.address = address;
+        utxo.amount = static_cast<uint64_t>(getDDUTXOs.getColumnInt64(2));
+        utxo.heightCreated = getDDUTXOs.getColumnInt(3);
+        results.push_back(utxo);
+    }
+    return results;
+}
+
+void Database::createDigiDollarVault(const string& txid, uint16_t vout, const string& address,
+                                     uint64_t collateral, uint64_t minted, unsigned int lockHeight,
+                                     uint8_t lockTier, unsigned int heightCreated) {
+    LockedStatement createDDVault{_stmtCreateDDVault};
+    Blob blobTXID = Blob(txid);
+    createDDVault.bindBlob(1, blobTXID);
+    createDDVault.bindInt(2, vout);
+    createDDVault.bindText(3, address);
+    createDDVault.bindInt64(4, static_cast<int64_t>(collateral));
+    createDDVault.bindInt64(5, static_cast<int64_t>(minted));
+    createDDVault.bindInt(6, lockHeight);
+    createDDVault.bindInt(7, lockTier);
+    createDDVault.bindInt(8, heightCreated);
+    int rc = createDDVault.executeStep();
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedInsert();
+    }
+}
+
+uint64_t Database::redeemDigiDollarVault(const string& txid, uint16_t vout, unsigned int height,
+                                         const string& redeemedTXID) {
+    uint64_t minted;
+    {
+        LockedStatement getDDVault{_stmtGetDDVault};
+        Blob blobTXID = Blob(txid);
+        getDDVault.bindBlob(1, blobTXID);
+        getDDVault.bindInt(2, vout);
+        if (getDDVault.executeStep() != SQLITE_ROW) return 0; //not a vault we know about
+        minted = static_cast<uint64_t>(getDDVault.getColumnInt64(0));
+    }
+
+    LockedStatement redeemDDVault{_stmtRedeemDDVault};
+    Blob blobTXID = Blob(txid);
+    Blob blobRedeemer = Blob(redeemedTXID);
+    redeemDDVault.bindInt(1, height);
+    redeemDDVault.bindBlob(2, blobRedeemer);
+    redeemDDVault.bindBlob(3, blobTXID);
+    redeemDDVault.bindInt(4, vout);
+    int rc = redeemDDVault.executeStep();
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedUpdate();
+    }
+    return minted;
+}
+
+vector<DigiDollarVault> Database::getDigiDollarVaults(const string& address, bool includeRedeemed) {
+    vector<DigiDollarVault> results;
+    LockedStatement getDDVaults{_stmtGetDDVaults};
+    getDDVaults.bindText(1, address);
+    getDDVaults.bindInt(2, includeRedeemed ? 1 : 0);
+    while (getDDVaults.executeStep() == SQLITE_ROW) {
+        DigiDollarVault vault;
+        vault.txid = getDDVaults.getColumnBlob(0).toHex();
+        vault.vout = static_cast<uint16_t>(getDDVaults.getColumnInt(1));
+        vault.address = address;
+        vault.collateral = static_cast<uint64_t>(getDDVaults.getColumnInt64(2));
+        vault.minted = static_cast<uint64_t>(getDDVaults.getColumnInt64(3));
+        vault.lockHeight = getDDVaults.getColumnInt(4);
+        vault.lockTier = static_cast<uint8_t>(getDDVaults.getColumnInt(5));
+        vault.heightCreated = getDDVaults.getColumnInt(6);
+        vault.redeemed = (getDDVaults.getColumnInt(7) != 0); //query returns heightRedeemed IS NOT NULL
+        results.push_back(vault);
+    }
+    return results;
+}
+
+void Database::addDigiDollarRate(unsigned int height, unsigned int epoch, uint64_t price,
+                                 unsigned int time, unsigned int participants) {
+    LockedStatement addDDRate{_stmtAddDDRate};
+    addDDRate.bindInt(1, epoch);
+    addDDRate.bindInt(2, height);
+    addDDRate.bindInt64(3, static_cast<int64_t>(price));
+    addDDRate.bindInt(4, time);
+    addDDRate.bindInt(5, participants);
+    int rc = addDDRate.executeStep();
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedInsert();
+    }
+}
+
+DigiDollarRate Database::getDigiDollarRateAtHeight(unsigned int height) {
+    LockedStatement getDDRate{_stmtGetDDRateAtHeight};
+    getDDRate.bindInt(1, height);
+    if (getDDRate.executeStep() != SQLITE_ROW) throw out_of_range("No DigiDollar oracle price known");
+    DigiDollarRate rate;
+    rate.height = getDDRate.getColumnInt(0);
+    rate.epoch = getDDRate.getColumnInt(1);
+    rate.price = static_cast<uint64_t>(getDDRate.getColumnInt64(2));
+    rate.time = getDDRate.getColumnInt(3);
+    rate.participants = getDDRate.getColumnInt(4);
+    return rate;
+}
+
+DigiDollarRate Database::getCurrentDigiDollarRate() {
+    return getDigiDollarRateAtHeight(numeric_limits<unsigned int>::max());
+}
+
+vector<DigiDollarRate> Database::getDigiDollarRateHistory(unsigned int startHeight, unsigned int endHeight,
+                                                          unsigned int limit) {
+    vector<DigiDollarRate> results;
+    LockedStatement getDDRateHistory{_stmtGetDDRateHistory};
+    getDDRateHistory.bindInt(1, startHeight);
+    getDDRateHistory.bindInt(2, endHeight);
+    getDDRateHistory.bindInt64(3, static_cast<int64_t>(limit));
+    while (getDDRateHistory.executeStep() == SQLITE_ROW) {
+        DigiDollarRate rate;
+        rate.height = getDDRateHistory.getColumnInt(0);
+        rate.epoch = getDDRateHistory.getColumnInt(1);
+        rate.price = static_cast<uint64_t>(getDDRateHistory.getColumnInt64(2));
+        rate.time = getDDRateHistory.getColumnInt(3);
+        rate.participants = getDDRateHistory.getColumnInt(4);
+        results.push_back(rate);
+    }
+    return results;
+}
+
+DigiDollarSummary Database::getDigiDollarSummary() {
+    DigiDollarSummary summary;
+
+    //one aggregate pass per table rather than per address - this is called by both the stats
+    //system and getdigidollarinfo, so it runs often enough to be worth keeping cheap
+    const char* supplySql = "SELECT COALESCE(SUM(amount),0), COUNT(DISTINCT address) FROM ddutxos WHERE heightDestroyed IS NULL;";
+    const char* vaultSql = "SELECT COALESCE(SUM(collateral),0), COALESCE(SUM(minted),0), COUNT(*) FROM ddvaults WHERE heightRedeemed IS NULL;";
+    const char* totalSql = "SELECT COALESCE(SUM(minted),0), COALESCE(SUM(CASE WHEN heightRedeemed IS NOT NULL THEN minted ELSE 0 END),0) FROM ddvaults;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, supplySql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+            summary.supply = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            summary.holders = static_cast<unsigned int>(sqlite3_column_int(stmt, 1));
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (sqlite3_prepare_v2(_db, vaultSql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+            summary.collateral = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            summary.vaults = static_cast<unsigned int>(sqlite3_column_int(stmt, 2));
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (sqlite3_prepare_v2(_db, totalSql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+            summary.mintedTotal = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
+            summary.redeemedTotal = static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    try {
+        summary.price = getCurrentDigiDollarRate().price;
+    } catch (const out_of_range&) {
+        summary.price = 0; //no oracle commitment recorded yet
+    }
+    return summary;
+}
+
+unsigned int Database::getDigiDollarLastEpoch() {
+    LockedStatement getDDLastEpoch{_stmtGetDDLastEpoch};
+    if (getDDLastEpoch.executeStep() != SQLITE_ROW) return 0;
+    return static_cast<unsigned int>(getDDLastEpoch.getColumnInt(0));
+}
+
+unsigned int Database::getDigiDollarSyncHeight() {
+    int value = getFlagInt("ddSyncHeight", 0);
+    return (value < 0) ? 0 : static_cast<unsigned int>(value);
+}
+
+void Database::setDigiDollarSyncHeight(unsigned int height) {
+    setFlagInt("ddSyncHeight", static_cast<int>(height));
 }
 
 /*
@@ -2986,6 +3367,9 @@ void Database::updateStats(unsigned int timeFrame) {
         //update if can do address stats
         if (canGetAddressStats()) updateAddressStats(timeFrame, endTime, startHeight, endHeight);
 
+        //update DigiDollar stats
+        updateDigiDollarStats(timeFrame, endTime, startHeight, endHeight);
+
         //update where we left off
         setFlagInt(flag, endHeight);
         endTime += timeFrame;
@@ -2993,6 +3377,110 @@ void Database::updateStats(unsigned int timeFrame) {
     }
     log->addMessage("Database::updateStats complete", Log::DEBUG);
 }
+/**
+ * Builds the DigiDollar stats for one time window.
+ *
+ * Unlike the algo and address stats this uses CREATE TABLE IF NOT EXISTS rather than keying table
+ * creation off startHeight==1.  Any node that already has stats is well past block 1, so the
+ * startHeight==1 test would never fire on an upgrade and the first insert would hit a missing
+ * table.  Windows that ended before DigiDollar activated are skipped entirely rather than written
+ * as rows of zeros, so the series starts where the data does.
+ *
+ * Every figure is a state-at-end-of-window snapshot except the four counters, which are activity
+ * during the window.  Supply is derived from the utxo table rather than from minted minus redeemed
+ * so it stays right even if a vault redemption was missed.
+ */
+void Database::updateDigiDollarStats(unsigned int timeFrame, unsigned int endTime, unsigned int startHeight,
+                                     unsigned int endHeight) {
+    const string timeStr = to_string(timeFrame);
+
+    //nothing existed before activation - do not pad the series with empty rows
+    if (endHeight < DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT) return;
+
+    executeSQLStatement(
+            "CREATE TABLE IF NOT EXISTS StatsDigiDollar_" + timeStr +
+                    " (end_time INTEGER NOT NULL, supply INTEGER NOT NULL, collateral INTEGER NOT NULL,"
+                    " vaults INTEGER NOT NULL, holders INTEGER NOT NULL, minted INTEGER NOT NULL,"
+                    " redeemed INTEGER NOT NULL, mints INTEGER NOT NULL, redemptions INTEGER NOT NULL,"
+                    " transfers INTEGER NOT NULL, price_min INTEGER, price_max INTEGER, price_avg REAL,"
+                    " PRIMARY KEY(end_time));",
+            exceptionFailedToCreateTable());
+
+    const string startStr = to_string(startHeight);
+    const string endStr = to_string(endHeight);
+
+    // clang-format off
+    executeSQLStatement(
+        "INSERT OR REPLACE INTO StatsDigiDollar_" + timeStr +
+        " (end_time, supply, collateral, vaults, holders, minted, redeemed, mints, redemptions, transfers,"
+        "  price_min, price_max, price_avg) "
+        "SELECT "
+            "" + to_string(endTime) + ", "
+            //state as at endHeight: created at or below it and either never spent or spent after it
+            "(SELECT COALESCE(SUM(amount),0) FROM ddutxos WHERE heightCreated<=" + endStr +
+                " AND (heightDestroyed IS NULL OR heightDestroyed>" + endStr + ")), "
+            "(SELECT COALESCE(SUM(collateral),0) FROM ddvaults WHERE heightCreated<=" + endStr +
+                " AND (heightRedeemed IS NULL OR heightRedeemed>" + endStr + ")), "
+            "(SELECT COUNT(*) FROM ddvaults WHERE heightCreated<=" + endStr +
+                " AND (heightRedeemed IS NULL OR heightRedeemed>" + endStr + ")), "
+            "(SELECT COUNT(DISTINCT address) FROM ddutxos WHERE heightCreated<=" + endStr +
+                " AND (heightDestroyed IS NULL OR heightDestroyed>" + endStr + ")), "
+            //activity during the window
+            "(SELECT COALESCE(SUM(minted),0) FROM ddvaults WHERE heightCreated BETWEEN " + startStr + " AND " + endStr + "), "
+            "(SELECT COALESCE(SUM(minted),0) FROM ddvaults WHERE heightRedeemed BETWEEN " + startStr + " AND " + endStr + "), "
+            "(SELECT COUNT(*) FROM ddvaults WHERE heightCreated BETWEEN " + startStr + " AND " + endStr + "), "
+            "(SELECT COUNT(*) FROM ddvaults WHERE heightRedeemed BETWEEN " + startStr + " AND " + endStr + "), "
+            //a transfer is any DigiDollar output created by a transaction that did not open a vault
+            "(SELECT COUNT(DISTINCT u.txid) FROM ddutxos u WHERE u.heightCreated BETWEEN " + startStr + " AND " + endStr +
+                " AND NOT EXISTS (SELECT 1 FROM ddvaults v WHERE v.txid=u.txid)"
+                " AND NOT EXISTS (SELECT 1 FROM ddvaults r WHERE r.redeemedTXID=u.txid)), "
+            //oracle price over the window
+            "(SELECT MIN(price) FROM ddoracle WHERE height BETWEEN " + startStr + " AND " + endStr + "), "
+            "(SELECT MAX(price) FROM ddoracle WHERE height BETWEEN " + startStr + " AND " + endStr + "), "
+            "(SELECT AVG(price) FROM ddoracle WHERE height BETWEEN " + startStr + " AND " + endStr + ");",
+        exceptionFailedInsert()
+    );
+    // clang-format on
+}
+
+std::vector<DigiDollarStats> Database::getDigiDollarStats(unsigned int start, unsigned int end,
+                                                          unsigned int timeFrame) {
+    updateStats(timeFrame);
+
+    std::vector<DigiDollarStats> results;
+
+    //the table only exists once a window past activation has been summarised
+    std::string sql = "SELECT end_time, supply, collateral, vaults, holders, minted, redeemed, mints,"
+                      " redemptions, transfers, price_min, price_max, price_avg FROM StatsDigiDollar_" +
+                      std::to_string(timeFrame) + " WHERE end_time >= ? AND end_time <= ? ORDER BY end_time ASC";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        return results; //no DigiDollar stats yet
+    }
+    sqlite3_bind_int(stmt, 1, start);
+    sqlite3_bind_int(stmt, 2, end);
+    while (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
+        DigiDollarStats stats;
+        stats.time = sqlite3_column_int(stmt, 0);
+        stats.supply = static_cast<uint64_t>(sqlite3_column_int64(stmt, 1));
+        stats.collateral = static_cast<uint64_t>(sqlite3_column_int64(stmt, 2));
+        stats.vaults = sqlite3_column_int(stmt, 3);
+        stats.holders = sqlite3_column_int(stmt, 4);
+        stats.minted = static_cast<uint64_t>(sqlite3_column_int64(stmt, 5));
+        stats.redeemed = static_cast<uint64_t>(sqlite3_column_int64(stmt, 6));
+        stats.mints = sqlite3_column_int(stmt, 7);
+        stats.redemptions = sqlite3_column_int(stmt, 8);
+        stats.transfers = sqlite3_column_int(stmt, 9);
+        stats.priceMin = static_cast<uint64_t>(sqlite3_column_int64(stmt, 10));
+        stats.priceMax = static_cast<uint64_t>(sqlite3_column_int64(stmt, 11));
+        stats.priceAvg = sqlite3_column_double(stmt, 12);
+        results.push_back(stats);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
 /**
  * To speed up stats calculation this adds some indexes to the database if they don't already exist
  */
