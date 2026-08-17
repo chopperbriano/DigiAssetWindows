@@ -20,6 +20,7 @@
 #include "crypto/SHA256.h"
 #include "crypto/ripemd.h"
 #include "DigiAssetConstants.h"
+#include "DigiDollar.h"
 
 using namespace std;
 
@@ -307,6 +308,14 @@ void DigiAsset::decodeAssetTxHeader(const getrawtransaction_t& txData, unsigned 
     int iO = -1;
     for (const vout_t& output: txData.vout) {
         if (output.scriptPubKey.type != "nulldata") continue;
+        //Never select a DigiDollar metadata OP_RETURN(6a 02 "DD").  This loop keeps the LAST
+        //nulldata output, so a transaction carrying both a DigiAsset OP_RETURN and a DigiDollar
+        //one would otherwise land on the DigiDollar output and decode as not-an-asset.
+        //Gated on the version marker rather than height so historical decoding cannot change.
+        if (DigiDollar::isDigiDollarVersion(txData.version) &&
+            (output.scriptPubKey.hex.rfind("6a024444", 0) == 0)) {
+            continue;
+        }
         iO = output.n;
     }
     if (iO == -1) {

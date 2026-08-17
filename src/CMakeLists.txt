@@ -102,6 +102,7 @@ set(HEADER_FILES
         serialize.h
         DigiAssetTypes.h
         DigiAssetConstants.h
+        DigiDollar.h
         DigiByteDomain.h
         Config.h
         RPC/Server.h
@@ -147,6 +148,7 @@ set(SOURCE_FILES
         KYC.cpp
         DigiAsset.cpp
         DigiAssetRules.cpp
+        DigiDollar.cpp
         IPFS.cpp
         DigiByteTransaction.cpp
         Base58.cpp

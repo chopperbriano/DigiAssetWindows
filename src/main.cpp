@@ -267,6 +267,35 @@ int main(int argc, char* argv[]) {
     main->setDigiByteCore(&dgb);
 
     /*
+     * Refuse to index against a node that predates DigiDollar.
+     *
+     * DigiDollar activated as a soft fork, so an old node still follows the same chain and still
+     * answers every RPC we make - it just cannot validate DigiDollar and reports nothing useful
+     * about those transactions.  Nothing about the connection tells us this, so it has to be
+     * checked explicitly or we would silently index a chain we cannot read properly.
+     */
+    int nodeVersion = dgb.getNodeVersion();
+    if (nodeVersion == 0) {
+        log->addMessage("Could not determine DigiByte Core version - getnetworkinfo did not answer. "
+                        "DigiAsset Core requires v9.26.5 or newer.",
+                        Log::CRITICAL);
+        return -1;
+    }
+    if (nodeVersion < DigiByteCore::MINIMUM_NODE_VERSION) {
+        //render 92605 as 9.26.5 so the message names a version the operator can actually download
+        auto renderVersion = [](int v) {
+            return to_string(v / 10000) + "." + to_string((v / 100) % 100) + "." + to_string(v % 100);
+        };
+        log->addMessage("DigiByte Core " + renderVersion(nodeVersion) + " is too old.  DigiAsset Core "
+                        "requires v" + renderVersion(DigiByteCore::MINIMUM_NODE_VERSION) + " or newer "
+                        "because it indexes DigiDollar, which activated at block 23,869,440 and "
+                        "cannot be validated by earlier releases.  Upgrade the node and restart.",
+                        Log::CRITICAL);
+        return -1;
+    }
+    log->addMessage("DigiByte Core version " + to_string(nodeVersion) + " accepted");
+
+    /*
      * Get wallet version
      */
     DigiByteCore::WalletVersion walletVersion = dgb.coreVersion();

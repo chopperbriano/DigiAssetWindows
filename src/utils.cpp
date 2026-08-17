@@ -278,4 +278,18 @@ namespace utils {
             }
         }
     }
+
+    string toDecimalString(uint64_t value, unsigned int decimals) {
+        if (decimals == 0) return to_string(value);
+
+        //build the divisor by repeated multiplication rather than pow() so nothing goes through a
+        //double - these are exact money amounts and must not pick up rounding error
+        uint64_t divisor = 1;
+        for (unsigned int i = 0; i < decimals; i++) divisor *= 10;
+
+        string result = to_string(value / divisor);
+        string fraction = to_string(value % divisor);
+        while (fraction.length() < decimals) fraction.insert(fraction.begin(), '0');
+        return result + "." + fraction;
+    }
 } // namespace utils

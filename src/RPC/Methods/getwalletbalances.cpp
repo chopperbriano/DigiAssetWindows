@@ -6,8 +6,11 @@
 #include "AssetWallet.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"
+#include "utils.h"
 #include <jsoncpp/json/value.h>
 #include <map>
+#include <set>
+#include <string>
 
 namespace RPC {
     namespace Methods {
@@ -20,6 +23,9 @@ namespace RPC {
         *   "digibyte"(object):
         *       "sats"(integer) - spendable DigiByte in sats(includes DigiByte locked in asset UTXOs)
         *       "amount"(string) - same value in decimal DGB
+        *   "digidollar"(object):
+        *       "cents"(integer) - DigiDollar held, in cents(100 == $1.00)
+        *       "amount"(string) - same value in decimal dollars
         *   "assets"(array) - one entry per distinct asset held:
         *       "assetIndex"(integer)
         *       "assetId"(string)
@@ -42,8 +48,11 @@ namespace RPC {
 
             //add up everything in the wallet
             uint64_t digibyte = 0;
+            uint64_t digidollar = 0;
             std::map<uint64_t, uint64_t> assetCounts; //assetIndex -> count
             std::map<uint64_t, DigiAsset> assetData;  //assetIndex -> asset(for id/cid/decimals)
+            Database* db = AppMain::GetInstance()->getDatabase();
+            std::set<std::string> countedAddresses; //a DigiDollar balance is per address, not per utxo
             for (const AssetUTXO& utxo: AssetWallet::getWalletUTXOs(minconf)) {
                 digibyte += utxo.digibyte;
                 for (const DigiAsset& asset: utxo.assets) {
@@ -51,6 +60,13 @@ namespace RPC {
                     assetCounts[assetIndex] += asset.getCount();
                     if (assetData.count(assetIndex) == 0) assetData[assetIndex] = asset;
                 }
+
+                //DigiDollar lives on its own 0 value taproot outputs, which the wallet may or may
+                //not return here, so it is looked up per address rather than read off the utxo.
+                //Each address is only counted once no matter how many utxos it appears on.
+                if (utxo.address.empty()) continue;
+                if (!countedAddresses.insert(utxo.address).second) continue;
+                digidollar += db->getDigiDollarBalance(utxo.address);
             }
 
             //convert to json
@@ -80,8 +96,15 @@ namespace RPC {
                 assets.append(assetResult);
             }
 
+            //DigiDollar is not a DigiAsset so it gets its own top level key rather than an entry
+            //in "assets".  cents is the protocol's own unit; "amount" is display only.
+            Json::Value digidollarResult = Json::objectValue;
+            digidollarResult["cents"] = static_cast<Json::UInt64>(digidollar);
+            digidollarResult["amount"] = utils::toDecimalString(digidollar, 2);
+
             Json::Value result = Json::objectValue;
             result["digibyte"] = digibyteResult;
+            result["digidollar"] = digidollarResult;
             result["assets"] = assets;
 
             //return response

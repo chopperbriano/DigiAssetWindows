@@ -22,6 +22,11 @@ namespace RPC {
         *
         * return an object with assetIndex as key and asset quantity as value.
         * Please note assetIndex 1 is DigiByte and this will be included if storenonassetutxo=1
+        *
+        * DigiDollar is not a DigiAsset and has no assetIndex, so it is reported under the separate
+        * key "digidollar" holding the balance in cents(100 == $1.00).  The key is only present when
+        * the address holds DigiDollar, so callers iterating this object must expect a non numeric
+        * key or filter for it explicitly.
         */
         extern const Response getaddressholdings(const Json::Value& params) {
             if (params.size() != 1) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
@@ -37,6 +42,12 @@ namespace RPC {
             Value result=Json::objectValue;
             for (const auto& entry: data) {
                 result[to_string(entry.assetIndex)]=static_cast<Json::UInt64>(entry.count);
+            }
+
+            //add DigiDollar if the address holds any
+            uint64_t digidollar = db->getDigiDollarBalance(address);
+            if (digidollar > 0) {
+                result["digidollar"]=static_cast<Json::UInt64>(digidollar);
             }
 
             //return response

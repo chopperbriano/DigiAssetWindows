@@ -49,6 +49,11 @@ namespace RPC {
                 }
                 coreInputData["assets"] = jsonArray;
 
+                //DigiDollar carried by this output, in cents.  Always present so callers do not
+                //have to distinguish "no DigiDollar" from "field not implemented".
+                coreInputData["digidollar"] = static_cast<Json::UInt64>(
+                        db->getDigiDollarOnUTXO(params[0].asString(), static_cast<uint16_t>(params[1].asUInt())));
+
                 response.setResult(coreInputData);
                 return response;
             } catch (const Database::exceptionDataPruned& e) {

@@ -13,6 +13,7 @@
 
 #include "DigiByteCore.h"
 #include "Config.h"
+#include "DigiDollar.h" // isOracleCommitmentScript() for the scriptPubKey classifier below
 #include "Log.h"
 #include "utils.h" // required by getrawtransaction's scriptPubKey fallback (utils::printJson)
 #include <fstream>
@@ -1611,26 +1612,26 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                     } else if (type=="nulldata") {
                         //do nothing
                     } else if (type=="nonstandard") {
-                        // Nothing to extract: a non-template script carries no address,
-                        // exactly like nulldata. This is NOT an error.
-                        //
-                        // The common case is a DigiDollar data carrier: OP_RETURN (0x6a)
-                        // followed by opcode 0xbf, which is past OP_NOP10 (0xb9) and so
-                        // isn't a data push - that's precisely why the script fails the
-                        // nulldata template and lands here. Those ride in COINBASE
-                        // outputs, so a full sync hits thousands of them.
-                        //
-                        // This used to print to stderr unconditionally, which wrecked the
-                        // ConsoleDashboard: stderr bypasses the TUI entirely, so the text
-                        // landed wherever the cursor happened to be and smeared over the
-                        // status bar. Log.cpp can't be used here (the cli links
-                        // DigiByteCore.cpp but NOT Log.cpp), so gate the diagnostic behind
-                        // an env var - same pattern as DGBCORE_DEBUG_URL above.
-                        if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
-                            const bool digiDollar = (hex.rfind("6abf", 0) == 0);
-                            cerr << (digiDollar ? "nonstandard (DigiDollar): " : "nonstandard: ")
-                                 << txid << " hex=" << hex << "\n";
+                        //Since DigiDollar activated, the miner that closes an oracle epoch adds a
+                        //price commitment to the coinbase:  OP_RETURN OP_ORACLE <0x03> <bundle>.
+                        //OP_ORACLE (0xbf) is not push only so Solver() reports "nonstandard"
+                        //rather than "nulldata".  It is an unspendable data carrier with no
+                        //address and no value, so relabel it and move on - roughly two thirds of
+                        //blocks carry one and logging each would drown out real errors.
+                        if (DigiDollar::isOracleCommitmentScript(hex)) {
+                            output.scriptPubKey.type = "oracle";
+                        } else if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
+                            //Genuinely unexpected now that oracle commitments are classified.
+                            //Upstream prints this unconditionally; we keep the win.121 env gate
+                            //because stderr bypasses the ConsoleDashboard TUI entirely - the text
+                            //lands wherever the cursor happens to be and smears over the status
+                            //bar. Log.cpp can't be used here (the cli links DigiByteCore.cpp but
+                            //NOT Log.cpp), so gate it - same pattern as DGBCORE_DEBUG_URL above.
+                            cerr << "nonstandard: " << txid << " hex=" << hex << "\n";
                         }
+                    } else if (type=="witness_unknown") {
+                        //a witness version this node does not understand.  Unspendable to us and
+                        //carries no address, so there is nothing to record.
                     } else {
                         // A script type we have no handler for at all. Also silenced by
                         // default for the same TUI reason - printJson here dumped an entire
@@ -1984,4 +1985,15 @@ DigiByteCore::WalletVersion DigiByteCore::coreVersion() {
     if (_walletVersion!=unknown) return _walletVersion;
     getrawtransaction("0378a92db8025318a129c83e2ee0766a5908550ef7b4619e8a325c9c69873a4b",true); //force wallet version to be set
     return _walletVersion;
+}
+
+int DigiByteCore::getNodeVersion() {
+    try {
+        Value params(Json::arrayValue);
+        Value result = sendcommand("getnetworkinfo", params);
+        if (!result.isMember("version")) return 0;
+        return result["version"].asInt();
+    } catch (const exception& e) {
+        return 0; //treat an unanswerable node as unknown rather than as too old
+    }
 }

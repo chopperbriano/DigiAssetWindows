@@ -38,6 +38,8 @@ set(HEADER_FILES
         ../src/Config.h
         ../src/DigiByteCore.h
         ../src/DigiAssetConstants.h
+        ../src/DigiDollar.h
+        ../src/Blob.h
         ../src/utils.h
         )
 
@@ -53,6 +55,8 @@ set(SOURCE_FILES
         tabs/ManageAssetTab.cpp
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
+        ../src/DigiDollar.cpp
+        ../src/Blob.cpp
         ../src/utils.cpp
         )
 

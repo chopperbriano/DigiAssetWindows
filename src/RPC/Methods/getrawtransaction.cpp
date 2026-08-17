@@ -51,7 +51,9 @@ namespace RPC {
                         unsigned int reqSigs = 0;
                         if (type == "pubkeyhash" || type == "scripthash" ||
                             type == "witness_v0_keyhash" || type == "witness_v0_scripthash" ||
-                            type == "pubkey") {
+                            type == "witness_v1_taproot" || type == "pubkey") {
+                            //taproot key path spending takes a single schnorr signature.  A script
+                            //path spend can need more, but that is not knowable from the output.
                             reqSigs = 1;
                         } else if (type == "multisig" && spk.isMember("asm")) {
                             //multisig ASM starts with "M OP_..." where M is reqSigs count

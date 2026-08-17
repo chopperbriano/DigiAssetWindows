@@ -80,6 +80,26 @@ struct AlgoStats {
     double difficultyAvg;
 };
 
+/**
+ * DigiDollar activity and state for one stats time window.
+ * All cent amounts are DigiDollar cents, collateral is DGB sats, prices are micro USD per DGB.
+ */
+struct DigiDollarStats {
+    unsigned int time;        //end time of the window
+    uint64_t supply;          //DigiDollar in circulation at window end
+    uint64_t collateral;      //DGB sats locked in unredeemed vaults at window end
+    unsigned int vaults;      //unredeemed vault count at window end
+    unsigned int holders;     //addresses holding DigiDollar at window end
+    uint64_t minted;          //cents minted during the window
+    uint64_t redeemed;        //cents released by redemptions during the window
+    unsigned int mints;       //mint transaction count during the window
+    unsigned int redemptions; //redemption count during the window
+    unsigned int transfers;   //transfer count during the window
+    uint64_t priceMin;
+    uint64_t priceMax;
+    double priceAvg;
+};
+
 // Tally of votes cast to a given address (for a voting asset).
 struct VoteCount {
     std::string address;
@@ -98,6 +118,62 @@ struct BlockBasics {
     std::string hash;
     unsigned int time;
     unsigned int algo;
+};
+
+/**
+ * An unspent DigiDollar output.  amount is in DigiDollar cents(100 == $1.00), which is the unit
+ * the protocol itself uses - it is never stored as a float.
+ */
+struct DigiDollarUTXO {
+    std::string txid;
+    uint16_t vout;
+    std::string address;
+    uint64_t amount;
+    unsigned int heightCreated;
+};
+
+/**
+ * A DigiDollar collateral vault created by a mint.
+ * collateral is DGB sats locked, minted is DigiDollar cents issued against it, and lockHeight is
+ * the block before which neither redemption path can spend it.
+ */
+struct DigiDollarVault {
+    std::string txid;
+    uint16_t vout;
+    std::string address;
+    uint64_t collateral;
+    uint64_t minted;
+    unsigned int lockHeight;
+    uint8_t lockTier;
+    unsigned int heightCreated;
+    bool redeemed;
+};
+
+/**
+ * One oracle price commitment.  price is micro USD per DGB exactly as the oracles publish it, so
+ * 4216 means one DGB is worth $0.004216.  time is when the oracles sampled the price, which runs
+ * a little ahead of the block that carries it.
+ */
+struct DigiDollarRate {
+    unsigned int height;
+    unsigned int epoch;
+    uint64_t price;
+    unsigned int time;
+    unsigned int participants;
+};
+
+/**
+ * Aggregate DigiDollar state at a height, used by both the RPC layer and the stats system.
+ * collateral and supply come from different tables so they are gathered in one pass.
+ */
+struct DigiDollarSummary {
+    uint64_t supply = 0;        //unspent DigiDollar in cents
+    uint64_t collateral = 0;    //DGB sats locked in unredeemed vaults
+    uint64_t mintedTotal = 0;   //cents ever minted
+    uint64_t redeemedTotal = 0; //cents released by redemptions
+    unsigned int vaults = 0;    //unredeemed vault count
+    unsigned int holders = 0;   //addresses holding a non zero balance
+    uint64_t price = 0;         //latest oracle price, micro USD per DGB, 0 if unknown
 };
 
 
@@ -173,6 +249,19 @@ private:
     Statement _stmtGetKYC;
     Statement _stmtGetValidExchangeRate;
     Statement _stmtGetCurrentExchangeRate;
+    Statement _stmtCreateDDUTXO;
+    Statement _stmtSpendDDUTXO;
+    Statement _stmtGetDDUTXO;
+    Statement _stmtGetDDBalance;
+    Statement _stmtGetDDUTXOs;
+    Statement _stmtCreateDDVault;
+    Statement _stmtRedeemDDVault;
+    Statement _stmtGetDDVault;
+    Statement _stmtGetDDVaults;
+    Statement _stmtAddDDRate;
+    Statement _stmtGetDDRateAtHeight;
+    Statement _stmtGetDDRateHistory;
+    Statement _stmtGetDDLastEpoch;
     Statement _stmtGetNextIPFSJob;
     Statement _stmtSetIPFSPauseSync;
     Statement _stmtClearNextIPFSJob_a;
@@ -271,6 +360,19 @@ public:
         result += printStatementInfo("_stmtGetKYC", _stmtGetKYC);
         result += printStatementInfo("_stmtGetValidExchangeRate", _stmtGetValidExchangeRate);
         result += printStatementInfo("_stmtGetCurrentExchangeRate", _stmtGetCurrentExchangeRate);
+        result += printStatementInfo("_stmtCreateDDUTXO", _stmtCreateDDUTXO);
+        result += printStatementInfo("_stmtSpendDDUTXO", _stmtSpendDDUTXO);
+        result += printStatementInfo("_stmtGetDDUTXO", _stmtGetDDUTXO);
+        result += printStatementInfo("_stmtGetDDBalance", _stmtGetDDBalance);
+        result += printStatementInfo("_stmtGetDDUTXOs", _stmtGetDDUTXOs);
+        result += printStatementInfo("_stmtCreateDDVault", _stmtCreateDDVault);
+        result += printStatementInfo("_stmtRedeemDDVault", _stmtRedeemDDVault);
+        result += printStatementInfo("_stmtGetDDVault", _stmtGetDDVault);
+        result += printStatementInfo("_stmtGetDDVaults", _stmtGetDDVaults);
+        result += printStatementInfo("_stmtAddDDRate", _stmtAddDDRate);
+        result += printStatementInfo("_stmtGetDDRateAtHeight", _stmtGetDDRateAtHeight);
+        result += printStatementInfo("_stmtGetDDRateHistory", _stmtGetDDRateHistory);
+        result += printStatementInfo("_stmtGetDDLastEpoch", _stmtGetDDLastEpoch);
         result += printStatementInfo("_stmtGetNextIPFSJob", _stmtGetNextIPFSJob);
         result += printStatementInfo("_stmtSetIPFSPauseSync", _stmtSetIPFSPauseSync);
         result += printStatementInfo("_stmtClearNextIPFSJob_a", _stmtClearNextIPFSJob_a);
@@ -394,6 +496,7 @@ private:
     unsigned int getStatsEndBlockHeight(unsigned int timeFrame, unsigned int endTime);
     void updateAlgoStats(unsigned int timeFrame, unsigned int endTime, unsigned int startHeight, unsigned int endHeight);
     void updateAddressStats(unsigned int timeFrame, unsigned int endTime, unsigned int startHeight, unsigned int endHeight);
+    void updateDigiDollarStats(unsigned int timeFrame, unsigned int endTime, unsigned int startHeight, unsigned int endHeight);
 
 public:
     struct exchangeRateHistoryValue {
@@ -511,6 +614,50 @@ public:
     bool isWatchAddress(const std::string& address);
     void addWatchAddress(const std::string& address);
 
+    //DigiDollar tables
+    void createDigiDollarUTXO(const std::string& txid, uint16_t vout, const std::string& address,
+                              uint64_t amount, unsigned int heightCreated);
+    /**
+     * Marks a DigiDollar output spent.  Silently does nothing when the outpoint is unknown, which
+     * happens for any DigiDollar created before this node started indexing it.
+     * @return amount that was spent, or 0 if the outpoint was not one of ours
+     */
+    uint64_t spendDigiDollarUTXO(const std::string& txid, uint16_t vout, unsigned int height,
+                                 const std::string& spentTXID);
+    bool isDigiDollarUTXO(const std::string& txid, uint16_t vout);
+    uint64_t getDigiDollarBalance(const std::string& address);
+    std::vector<DigiDollarUTXO> getDigiDollarUTXOs(const std::string& address);
+    uint64_t getDigiDollarOnUTXO(const std::string& txid, uint16_t vout);
+
+    void createDigiDollarVault(const std::string& txid, uint16_t vout, const std::string& address,
+                               uint64_t collateral, uint64_t minted, unsigned int lockHeight,
+                               uint8_t lockTier, unsigned int heightCreated);
+    /**
+     * Marks a vault redeemed.
+     * @return DigiDollar cents the vault had minted, or 0 if the outpoint was not a known vault
+     */
+    uint64_t redeemDigiDollarVault(const std::string& txid, uint16_t vout, unsigned int height,
+                                   const std::string& redeemedTXID);
+    std::vector<DigiDollarVault> getDigiDollarVaults(const std::string& address, bool includeRedeemed = false);
+
+    void addDigiDollarRate(unsigned int height, unsigned int epoch, uint64_t price, unsigned int time,
+                           unsigned int participants);
+    /**
+     * Most recent published price at or below height.  Throws out_of_range when no oracle
+     * commitment has been recorded yet, which is the normal state before activation.
+     */
+    DigiDollarRate getDigiDollarRateAtHeight(unsigned int height);
+    DigiDollarRate getCurrentDigiDollarRate();
+    std::vector<DigiDollarRate> getDigiDollarRateHistory(unsigned int startHeight, unsigned int endHeight,
+                                                         unsigned int limit);
+    DigiDollarSummary getDigiDollarSummary();
+
+    //how far DigiDollar indexing is known complete.  0 means never indexed, which is what
+    //triggers the backfill rewind in ChainAnalyzer.
+    unsigned int getDigiDollarLastEpoch(); //highest oracle epoch recorded, 0 if none
+    unsigned int getDigiDollarSyncHeight();
+    void setDigiDollarSyncHeight(unsigned int height);
+
     //flag table
     int getBeenPrunedExchangeHistory(); //-1 = never, above=height which anything below may be pruned
     int getBeenPrunedUTXOHistory();     //-1 = never, above=height which anything below may be pruned
@@ -620,6 +767,7 @@ public:
     bool canGetAddressStats();
     std::vector<AlgoStats> getAlgoStats(unsigned int start = 0, unsigned int end = std::numeric_limits<unsigned int>::max(), unsigned int timeFrame = 86400);
     std::vector<AddressStats> getAddressStats(unsigned int start = 0, unsigned int end = std::numeric_limits<unsigned int>::max(), unsigned int timeFrame = 86400);
+    std::vector<DigiDollarStats> getDigiDollarStats(unsigned int start = 0, unsigned int end = std::numeric_limits<unsigned int>::max(), unsigned int timeFrame = 86400);
 
     /*
     ███████╗██████╗ ██████╗  ██████╗ ██████╗ ███████╗

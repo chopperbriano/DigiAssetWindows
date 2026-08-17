@@ -51,6 +51,7 @@ public:
     void setPruneUTXOHistory(bool shouldPrune);
     void setPruneVoteHistory(bool shouldPrune);
     void setStoreNonAssetUTXO(bool shouldStore);
+    void setTrackDigiDollar(bool shouldTrack);
 
     //running state modifiers
     void restart(); //erases all data and starts syncing over from block 1
@@ -120,6 +121,7 @@ private:
     bool shouldPruneUTXOHistory() const;
     bool shouldPruneVoteHistory() const;
     bool shouldStoreNonAssetUTXO() const;
+    bool shouldTrackDigiDollar() const;
 
     //state(for defaults see resetConfig() )
     std::atomic<int> _state{STOPPED}; // atomic: written by the analyzer thread AND the RPC/stats path
@@ -133,6 +135,7 @@ private:
     bool _pruneUTXOHistory;     //if true prune "utxos"
     bool _pruneVoteHistory;     //if true prune "votes
     bool _storeNonAssetUTXOs;   //if false won't bother storing NonAsset UTXOS
+    bool _trackDigiDollar;      //if false won't index DigiDollar balances, vaults or oracle prices
     bool _verifyDatabaseWrite;  //if set to false will write without checking
     bool _showAllBlockSyncTime; //if true will not collapse blocks of 100 together when behind
     bool _pipelineSync;         //if true, prefetch the next block on a bg thread during deep bulk sync
@@ -164,6 +167,12 @@ private:
     void phaseRewind();//detect a fork at the current height and roll the DB back to the fork point
     void phaseSync();  //main catch-up/tip-follow loop: fetch, process, and store each block
     void phasePrune(); //drop history older than the prune window when it's time to prune
+    void phaseDigiDollarBackfill(); //rewind to DigiDollar activation and re-scan when first enabled
+
+    //highest oracle epoch already recorded.  Every block in an epoch republishes the same
+    //commitment, so this lets the sync loop skip fetching the coinbase 39 times out of 40.
+    unsigned int _lastOracleEpoch = 0;
+    void captureOracleCommitment(unsigned int height, const std::string& coinbaseTxid);
 
     //process sub functions
     void processTX(const std::string& txid, unsigned int height);//parse one tx, store it, invalidate caches

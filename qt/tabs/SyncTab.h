@@ -22,7 +22,10 @@ private slots:
     void updateSyncStatus();
 
 private:
+    void updateDigiDollarStatus();
+
     QLabel * _syncLabel;
+    QLabel * _digidollarLabel;
     QLabel * _exchangeRatesLabel;
     QTimer * _timer;
     DigiByteCore _dgbCore;

@@ -38,10 +38,13 @@ private slots:
 
 private:
     ///the asset moved to a particular output of a transaction
+    ///What moved to an output, beyond plain DigiByte: either a DigiAsset(assetIndex non zero) or
+    ///DigiDollar(digidollarCents non zero).  One output can carry only one or the other.
     struct AssetMove {
         uint64_t assetIndex = 0;
         uint64_t count = 0;   //amount in the smallest unit
         unsigned int decimals = 0;
+        uint64_t digidollarCents = 0; //DigiDollar on this output, in cents(100 == $1.00)
     };
     ///decodes a transaction and returns, per receiving address, the asset moved to it.  Only
     ///cached once the transaction has a confirmation - an unconfirmed transaction has no

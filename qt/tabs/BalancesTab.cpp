@@ -19,6 +19,14 @@ BalancesTab::BalancesTab(QWidget *parent) : QWidget(parent), _dgbCore() {
     topRow->addWidget(_dgbIconLabel);
     _digibyteLabel = new QLabel("DigiByte: Loading...");
     topRow->addWidget(_digibyteLabel);
+
+    //DigiDollar sits beside DigiByte rather than in the asset table: it is a native balance, not
+    //a DigiAsset, and has no assetIndex, assetId or icon to put in those columns.
+    _digidollarLabel = new QLabel();
+    _digidollarLabel->setVisible(false); //stays hidden until we know the wallet holds some
+    topRow->addSpacing(20);
+    topRow->addWidget(_digidollarLabel);
+
     topRow->addStretch();
     _refreshButton = new QPushButton("Refresh");
     connect(_refreshButton, &QPushButton::clicked, this, &BalancesTab::updateBalances);
@@ -76,6 +84,18 @@ void BalancesTab::updateBalances() {
         Json::Value result = _dgbCore.sendcommand("getwalletbalances", args);
 
         _digibyteLabel->setText("DigiByte: " + QString::fromStdString(result["digibyte"]["amount"].asString()) + " DGB");
+
+        //Only shown when there is something to show.  A wallet that has never touched DigiDollar
+        //should not carry a permanent "0.00 DD" around, and the field is absent entirely when the
+        //daemon is running with trackdigidollar=0.
+        uint64_t cents = result["digidollar"].isObject() ? result["digidollar"]["cents"].asUInt64() : 0;
+        if (cents > 0) {
+            _digidollarLabel->setText(
+                    "DigiDollar: $" + QString::fromStdString(result["digidollar"]["amount"].asString()));
+            _digidollarLabel->setVisible(true);
+        } else {
+            _digidollarLabel->setVisible(false);
+        }
 
         const Json::Value &assets = result["assets"];
         _assetTable->setRowCount(assets.size());
