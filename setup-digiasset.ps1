@@ -76,7 +76,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.22.1'
+$SCRIPT_VERSION = '2.23.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -94,8 +94,10 @@ $DgbExeDefault  = Join-Path $DigiByteDir  'daemon\digibyted.exe'
 $NodeExe        = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe         = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
 $PoolExe        = Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'  # present only on a pool box
-$IpfsExe        = Join-Path $DigiAssetDir 'ipfs.exe'
-$IpfsRepo       = Join-Path $DigiAssetDir 'ipfs-repo'
+# Legacy headless-kubo paths. Nothing installs or runs these any more (IPFS
+# Desktop bundles its own kubo + repo), but the names are kept so the upgrade
+# cleanup below can find what an older install left on disk.
+$LegacyIpfsRepo = Join-Path $DigiAssetDir 'ipfs-repo'
 $NodeConfig     = Join-Path $DigiAssetDir 'config.cfg'
 $DgbConf        = Join-Path $DigiByteDir  'digibyte.conf'  # conf lives in C:\DigiByte (NOT in Data)
 $LogDir         = Join-Path $DigiAssetDir 'logs'
@@ -686,70 +688,13 @@ function Start-DigiByteWallet {
     return $true
 }
 
-function Get-KuboLatestVersion {
-    try {
-        $versions = (Invoke-WebRequest 'https://dist.ipfs.tech/kubo/versions' -UseBasicParsing -TimeoutSec 20).Content -split "`n"
-        return (($versions | Where-Object { $_ -and ($_ -notmatch 'rc') } | Select-Object -Last 1).Trim().TrimStart('v'))
-    } catch { return '' }
-}
-
-# Return a kubo version that actually exists for download: the requested one if
-# its Windows zip is published, otherwise the current latest. (The pinned
-# baseline may be ahead of what has shipped.)
-function Resolve-KuboVersion($requested) {
-    $v = "v$requested"
-    try {
-        Invoke-WebRequest "https://dist.ipfs.tech/kubo/$v/kubo_${v}_windows-amd64.zip" -Method Head -UseBasicParsing -TimeoutSec 20 | Out-Null
-        return $requested
-    } catch {}
-    $latest = Get-KuboLatestVersion
-    if ($latest) {
-        if ($latest -ne $requested) { Log "  kubo $requested is not published yet; using current latest $latest." 'WARN' }
-        return $latest
-    }
-    throw "no downloadable kubo version found (requested $requested)."
-}
-
-function Install-Ipfs($ver) {
-    $v   = "v$ver"
-    $url = "https://dist.ipfs.tech/kubo/$v/kubo_${v}_windows-amd64.zip"
-    $zip = Join-Path $Tmp "kubo_$ver.zip"
-    if (-not (Get-File $url $zip)) { throw "could not download kubo from $url" }
-
-    # SHA-512 verify against the published sidecar; abort on a real mismatch.
-    try {
-        $expected = ((Invoke-WebRequest "$url.sha512" -UseBasicParsing -TimeoutSec 20).Content -split '\s+')[0].Trim().ToLower()
-        if ($expected) {
-            if ((Get-Sha512Hex $zip) -ne $expected) { Remove-Item $zip -Force; throw 'kubo checksum mismatch - aborting.' }
-            Log '  IPFS checksum verified (SHA-512).' 'OK'
-        }
-    } catch { Log "  (IPFS checksum step skipped: $($_.Exception.Message))" 'WARN' }
-
-    $ex = Join-Path $Tmp 'kubo_extract'
-    if (Test-Path $ex) { Remove-Item $ex -Recurse -Force }
-    Expand-Archive -Path $zip -DestinationPath $ex -Force
-    $wasRunning = Test-ProcRunning 'ipfs'
-    if ($wasRunning) { try { Invoke-RestMethod 'http://127.0.0.1:5001/api/v0/shutdown' -Method Post -TimeoutSec 6 | Out-Null } catch {}; Start-Sleep 2; Get-Process ipfs -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
-    Copy-Item (Join-Path $ex 'kubo\ipfs.exe') -Destination $IpfsExe -Force
-    Log "  + IPFS/kubo $ver -> $IpfsExe" 'OK'
-}
-
-function Initialize-Ipfs {
-    [Environment]::SetEnvironmentVariable('IPFS_PATH', $IpfsRepo, 'Machine')
-    $env:IPFS_PATH = $IpfsRepo
-    if (-not (Test-Path (Join-Path $IpfsRepo 'config'))) { & $IpfsExe init | Out-Null; Log '  IPFS repo initialised.' }
-    try {
-        $pubip = (Invoke-RestMethod 'https://api.ipify.org' -TimeoutSec 10).Trim()
-        if ($pubip) { & $IpfsExe config --json Addresses.Announce "[`"/ip4/$pubip/tcp/4001`"]" | Out-Null; Log "  IPFS announce set to $pubip:4001" }
-    } catch {}
-}
-function Start-Ipfs {
-    if (-not (Test-Path $IpfsExe)) { return $false }
-    $env:IPFS_PATH = $IpfsRepo
-    Add-ProgramAllowRule 'IPFS (kubo)' $IpfsExe
-    if (-not (Test-ProcRunning 'ipfs')) { Start-Process -FilePath $IpfsExe -ArgumentList 'daemon --enable-gc' -WindowStyle Hidden }
-    return $true
-}
+# NOTE: the headless raw-kubo install path (Get-KuboLatestVersion,
+# Resolve-KuboVersion, Install-Ipfs, Initialize-Ipfs, Start-Ipfs) was removed - it
+# had no callers left after the switch to IPFS Desktop, which bundles kubo and
+# runs it internally on :5001. It survived long enough to make the header docs
+# claim a "pinned kubo version" that was never installed. The legacy cleanup it
+# left behind IS still needed and lives in Invoke-Install: unregistering the old
+# DigiStampIPFS task and clearing a stale machine-level IPFS_PATH.
 
 # --- IPFS Desktop (GUI, tray icon) - the run model used by the installer -----
 function Get-IpfsDesktopAsset {
@@ -1515,6 +1460,19 @@ function Invoke-Install {
     # 2. IPFS Desktop (GUI) --------------------------------------------------
     Step 2 'Installing IPFS Desktop (GUI, tray icon)...'
     if (Get-ScheduledTask -TaskName $TaskIpfs -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskIpfs -Confirm:$false }  # drop legacy headless kubo task
+    # An install that predates IPFS Desktop set a MACHINE-level IPFS_PATH pointing
+    # at our old ipfs-repo. kubo honours that env var, and IPFS Desktop runs kubo -
+    # so leaving it set silently points Desktop at the stale repo instead of its
+    # own. Clear it, but ONLY when it still points at our legacy folder, so an
+    # operator who deliberately set IPFS_PATH elsewhere is left alone.
+    try {
+        $staleIpfsPath = [Environment]::GetEnvironmentVariable('IPFS_PATH', 'Machine')
+        if ($staleIpfsPath -and ($staleIpfsPath.TrimEnd('\') -ieq $LegacyIpfsRepo.TrimEnd('\'))) {
+            [Environment]::SetEnvironmentVariable('IPFS_PATH', $null, 'Machine')
+            $env:IPFS_PATH = $null
+            Log '  cleared a stale machine-level IPFS_PATH left by the old headless kubo install.' 'OK'
+        }
+    } catch { Log "  (could not check IPFS_PATH: $($_.Exception.Message))" 'WARN' }
     $ipfsVer = Install-IpfsDesktop
     Start-IpfsDesktop | Out-Null
     Log '  IPFS Desktop running (tray icon) + auto-starts at logon.' 'OK'
