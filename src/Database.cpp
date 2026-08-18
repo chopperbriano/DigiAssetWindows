@@ -451,7 +451,13 @@ void Database::initializeClassValues() {
     addPerformanceIndex("utxos", "address", "heightDestroyed", "spentTXID");
 
     //statements to get asset holdings
-    _stmtGetAddressHoldings.prepare(_db, "SELECT assetIndex,SUM(amount) FROM utxos WHERE heightDestroyed IS NULL AND address=? GROUP BY assetIndex");
+    //HAVING SUM(amount)>0: a DigiDollar output is a taproot output holding 0 DGB on a real
+    //address, so with storenonassetutxo=1 it lands here as assetIndex 1 amount 0 and the group by
+    //would report "this address holds 0 DigiByte" as an entry.  Nothing before DigiDollar could
+    //produce an addressed zero value output - OP_RETURNs carry no address and everything else
+    //carries at least dust - so this is new.  A zero balance means the same thing as no entry,
+    //which is how every other address already behaves.
+    _stmtGetAddressHoldings.prepare(_db, "SELECT assetIndex,SUM(amount) FROM utxos WHERE heightDestroyed IS NULL AND address=? GROUP BY assetIndex HAVING SUM(amount)>0");
     addPerformanceIndex("utxos", "address", "heightDestroyed", "assetIndex");
 
     //statement to get valid utxos for a given address
