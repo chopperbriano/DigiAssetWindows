@@ -296,10 +296,12 @@
           <div>
             <div class="row"><span class="k">Your holdings</span><span class="v" id="ddMine">—</span></div>
             <div class="row"><span class="k">Oracle price</span><span class="v" id="ddPrice">—</span></div>
+            <div class="row"><span class="k">Oracles signing</span><span class="v" id="ddOracles">—</span></div>
           </div>
           <div>
             <div class="row"><span class="k">Supply</span><span class="v" id="ddSupply">—</span></div>
             <div class="row"><span class="k">Holders</span><span class="v" id="ddHolders">—</span></div>
+            <div class="row"><span class="k">Price from block</span><span class="v" id="ddPriceHeight">—</span></div>
           </div>
           <div>
             <div class="row"><span class="k">Collateral locked</span><span class="v" id="ddCollateral">—</span></div>
@@ -559,7 +561,7 @@ function applyStatus(d){
    integer cents/sats there); the browser never does the fixed-point maths. */
 function renderDigiDollar(d){
   var dd = d.digidollar || {};
-  var ids = ['ddMine','ddPrice','ddSupply','ddHolders','ddCollateral','ddVaults'];
+  var ids = ['ddMine','ddPrice','ddOracles','ddPriceHeight','ddSupply','ddHolders','ddCollateral','ddVaults'];
   function blank(){ ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.textContent='—'; }); }
 
   if(dd.error){ setPill('ddPill','red','unavailable'); blank(); return; }
@@ -583,6 +585,18 @@ function renderDigiDollar(d){
   document.getElementById('ddPrice').textContent = dd.hasPrice
       ? ('$'+Number(dd.usdPerDGB).toFixed(6)+' / DGB')
       : 'no oracle price yet';
+
+  // How many oracles signed the commitment the price came from. A price is only
+  // as trustworthy as the number of oracles behind it, so show them together.
+  document.getElementById('ddOracles').textContent =
+      (dd.oracles!==undefined) ? (fmt(dd.oracles)+' signed this price') : '—';
+
+  // Which block the commitment was seen in. One commitment covers a 40-block
+  // epoch, so this legitimately lags the chain tip - it is not staleness.
+  document.getElementById('ddPriceHeight').textContent =
+      (dd.priceHeight!==undefined)
+        ? (fmt(dd.priceHeight) + (dd.priceEpoch!==undefined ? (' · epoch '+fmt(dd.priceEpoch)) : ''))
+        : '—';
 
   // Wallet holdings come from the wallet block when the node reports them.
   var w = (d.digibyte&&d.digibyte.wallet) || {};

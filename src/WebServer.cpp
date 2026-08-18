@@ -266,6 +266,21 @@ std::string WebServer::statusJson() {
                     dd["microUSDPerDGB"] = static_cast<Json::UInt64>(s.price);
                     dd["usdPerDGB"] = static_cast<double>(s.price) / 1e6;
                     dd["hasPrice"] = true;
+                    //The summary carries the price but not who signed it. Fetch the
+                    //commitment itself for the participant count, the epoch, and the
+                    //height it was seen at - "price $0.004216 from 7 oracles" is a far
+                    //more trustworthy statement than the number on its own. Best
+                    //effort: a missing commitment must not cost us the price we
+                    //already have.
+                    try {
+                        DigiDollarRate rate = ddb->getCurrentDigiDollarRate();
+                        dd["oracles"] = rate.participants;
+                        dd["priceEpoch"] = rate.epoch;
+                        dd["priceHeight"] = rate.height;
+                        dd["priceTime"] = rate.time;
+                    } catch (...) {
+                        //price known but commitment detail unavailable
+                    }
                 } else {
                     dd["hasPrice"] = false;
                 }

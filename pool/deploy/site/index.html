@@ -369,7 +369,7 @@
            pool whose node has trackdigidollar=0 (or is still running the activation
            backfill) shows nothing rather than a row of misleading zeros. -->
       <div class="stats" id="ddStats" style="display:none">
-        <div class="stat"><div class="num" id="statDdPrice">&mdash;</div><div class="lbl">DigiDollar price (USD/DGB)</div></div>
+        <div class="stat"><div class="num" id="statDdPrice">&mdash;</div><div class="lbl" id="statDdPriceLbl">DigiDollar price (USD/DGB)</div></div>
         <div class="stat"><div class="num" id="statDdSupply">&mdash;</div><div class="lbl">DigiDollar supply</div></div>
         <div class="stat"><div class="num" id="statDdCollateral">&mdash;</div><div class="lbl">DGB collateral locked</div></div>
         <div class="stat"><div class="num" id="statDdVaults">&mdash;</div><div class="lbl">Collateral vaults</div></div>
@@ -496,6 +496,12 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
         document.getElementById("statDdCollateral").textContent =
           (dd.collateral !== undefined) ? fmt(Math.round(Number(dd.collateral))) : "—";
         document.getElementById("statDdVaults").textContent = fmt(dd.vaults || 0);
+        // A price means little without knowing how many oracles stood behind it,
+        // so fold the count into the label rather than spending a whole tile.
+        var lbl = document.getElementById("statDdPriceLbl");
+        if (lbl && dd.oracles !== undefined) {
+          lbl.textContent = "DigiDollar price · " + dd.oracles + " oracles";
+        }
         document.getElementById("ddStats").style.display = "";
       })
       .catch(function () { /* no node endpoint on this pool - leave it hidden */ });
