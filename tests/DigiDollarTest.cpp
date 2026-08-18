@@ -9,6 +9,7 @@
 
 #include "DigiAssetConstants.h"
 #include "Database.h"
+#include "DigiAsset.h"
 #include "DigiDollar.h"
 #include "gtest/gtest.h"
 
@@ -372,4 +373,40 @@ TEST(DigiDollarDatabase, emptyTableReportsNoPriceRatherThanZero) {
 
     EXPECT_THROW(db.getCurrentDigiDollarRate(), std::out_of_range);
     EXPECT_EQ(db.getDigiDollarLastEpoch(), 0u);
+}
+
+TEST(DigiDollarDatabase, zeroValueOutputsDoNotAppearAsHoldings) {
+    //A DigiDollar output carries 0 DGB on a real address, so with storenonassetutxo=1 it reaches
+    //the utxos table as assetIndex 1 amount 0.  Reporting that as a holding told callers the
+    //address "holds 0 DigiByte", which no other address has ever done.
+    remove("../tests/testFiles/_testDigiDollarHoldings.db");
+    Database db("../tests/testFiles/_testDigiDollarHoldings.db");
+
+    const string ddAddress = "dgb1parsr0faekm6l5zssayp65fge9nvaszaaqf5epcayqszfamgh9uxsuxph0u";
+    const string dgbAddress = "dgb1q3tqgqhd59kypu0l9dahcmelhrvqeyvppalzh6m";
+
+    //a DigiDollar bearing output: real address, no DigiByte, no DigiAssets
+    AssetUTXO ddOutput{
+            .txid = "522ddcb060ef73aa34f98bb972d97fb9b1f0e998a23d961c6e38799b9d78187c",
+            .vout = 1,
+            .address = ddAddress,
+            .digibyte = 0};
+    db.createUTXO(ddOutput, 24050435, false);
+
+    //an ordinary output for contrast
+    AssetUTXO dgbOutput{
+            .txid = "522ddcb060ef73aa34f98bb972d97fb9b1f0e998a23d961c6e38799b9d78187c",
+            .vout = 3,
+            .address = dgbAddress,
+            .digibyte = 38439561};
+    db.createUTXO(dgbOutput, 24050435, false);
+
+    //the DigiDollar address reports no DigiByte holding at all, rather than a zero one
+    EXPECT_TRUE(db.getAddressHoldings(ddAddress).empty());
+
+    //while a real DigiByte balance is still reported as before
+    auto holdings = db.getAddressHoldings(dgbAddress);
+    ASSERT_EQ(holdings.size(), 1u);
+    EXPECT_EQ(holdings[0].assetIndex, 1u);
+    EXPECT_EQ(holdings[0].count, 38439561u);
 }
