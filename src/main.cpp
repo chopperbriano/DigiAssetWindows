@@ -69,8 +69,9 @@ int main(int argc, char* argv[]) {
         if (arg == "--bootgen") {
             bootGenMode = true;
         } else if ((arg == "--help") || (arg == "-h")) {
-            cout << "DigiAsset Core " << getVersionString() << "\n"
-                 << "Usage: digiasset_core [options]\n"
+            //fork branding: upstream prints "DigiAsset Core <ver>" / digiasset_core
+            cout << getProductVersionString() << "\n"
+                 << "Usage: DigiAssetWindows.exe [options]\n"
                  << "  --bootgen   Sync to the chain tip, then compact the database into a single\n"
                  << "              shareable file and shut down.  Used to build the IPFS bootstrap\n"
                  << "              image.  The RPC server and event stream stay off.\n"
