@@ -288,6 +288,26 @@
         <div class="row"><span class="k">Wallet name</span><span class="v" id="walName">—</span></div>
       </div>
 
+      <!-- DigiDollar -->
+      <div class="card span12">
+        <h2>DigiDollar</h2>
+        <div style="margin-bottom:9px"><span class="pill gray" id="ddPill"><span class="pd"></span><span>—</span></span></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+          <div>
+            <div class="row"><span class="k">Your holdings</span><span class="v" id="ddMine">—</span></div>
+            <div class="row"><span class="k">Oracle price</span><span class="v" id="ddPrice">—</span></div>
+          </div>
+          <div>
+            <div class="row"><span class="k">Supply</span><span class="v" id="ddSupply">—</span></div>
+            <div class="row"><span class="k">Holders</span><span class="v" id="ddHolders">—</span></div>
+          </div>
+          <div>
+            <div class="row"><span class="k">Collateral locked</span><span class="v" id="ddCollateral">—</span></div>
+            <div class="row"><span class="k">Vaults</span><span class="v" id="ddVaults">—</span></div>
+          </div>
+        </div>
+      </div>
+
       <!-- Pool & Payouts -->
       <div class="card span12">
         <h2>Pool &amp; Payouts</h2>
@@ -523,6 +543,51 @@ function applyStatus(d){
     document.getElementById('walTx').textContent = fmt(w.txCount);
     document.getElementById('walName').textContent = (w.name!==undefined && w.name!=='') ? w.name : 'default';
   }
+
+  renderDigiDollar(d);
+}
+
+/* ---------- DigiDollar ----------
+   Three genuinely different states, and conflating them is what makes a healthy
+   node look broken:
+     not configured  - trackdigidollar=0, so there is nothing to show and that is fine
+     indexing        - upgraded but still rewinding/re-scanning from activation.
+                       Numbers exist but are INCOMPLETE, so they must not be shown
+                       as if final (a mid-backfill node reads supply 0).
+     indexed         - real figures
+   Amounts arrive pre-formatted from the node (supply/collateral are rendered from
+   integer cents/sats there); the browser never does the fixed-point maths. */
+function renderDigiDollar(d){
+  var dd = d.digidollar || {};
+  var ids = ['ddMine','ddPrice','ddSupply','ddHolders','ddCollateral','ddVaults'];
+  function blank(){ ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.textContent='—'; }); }
+
+  if(dd.error){ setPill('ddPill','red','unavailable'); blank(); return; }
+  if(dd.indexed===undefined){ setPill('ddPill','gray','—'); blank(); return; }
+
+  if(!dd.indexed){
+    // syncHeight below activation means the backfill has not finished
+    setPill('ddPill','amber','indexing — figures incomplete');
+    blank();
+    return;
+  }
+
+  setPill('ddPill','green','indexed');
+
+  document.getElementById('ddSupply').textContent     = (dd.supply!==undefined) ? ('$'+dd.supply) : '—';
+  document.getElementById('ddHolders').textContent    = fmt(dd.holders);
+  document.getElementById('ddCollateral').textContent = (dd.collateral!==undefined) ? (dd.collateral+' DGB') : '—';
+  document.getElementById('ddVaults').textContent     = fmt(dd.vaults);
+
+  // hasPrice distinguishes "no oracle commitment seen yet" from a price of zero
+  document.getElementById('ddPrice').textContent = dd.hasPrice
+      ? ('$'+Number(dd.usdPerDGB).toFixed(6)+' / DGB')
+      : 'no oracle price yet';
+
+  // Wallet holdings come from the wallet block when the node reports them.
+  var w = (d.digibyte&&d.digibyte.wallet) || {};
+  document.getElementById('ddMine').textContent =
+      (w.digidollar!==undefined && w.digidollar!==null) ? ('$'+w.digidollar) : 'none';
 }
 function markOffline(){
   document.getElementById('offline').classList.add('show');
@@ -568,6 +633,7 @@ poll(); setInterval(poll, 3000);
 /* iface: 'asset' = DigiAssetWindows-cli (port 14024) · 'core' = digibyte-cli (14022) */
 var CATALOG=[
  {cat:'DigiAssets',iface:'asset',m:['addressstats','algostats','asyncclear','asyncget','asyncstart','debugwaittimes','getaddressholdings','getaddresskyc','getassetdata','getassetholders','getassetindexes','getdgbequivalent','getdomainaddress','getencryptedkey','getexchangerates','getipfscount','getnewaddress','getnodestats','getpsp','getrandom','getwalletbalances','issueasset','listaddresshistory','listassetissuances','listassets','listlastassets','listlastassetspageindexes','listlastblocks','reissueasset','resyncmetadata','sendasset','sendmanyassets','burnasset','shutdown','syncstate','version']},
+ {cat:'DigiDollar',iface:'asset',m:['digidollarstats','getdigidollarinfo']},
  {cat:'Blockchain',iface:'core',m:['getbestblockhash','getblock','getblockchaininfo','getblockcount','getblockfilter','getblockhash','getblockheader','getblockstats','getchaintips','getchaintxstats','getdifficulty','getmempoolancestors','getmempooldescendants','getmempoolentry','getmempoolinfo','getrawmempool','gettxout','gettxoutproof','gettxoutsetinfo','preciousblock','pruneblockchain','savemempool','scantxoutset','verifychain','verifytxoutproof']},
  {cat:'Wallet',iface:'core',m:['abandontransaction','abortrescan','addmultisigaddress','backupwallet','bumpfee','createwallet','dumpprivkey','dumpwallet','encryptwallet','getaddressesbylabel','getaddressinfo','getbalance','getbalances','getnewaddress','getrawchangeaddress','getreceivedbyaddress','getreceivedbylabel','gettransaction','getunconfirmedbalance','getwalletinfo','importaddress','importdescriptors','importmulti','importprivkey','importprunedfunds','importpubkey','importwallet','keypoolrefill','listaddressgroupings','listlabels','listlockunspent','listreceivedbyaddress','listreceivedbylabel','listsinceblock','listtransactions','listunspent','listwalletdir','listwallets','loadwallet','lockunspent','psbtbumpfee','removeprunedfunds','rescanblockchain','send','sendmany','sendtoaddress','sethdseed','setlabel','settxfee','setwalletflag','signmessage','signrawtransactionwithwallet','unloadwallet','upgradewallet','walletcreatefundedpsbt','walletlock','walletpassphrase','walletpassphrasechange','walletprocesspsbt']},
  {cat:'Raw Transactions',iface:'core',m:['analyzepsbt','combinepsbt','combinerawtransaction','converttopsbt','createpsbt','createrawtransaction','decodepsbt','decoderawtransaction','decodescript','finalizepsbt','fundrawtransaction','getrawtransaction','joinpsbts','sendrawtransaction','signrawtransactionwithkey','testmempoolaccept','utxoupdatepsbt']},

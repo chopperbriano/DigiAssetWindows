@@ -365,6 +365,15 @@
         <div class="stat"><div class="num" id="statPaid">&mdash;</div><div class="lbl">Paid to hosts</div></div>
         <div class="stat"><div class="num" id="statNodes">&mdash;</div><div class="lbl">Verified / active nodes</div></div>
       </div>
+      <!-- DigiDollar. Hidden entirely until the node reports indexed figures, so a
+           pool whose node has trackdigidollar=0 (or is still running the activation
+           backfill) shows nothing rather than a row of misleading zeros. -->
+      <div class="stats" id="ddStats" style="display:none">
+        <div class="stat"><div class="num" id="statDdPrice">&mdash;</div><div class="lbl">DigiDollar price (USD/DGB)</div></div>
+        <div class="stat"><div class="num" id="statDdSupply">&mdash;</div><div class="lbl">DigiDollar supply</div></div>
+        <div class="stat"><div class="num" id="statDdCollateral">&mdash;</div><div class="lbl">DGB collateral locked</div></div>
+        <div class="stat"><div class="num" id="statDdVaults">&mdash;</div><div class="lbl">Collateral vaults</div></div>
+      </div>
       <div class="donate">
         <div id="qr" aria-label="Donation address QR code"></div>
         <div class="addrbox">
@@ -469,6 +478,29 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
     }).join("");
   }
 
+  // DigiDollar comes from the NODE on this box, not the pool server: the pool
+  // server has the ledger, but DigiDollar lives in chain.db which only the node
+  // reads. Caddy proxies /pool/digidollar.json -> the node's public DigiDollar
+  // endpoint. Entirely best-effort: if the route is absent (a pool whose box runs
+  // no node, or an older node build) the block stays hidden and nothing else on
+  // the page is affected.
+  function loadDigiDollar() {
+    fetch("/pool/digidollar.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (dd) {
+        if (!dd || dd.error || !dd.indexed) return;   // not indexed yet -> stay hidden
+        document.getElementById("statDdPrice").textContent =
+          dd.hasPrice ? ("$" + Number(dd.usdPerDGB).toFixed(6)) : "—";
+        document.getElementById("statDdSupply").textContent =
+          (dd.supply !== undefined) ? ("$" + dd.supply) : "—";
+        document.getElementById("statDdCollateral").textContent =
+          (dd.collateral !== undefined) ? fmt(Math.round(Number(dd.collateral))) : "—";
+        document.getElementById("statDdVaults").textContent = fmt(dd.vaults || 0);
+        document.getElementById("ddStats").style.display = "";
+      })
+      .catch(function () { /* no node endpoint on this pool - leave it hidden */ });
+  }
+
   function load() {
     fetch("/pool/stats.json", { cache: "no-store" })
       .then(function (r) { return r.json(); })
@@ -477,6 +509,7 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
         document.getElementById("payoutRows").innerHTML =
           '<tr><td colspan="4" class="muted">Stats temporarily unavailable.</td></tr>';
       });
+    loadDigiDollar();
   }
   // Copy-address button (wired once). Uses the async Clipboard API on HTTPS,
   // with an execCommand fallback for older browsers / non-secure contexts.

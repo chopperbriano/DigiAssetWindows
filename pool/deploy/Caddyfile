@@ -36,6 +36,20 @@
 		reverse_proxy 127.0.0.1:{$POOLPORT}
 	}
 
+	# DigiDollar figures for the landing page -> the NODE on this box, not the
+	# pool server (DigiAssetPoolServer only has the ledger; DigiDollar lives in
+	# chain.db, which only the node reads).
+	#
+	# ONLY this one path is proxied. The node's /api/status.json on the same port
+	# carries the payout address, payout balance, wallet balances and external IP,
+	# so it must never be exposed - /api/digidollar.json is a separate endpoint
+	# built to be public and returns chain-derived figures only.
+	@digidollar path /pool/digidollar.json
+	handle @digidollar {
+		rewrite * /api/digidollar.json
+		reverse_proxy 127.0.0.1:{$NODEWEBPORT}
+	}
+
 	# Everything else -> the static landing page.
 	handle {
 		root * {$SITE_ROOT}

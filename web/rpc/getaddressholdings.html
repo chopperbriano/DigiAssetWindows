@@ -25,8 +25,10 @@
 <thead valign="bottom"><tr><th class="head">Name</th><th class="head">Type</th><th class="head">Description</th></tr></thead>
 <tbody valign="top">
 <tr><td>&lt;assetIndex&gt;</td><td>numeric</td><td>Quantity of the asset (identified by its assetIndex key) held by the address. AssetIndex 1 is DigiByte.</td></tr>
+<tr><td>digidollar</td><td>numeric</td><td>DigiDollar held, in cents (100 == $1.00). DigiDollar is not a DigiAsset and has no assetIndex, so it appears under this reserved key instead of a numeric one. Present only when the address holds DigiDollar, and only when <tt class="docutils literal">trackdigidollar=1</tt>.</td></tr>
 </tbody>
 </table>
+<p class="info">Entries with a zero total are omitted, including assetIndex 1. A DigiDollar output is a taproot output carrying 0 DGB on a real address, so without that rule an address holding only DigiDollar would report as holding zero DigiByte &mdash; something no address did before DigiDollar existed.</p>
 </div>
 <div class="section" id="examples">
 <h1>Examples</h1>

@@ -9,6 +9,7 @@
 <h1 class="title">listaddresshistory</h1>
 <p><tt class="docutils literal">listaddresshistory address (minHeight) (maxHeight) (limit)</tt></p>
 <p>Returns the list of transaction ids that a given address was involved in, optionally restricted by block-height range and count. Results are limited by the node's pruning level.</p>
+<p class="info">Transactions that only moved DigiDollar are included. This matters because a DigiDollar output carries 0 DGB and so does not reach the UTXO table &mdash; without this an address whose only activity was DigiDollar would report an empty history. They are included from the DigiDollar activation height (23,869,440) onward, and only when <tt class="docutils literal">trackdigidollar=1</tt>.</p>
 <div class="section" id="arguments">
 <h1>Arguments</h1>
 <table border="1" class="docutils">

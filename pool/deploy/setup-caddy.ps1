@@ -24,6 +24,10 @@
 param(
     [string]$Domain    = "pool.digistamp.co",
     [int]   $PoolPort  = 14028,
+    # The NODE's web server on this box (config.cfg webport). Used for exactly one
+    # proxied route: /pool/digidollar.json. DigiDollar figures live in chain.db,
+    # which only the node reads - the pool server has the ledger but no chain data.
+    [int]   $NodeWebPort = 8090,
     [string]$InstallDir = "C:\DigiStampPool",
     [string]$PoolCfg    = "C:\DigiAssetWindows\pool.cfg"
 )
@@ -79,6 +83,7 @@ $template = Get-Content (Join-Path $scriptDir "Caddyfile") -Raw
 $resolved = $template.
     Replace('{$DOMAIN}',   $Domain).
     Replace('{$POOLPORT}', "$PoolPort").
+    Replace('{$NODEWEBPORT}', "$NodeWebPort").
     Replace('{$SITE_ROOT}', ($siteDir -replace '\\','/')).
     Replace('{$CADDY_DATA}', ($caddyData -replace '\\','/'))
 Set-Content -Path $caddyfile -Value $resolved -Encoding UTF8

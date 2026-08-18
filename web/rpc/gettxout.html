@@ -62,6 +62,7 @@ digibyte-cli gettxout &quot;txid&quot; 1
 <pre class="literal-block">
 curl --user myusername --data-binary '{&quot;jsonrpc&quot;: &quot;1.0&quot;, &quot;id&quot;: &quot;curltest&quot;, &quot;method&quot;: &quot;gettxout&quot;, &quot;params&quot;: [&quot;txid&quot;, 1]}' -H 'content-type: text/plain;' http://127.0.0.1:14022/
 </pre>
+<p class="info">On the DigiAsset RPC port (14024) the response also carries <tt class="docutils literal">digidollar</tt>: the DigiDollar on this output, in cents (100 == $1.00). The field is present and 0 on a non-DigiDollar output, so &quot;no DigiDollar&quot; is distinguishable from &quot;field not implemented&quot;. A DigiDollar output is a pay-to-taproot output carrying 0 DGB, so its DGB value is 0 and the balance lives entirely in this field. Requires <tt class="docutils literal">trackdigidollar=1</tt>.</p>
 </div>
 </div>
 

@@ -127,6 +127,7 @@ digibyte-cli getrawtransaction &quot;mytxid&quot; false &quot;myblockhash&quot;
 <pre class="literal-block">
 digibyte-cli getrawtransaction &quot;mytxid&quot; true &quot;myblockhash&quot;
 </pre>
+<p class="info">On the DigiAsset RPC port (14024) a DigiDollar transaction also carries a <tt class="docutils literal">digidollar</tt> block giving the transaction type (mint, redeem or transfer) and <tt class="docutils literal">cents</tt>, the total DigiDollar on its outputs. Amounts are always in cents (100 == $1.00), the unit the protocol itself uses. A DigiDollar output is a pay-to-taproot output carrying 0 DGB, so its DGB value reads 0 and the balance lives in this block. Present only on DigiDollar transactions, and only with <tt class="docutils literal">trackdigidollar=1</tt>.</p>
 </div>
 </div>
 

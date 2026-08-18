@@ -28,8 +28,12 @@
 <tr><td>digibyte.sats</td><td>numeric</td><td>DigiByte balance in sats (includes DigiByte locked in asset UTXOs).</td></tr>
 <tr><td>digibyte.amount</td><td>string</td><td>The same DigiByte balance in decimal DGB.</td></tr>
 <tr><td>assets</td><td>array</td><td>One entry per distinct asset held. Each entry has assetIndex (numeric), assetId (string), cid (string, the IPFS cid of the asset's metadata), decimals (numeric), count (numeric, amount held in smallest divisible units) and amount (string, amount held in display units).</td></tr>
+<tr><td>digidollar.cents</td><td>numeric</td><td>DigiDollar held, in cents (100 == $1.00). This is the authoritative value.</td></tr>
+<tr><td>digidollar.amount</td><td>string</td><td>The same figure as a decimal string, for display only.</td></tr>
+<tr><td>digidollar.addresses</td><td>numeric</td><td>Wallet addresses holding DigiDollar. Each address is counted once regardless of how many DigiDollar outputs it holds.</td></tr>
 </tbody>
 </table>
+<p class="info">DigiDollar is not a DigiAsset, so it is reported as its own block rather than as an entry in <tt class="docutils literal">assets</tt>. Present only when <tt class="docutils literal">trackdigidollar=1</tt> and the activation backfill has completed.</p>
 </div>
 <div class="section" id="examples">
 <h1>Examples</h1>

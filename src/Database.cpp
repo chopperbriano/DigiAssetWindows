@@ -4603,7 +4603,13 @@ void Database::handleSpecialErrors(unsigned int lineNumber) {
     }
      */
     if (lineNumber != 0) {
-        Log::GetInstance()->addMessage("Error thrown in database.cpp on line " + to_string(lineNumber) + ": " + tempErrorMessage, Log::DEBUG);
+        //WARNING, not DEBUG. This only ever runs on a path that is about to throw, so it cannot
+        //spam - and the generic "Database Exception: Update failed" that reaches the operator
+        //names neither the statement nor the SQLite cause. At DEBUG it was invisible under the
+        //default logscreen=10/logfile=20, which left a real CRITICAL seen in the field with no
+        //way to identify the throw site short of reproducing it. Now the line number and SQLite
+        //message land in the normal log immediately above the exception.
+        Log::GetInstance()->addMessage("Error thrown in database.cpp on line " + to_string(lineNumber) + ": " + tempErrorMessage, Log::WARNING);
     }
 }
 

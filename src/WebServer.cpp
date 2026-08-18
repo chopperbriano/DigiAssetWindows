@@ -13,9 +13,12 @@
 #include "AppMain.h"
 #include "Config.h"
 #include "CurlHandler.h"
+#include "Database.h"           // DigiDollarSummary + the DigiDollar getters
+#include "DigiAssetConstants.h" // DIGIDOLLAR_ACTIVATION_HEIGHT
 #include "DigiByteCore.h"
 #include "IPFS.h"   // complete type needed for the liveness getters below
 #include "Log.h"
+#include "utils.h"  // toDecimalString for the display-only amount fields
 #include "NodeStats.h"
 #include "Version.h"
 #include <jsoncpp/json/value.h>
@@ -226,6 +229,55 @@ std::string WebServer::statusJson() {
     bitswap["dataSent"] = static_cast<Json::UInt64>(snap.dataSent);
     bitswap["blocksPerMin"] = snap.blocksPerMin;
     ipfs["bitswap"] = bitswap;
+
+    // ---- DigiDollar -------------------------------------------------------
+    // Everything here is best-effort: a node with trackdigidollar=0, or one still
+    // running the activation backfill, has nothing meaningful to report and must
+    // not fail the whole /status response over it.
+    //
+    // "indexed" is the field the UI needs most. Straight after upgrading, a node
+    // legitimately sits at supply=0 / no price while it rewinds and re-scans, and
+    // showing that as "$0.00 supply" would look like a broken node rather than one
+    // that is still working. indexed=false means "don't trust these numbers yet".
+    {
+        Json::Value dd;
+        dd["activationHeight"] = DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT;
+        dd["indexed"] = false;
+        dd["available"] = false;
+        try {
+            Database* ddb = app->getDatabase();
+            if (ddb != nullptr) {
+                unsigned int ddSync = ddb->getDigiDollarSyncHeight();
+                bool indexed = (ddSync >= DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT);
+                dd["indexed"] = indexed;
+                dd["syncHeight"] = ddSync;
+
+                DigiDollarSummary s = ddb->getDigiDollarSummary();
+                dd["supplyCents"] = static_cast<Json::UInt64>(s.supply);
+                dd["supply"] = utils::toDecimalString(s.supply, 2);
+                dd["holders"] = s.holders;
+                dd["collateralSats"] = static_cast<Json::UInt64>(s.collateral);
+                dd["collateral"] = utils::toDecimalString(s.collateral, 8);
+                dd["vaults"] = s.vaults;
+
+                //price 0 means "no oracle commitment seen yet", which is NOT the same
+                //as a price of zero - keep them distinguishable for the UI.
+                if (s.price > 0) {
+                    dd["microUSDPerDGB"] = static_cast<Json::UInt64>(s.price);
+                    dd["usdPerDGB"] = static_cast<double>(s.price) / 1e6;
+                    dd["hasPrice"] = true;
+                } else {
+                    dd["hasPrice"] = false;
+                }
+                dd["available"] = indexed;
+            }
+        } catch (const std::exception& e) {
+            dd["error"] = e.what();
+        } catch (...) {
+            dd["error"] = "unavailable";
+        }
+        root["digidollar"] = dd;
+    }
     root["ipfs"] = ipfs;
 
     Json::Value coverage;
@@ -452,6 +504,47 @@ void WebServer::serverLoop() {
                     res.result(http::status::ok);
                     res.set(http::field::content_type, "application/json");
                     res.set(http::field::cache_control, "no-store");
+                    res.body() = json;
+                    res.keep_alive(req.keep_alive());
+                    res.prepare_payload();
+                    http::write(socket, res, ec);
+                    socket.shutdown(tcp::socket::shutdown_send, ec);
+                    continue;
+                }
+
+                // Public DigiDollar summary. Deliberately its OWN endpoint rather
+                // than letting callers proxy /api/status.json: that response carries
+                // the payout address, payout balance, wallet balances and external
+                // IP, none of which may be published. This returns chain-derived
+                // DigiDollar figures only - all of it already public on-chain data -
+                // so a pool box can safely expose it through Caddy for its landing
+                // page. Add nothing node-identifying here.
+                if (target.rfind("/api/digidollar.json", 0) == 0) {
+                    std::string json;
+                    try {
+                        Json::Value full;
+                        Json::Reader reader;
+                        if (reader.parse(statusJson(), full) && full.isMember("digidollar")) {
+                            Json::Value out = full["digidollar"];
+                            //sync height is useful context for "is this node caught up",
+                            //but it is node state rather than chain state - drop it.
+                            out.removeMember("syncHeight");
+                            Json::StreamWriterBuilder w;
+                            w["indentation"] = "";
+                            json = Json::writeString(w, out);
+                        } else {
+                            json = "{\"error\":\"unavailable\"}";
+                        }
+                    } catch (const std::exception& e) {
+                        json = std::string("{\"error\":\"") + e.what() + "\"}";
+                    } catch (...) {
+                        json = "{\"error\":\"unknown\"}";
+                    }
+                    res.result(http::status::ok);
+                    res.set(http::field::content_type, "application/json");
+                    res.set(http::field::cache_control, "no-store");
+                    //served through a reverse proxy onto a public site
+                    res.set(http::field::access_control_allow_origin, "*");
                     res.body() = json;
                     res.keep_alive(req.keep_alive());
                     res.prepare_payload();
