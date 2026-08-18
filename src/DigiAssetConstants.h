@@ -18,6 +18,37 @@ namespace DigiAssetConstants {
      */
     const uint64_t DIGIBYTE_DUST = 10000;
 
+    /**
+     * Height DigiDollar became active on mainnet (BIP9 bit 23, locked in by miner signaling,
+     * buried via BIP90 in DigiByte Core v9.26.5).  Nothing below this height can be a
+     * DigiDollar transaction, so every DigiDollar decode is gated on it.  This matches
+     * consensus.DigiDollarHeight in DigiByte Core's kernel/chainparams.cpp.
+     */
+    const unsigned int DIGIDOLLAR_ACTIVATION_HEIGHT = 23869440;
+
+    /**
+     * DigiDollar transactions are tagged in the low 16 bits of the transaction version so the
+     * node can exempt their 0 value outputs from dust checks.  The transaction type lives in
+     * the high byte:  version = (type << 24) | DIGIDOLLAR_VERSION_MARKER
+     */
+    const int DIGIDOLLAR_VERSION_MARKER = 0x0770;
+    const int DIGIDOLLAR_VERSION_MASK = 0xFFFF;
+
+    /**
+     * Blocks per oracle epoch.  One price commitment is published per epoch in the coinbase,
+     * so epoch == height / DIGIDOLLAR_ORACLE_EPOCH_LENGTH.  Matches
+     * consensus.nOracleEpochLength (40 blocks * 15s == 10 minutes).
+     */
+    const unsigned int DIGIDOLLAR_ORACLE_EPOCH_LENGTH = 40;
+
+    /**
+     * Reserved pseudo address the DigiDollar oracle rate is published under so it can travel
+     * through the existing address keyed exchange rate API.  It is deliberately not a valid
+     * DigiByte address so it can never collide with a real published rate.
+     */
+    const char DIGIDOLLAR_RATE_ADDRESS[] = "DigiDollar";
+    const uint8_t DIGIDOLLAR_RATE_INDEX = 0;
+
 
         /**
      * List of addresses that can be used for voting without hard encoding the addresses you wish to use in to the asset issuance.

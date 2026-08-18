@@ -50,10 +50,22 @@ If verbose is true:
             "n": int,
             "address": "string",
             "valueS": unsigned int,
-            "assets": [ /* Array of assets involved in the output */ ]
+            "assets": [ /* Array of assets involved in the output */ ],
+            "digidollar": unsigned int  /* cents carried by this output. only present if non zero */
         },
         ...
     ],
+    "digidollar": {                 /* only present on a DigiDollar transaction */
+        "type": "string",           /* "mint", "transfer" or "redeem" */
+        "cents": unsigned int,      /* total DigiDollar on this transaction's outputs */
+        "vault": {                  /* mints only - the collateral being locked */
+            "vout": int,
+            "collateral": unsigned int,  /* DGB sats locked */
+            "minted": unsigned int,      /* cents issued against it */
+            "lockHeight": unsigned int,  /* block before which it cannot be redeemed */
+            "lockTier": unsigned int
+        }
+    },
     "issued": { /* DigiAsset issuance details if applicable */ },
     "exchange": [
         {
@@ -73,7 +85,15 @@ If verbose is true:
     }
 }
 </pre>
-<p>Note: The exact fields returned depend on the verbose flag and the transaction details. Asset and KYC details are only included if applicable.</p>
+<p>Note: The exact fields returned depend on the verbose flag and the transaction details. Asset, DigiDollar and KYC details are only included if applicable.</p>
+<p>DigiDollar amounts are always in cents (100 == $1.00), which is the unit the protocol itself
+uses. A DigiDollar output is a pay-to-taproot output carrying 0 DGB, so its <tt>valueS</tt> is 0
+and <tt>digidollar</tt> is where the balance lives. DigiDollar fields require the daemon to be
+running with <tt>trackdigidollar=1</tt>.</p>
+<p>When the request is passed straight through to DigiByte Core, the <tt>reqSigs</tt> field that
+v22 and later dropped is reconstructed from the script type for backwards compatibility. That
+reconstruction covers pay-to-taproot outputs, which report 1 &mdash; correct for a key path spend,
+though a script path spend can require more, which is not knowable from the output alone.</p>
 </div>
 <div class="section" id="examples">
 <h2>Examples</h2>

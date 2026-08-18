@@ -43,6 +43,16 @@ JSON array of objects, each containing:
                     Note: DGB has an implied value of 100,000,000 sats and is
                     not included in the output.
                 </p>
+                <p>
+                    The DigiDollar oracle DGB/USD rate is included as an entry
+                    with <tt>"address": "DigiDollar"</tt> and
+                    <tt>"index": 0</tt>. It is published in the coinbase by
+                    miners rather than by an address, so that key is reserved and
+                    is deliberately not a valid DigiByte address. The entry is
+                    absent until the node has recorded an oracle commitment, and
+                    for any height below the DigiDollar activation height of
+                    23,869,440.
+                </p>
             </div>
             <div class="section" id="examples">
                 <h2>Examples</h2>

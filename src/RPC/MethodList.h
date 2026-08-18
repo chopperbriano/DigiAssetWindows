@@ -17,12 +17,14 @@ namespace RPC {
         extern const Response asyncstart(const Json::Value& params);
         extern const Response burnasset(const Json::Value& params);
         extern const Response debugwaittimes(const Json::Value& params);
+        extern const Response digidollarstats(const Json::Value& params);
         extern const Response getaddressholdings(const Json::Value& params);
         extern const Response getaddresskyc(const Json::Value& params);
         extern const Response getassetdata(const Json::Value& params);
         extern const Response getassetholders(const Json::Value& params);
         extern const Response getassetindexes(const Json::Value& params);
         extern const Response getdgbequivalent(const Json::Value& params);
+        extern const Response getdigidollarinfo(const Json::Value& params);
         extern const Response getdomainaddress(const Json::Value& params);
         extern const Response getencryptedkey(const Json::Value& params);
         extern const Response getexchangerates(const Json::Value& params);

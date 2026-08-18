@@ -16,11 +16,19 @@ include_directories("${CMAKE_SOURCE_DIR}/src")
 set(HEADER_FILES
         ../src/Config.h
         ../src/DigiByteCore.h
+        ../src/DigiDollar.h
+        ../src/Blob.h
+        ../src/utils.h
         )
 
+#DigiByteCore.cpp classifies the DigiDollar oracle commitment in coinbase outputs, so it needs
+#DigiDollar.cpp, which in turn needs Blob.cpp for its hex decoding.  Keeping that check in one
+#place is worth the two extra files here - duplicating the script format would be worse.
 set(SOURCE_FILES
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
+        ../src/DigiDollar.cpp
+        ../src/Blob.cpp
         ../src/utils.cpp
         )
 

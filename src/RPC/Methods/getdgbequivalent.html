@@ -26,12 +26,22 @@ http://opensource.org/licenses/MIT. -->
 <pre class="literal-block">
 Returns the equivalent amount in DGB satoshis.
 </pre>
+<p>
+Pass <tt>"DigiDollar"</tt> as the address with index 0 to convert using the miner published
+DigiDollar oracle DGB/USD rate instead of an address published rate. That key is reserved and is
+deliberately not a valid DigiByte address. An error is returned if no oracle price has been
+recorded yet, or if any index other than 0 is given with it.
+</p>
 </div>
 <div class="section" id="examples">
 <h2>Examples</h2>
 <p>Example converting using the first exchange rate at a specified address:</p>
 <pre class="literal-block">
 digiasset_core-cli getdgbequivalent "dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh" 0 100000000
+</pre>
+<p>Example converting one US dollar to DGB sats using the DigiDollar oracle rate:</p>
+<pre class="literal-block">
+digiasset_core-cli getdgbequivalent "DigiDollar" 0 100000000
 </pre>
 <pre class="literal-block">
 curl --user myusername --data-binary '{"jsonrpc": "1.0", "id":"curltest", "method": "getdgbequivalent", "params": ["dgb1qunxh378eltj2jrwza5sj9grvu5xud43vqvudwh", 0, 100000000]}' -H 'content-type: text/plain;' http://127.0.0.1:14024/

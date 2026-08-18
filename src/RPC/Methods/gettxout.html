@@ -54,9 +54,15 @@ http://opensource.org/licenses/MIT. -->
       "height":               (number) Height at which the asset was created
     }
   ]
+  "digidollar":               (number) DigiDollar carried by this output, in cents
+                              (100 == $1.00). 0 when the output carries none.
   &quot;coinbase&quot; : true|false     (boolean) Coinbase or not
 }
 </pre>
+<p>The <tt>digidollar</tt> field is always present, so callers never have to distinguish
+&quot;no DigiDollar&quot; from &quot;field not implemented&quot;. DigiDollar outputs are
+pay-to-taproot outputs carrying 0 DGB, so <tt>value</tt> is 0 on them and
+<tt>digidollar</tt> is where the balance lives.</p>
 </div>
 <div class="section" id="examples">
 <h1>Examples</h1>

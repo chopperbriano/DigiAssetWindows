@@ -17,6 +17,8 @@
 #include "Config.h"
 #include "Database.h"
 #include "DigiAsset.h"
+#include "DigiAssetConstants.h"
+#include "DigiDollar.h"
 #include "DigiByteCore.h"
 #include "DigiByteTransaction.h"
 #include "KYC.h"
@@ -83,6 +85,7 @@ void ChainAnalyzer::resetConfig() {
     _pruneVoteHistory = true;
     _verifyDatabaseWrite = true;
     _showAllBlockSyncTime = false;
+    _trackDigiDollar = true;
 }
 
 /**
@@ -119,6 +122,7 @@ void ChainAnalyzer::loadConfig() {
     setPruneUTXOHistory(config.getBool("pruneutxohistory", true));
     setPruneVoteHistory(config.getBool("prunevotehistory", true));
     setStoreNonAssetUTXO(config.getBool("storenonassetutxo", false));
+    setTrackDigiDollar(config.getBool("trackdigidollar", true));
     _verifyDatabaseWrite = config.getBool("verifydatabasewrite", true);
     _showAllBlockSyncTime = config.getBool("showallblocksynctimes", false);
     // Opt-in: overlap block fetch (RPC) with block processing (DB) during deep
@@ -149,6 +153,7 @@ void ChainAnalyzer::saveConfig() {
     config.setBool("pruneutxohistory", _pruneUTXOHistory);
     config.setBool("prunevotehistory", _pruneVoteHistory);
     config.setBool("storenonassetutxo", _storeNonAssetUTXOs);
+    config.setBool("trackdigidollar", _trackDigiDollar);
     config.setIntegerMap("pinassetextra", _pinAssetExtraMimeTypes);
     config.write();
 }
@@ -210,6 +215,20 @@ void ChainAnalyzer::setStoreNonAssetUTXO(bool shouldStore) {
     Database* db = AppMain::GetInstance()->getDatabase();
     if (shouldStore && (db->getBeenPrunedNonAssetUTXOHistory())) throw exceptionAlreadyPruned();
     _storeNonAssetUTXOs = shouldStore;
+}
+
+bool ChainAnalyzer::shouldTrackDigiDollar() const {
+    return _trackDigiDollar;
+}
+
+void ChainAnalyzer::setTrackDigiDollar(bool shouldTrack) {
+    //Turning tracking off leaves a hole in the DigiDollar history that later blocks cannot fill,
+    //so clear the sync marker.  Turning it back on then triggers a full backfill rather than
+    //silently serving balances that are missing everything from the gap.
+    if (!shouldTrack && _trackDigiDollar) {
+        AppMain::GetInstance()->getDatabase()->setDigiDollarSyncHeight(0);
+    }
+    _trackDigiDollar = shouldTrack;
 }
 
 
@@ -285,6 +304,65 @@ void ChainAnalyzer::startupFunction() {
         //mark as has been pruned if we aren't keeping and database will not store them
         db->setBeenPrunedNonAssetUTXOHistory(true);
     }
+
+    //remember the newest oracle epoch so the sync loop can skip re-reading commitments it has
+    _lastOracleEpoch = db->getDigiDollarLastEpoch();
+
+    //rewind far enough to index the DigiDollar era if we have never done it
+    phaseDigiDollarBackfill();
+}
+
+/**
+ * DigiDollar activated at block 23,869,440, which is below where most existing nodes are already
+ * synced to.  Balances and vaults can only be reconstructed by replaying those blocks, so on the
+ * first run after upgrading we rewind to just below activation and let the normal sync path redo
+ * that range.  clearBlocksAboveHeight() removes the stale rows on the way down, so the replay is
+ * additive rather than duplicating anything.
+ *
+ * The marker is only set once, after the rewind is scheduled.  From then on ordinary reorg
+ * handling keeps the DigiDollar tables consistent, so this never runs again unless the operator
+ * turns tracking off and back on.
+ */
+void ChainAnalyzer::phaseDigiDollarBackfill() {
+    if (!shouldTrackDigiDollar()) return;
+
+    AppMain* main = AppMain::GetInstance();
+    Database* db = main->getDatabase();
+    Log* log = Log::GetInstance();
+
+    const unsigned int activation = DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT;
+
+    //nothing to backfill until the chain we have indexed actually reaches DigiDollar
+    if (static_cast<unsigned int>(_height) < activation) return;
+
+    //already indexed
+    if (db->getDigiDollarSyncHeight() >= activation) return;
+
+    //A node that prunes UTXO history below the activation height cannot be rewound that far.
+    //Say so plainly rather than starting a rewind that will restart the whole sync.
+    int prunedTo = db->getBeenPrunedUTXOHistory();
+    if ((prunedTo >= 0) && (static_cast<unsigned int>(prunedTo) >= activation)) {
+        log->addMessage(
+                "DigiDollar history cannot be indexed: UTXO history is pruned to " + to_string(prunedTo) +
+                        ", above the DigiDollar activation height " + to_string(activation) +
+                        ".  Resync from scratch or set trackdigidollar=0 to silence this.",
+                Log::CRITICAL);
+        return;
+    }
+
+    log->addMessage("DigiDollar indexing has not been run.  Rewinding from " + to_string(_height) +
+                            " to " + to_string(activation - 1) + " to index it - this will take a while.",
+                    Log::WARNING);
+
+    _height = static_cast<int>(activation) - 1;
+    db->clearBlocksAboveHeight(_height);
+    _nextHash = db->getBlockHash(_height);
+    _lastOracleEpoch = 0;
+
+    //Mark it done now rather than at the end of the replay.  The rewind has already discarded
+    //everything above this height, so an interruption leaves the normal sync path to finish the
+    //job - re-running the rewind on the next start would throw away good work.
+    db->setDigiDollarSyncHeight(activation);
 }
 
 /**
@@ -491,6 +569,11 @@ void ChainAnalyzer::phaseSync() {
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
+        //record the oracle DGB/USD price this block commits to, if any
+        if (shouldTrackDigiDollar() && !blockData.tx.empty()) {
+            captureOracleCommitment(blockData.height, blockData.tx[0]);
+        }
+
         //process each tx in block
         if (needsAssetProcessing) {
             db->startTransaction();
@@ -689,6 +772,42 @@ void ChainAnalyzer::phaseSync() {
 }
 
 /**
+ * Reads the DigiDollar oracle price commitment out of a block's coinbase.
+ *
+ * Roughly two thirds of blocks carry one, but every block inside a 40 block epoch republishes the
+ * same consensus value, so only the first block of each new epoch is worth reading.  Skipping the
+ * rest keeps this to one extra getrawtransaction per 40 blocks instead of one per block, which
+ * matters a great deal during the activation backfill.
+ *
+ * @param height       block being processed
+ * @param coinbaseTxid txid of the block's coinbase transaction
+ */
+void ChainAnalyzer::captureOracleCommitment(unsigned int height, const string& coinbaseTxid) {
+    if (height < DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT) return;
+
+    unsigned int epoch = height / DigiAssetConstants::DIGIDOLLAR_ORACLE_EPOCH_LENGTH;
+    if ((epoch != 0) && (epoch <= _lastOracleEpoch)) return; //already have this epoch
+
+    AppMain* main = AppMain::GetInstance();
+    try {
+        getrawtransaction_t coinbase = main->getDigiByteCore()->getRawTransaction(coinbaseTxid);
+        DigiDollar::OracleCommitment commitment;
+        if (!DigiDollar::findOracleCommitment(coinbase, commitment)) return; //miner published none
+
+        main->getDatabase()->addDigiDollarRate(height, commitment.epoch, commitment.price,
+                                               static_cast<unsigned int>(commitment.timestamp),
+                                               commitment.participants);
+        _lastOracleEpoch = commitment.epoch;
+    } catch (const exception& e) {
+        //A missing or unreadable commitment is not fatal - the price is republished every epoch,
+        //so the next one recovers.  Never let it stop the chain sync.
+        Log::GetInstance()->addMessage(
+                "Could not read DigiDollar oracle commitment at height " + to_string(height) + ": " + e.what(),
+                Log::WARNING);
+    }
+}
+
+/**
  * Prunes historical data when the current height is a pruning boundary. Asks
  * pruneMax() for the height to prune up to (0 = not now / disabled) and, based
  * on the enabled prune flags, tells the DB to drop exchange, UTXO, and vote
@@ -808,6 +927,37 @@ void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
             }
             events->broadcast("{\"event\":\"balanceChanged\",\"addresses\":[" + addressJson +
                               "],\"txid\":\"" + txid + "\",\"height\":" + to_string(height) + "}");
+        }
+
+        //DigiDollar activity gets its own events for the same reason asset activity does - it is
+        //rare enough not to flood subscribers during sync.
+        //
+        //Placed INSIDE this fork's `_state >= -110` guard, unlike upstream: our `addresses` list
+        //is built here rather than at function scope, and our asset events already sit behind the
+        //same guard. Keeping DigiDollar with them means one consistent policy - and it matters
+        //most during the ~154k-block activation backfill, which would otherwise fire an event per
+        //DigiDollar transaction at every subscriber while the node is deep in bulk sync.
+        if (tx.isDigiDollarTransaction()) {
+            EventBroadcaster* events = EventBroadcaster::GetInstance();
+
+            uint64_t amount = 0;
+            for (const auto& ddOutput: tx.getDigiDollarOutputs()) amount += ddOutput.second;
+
+            string type = tx.isDigiDollarMint()
+                                  ? "digiDollarMint"
+                                  : (tx.isDigiDollarRedeem() ? "digiDollarRedeem" : "digiDollarTransfer");
+
+            string addressJson;
+            for (const string& address: addresses) {
+                if (address.empty()) continue;
+                if (!addressJson.empty()) addressJson += ",";
+                addressJson += "\"" + address + "\"";
+            }
+
+            //cents is the protocol's own unit, so it is reported without conversion
+            events->broadcast("{\"event\":\"" + type + "\",\"cents\":" + to_string(amount) +
+                              ",\"addresses\":[" + addressJson + "],\"txid\":\"" + txid +
+                              "\",\"height\":" + to_string(height) + "}");
         }
     }
 }

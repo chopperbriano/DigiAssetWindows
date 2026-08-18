@@ -14,6 +14,8 @@
 #include "BitIO.h"
 #include "DigiAsset.h"
 #include "DigiByteDomain.h"
+#include "DigiDollar.h"
+#include "Log.h"
 #include "IPFS.h"
 #include "PermanentStoragePool/PermanentStoragePoolList.h"
 #include "DigiAssetConstants.h"
@@ -54,6 +56,13 @@ DigiByteTransaction::DigiByteTransaction(const string& txid, unsigned int height
     if (dontBotherIfNotSpecial) {
         bool mayNeedInputProcessing = false;
 
+        //A DigiDollar transaction always needs full processing: its value outputs carry 0 DGB and
+        //no DigiAssets, so every later shortcut would throw them away.  Checked before the
+        //OP_RETURN scan because a redemption with no change carries no OP_RETURN at all.
+        if (DigiDollar::typeFromVersion(txData.version) != DigiDollar::TX_NONE) {
+            mayNeedInputProcessing = true;
+        }
+
         //check if there is an op_return
         for (const vout_t& vout: txData.vout) {
             if (vout.scriptPubKey.type != "nulldata") continue;
@@ -62,7 +71,10 @@ DigiByteTransaction::DigiByteTransaction(const string& txid, unsigned int height
         }
 
         //large transactions can only be DigiAsset transactions or normal so check if DigiAsset Transaction if large.
-        if ((mayNeedInputProcessing) && (txData.vin.size() > 5)) {
+        //DigiDollar is the exception: it is neither, and a transfer consolidating many DigiDollar
+        //inputs trips the >5 test, so exclude it or its balances silently go unrecorded.
+        if ((mayNeedInputProcessing) && (txData.vin.size() > 5) &&
+            (DigiDollar::typeFromVersion(txData.version) == DigiDollar::TX_NONE)) {
             unsigned char opcode;
             BitIO dataStream;
             DigiAsset::decodeAssetTxHeader(txData, _assetTransactionVersion, opcode, dataStream);
@@ -112,13 +124,25 @@ DigiByteTransaction::DigiByteTransaction(const string& txid, unsigned int height
         _outputs.emplace_back(output);
     }
 
+    //DigiDollar is checked before the OP_RETURN based types because it is identified by the
+    //transaction version rather than by output layout, and because a redemption that produces no
+    //DigiDollar change carries no OP_RETURN at all and would otherwise be missed entirely.
+    if (decodeDigiDollar(txData)) return;
+
     //find index of op_return
     int dataIndex = -1;
     for (size_t i = 0; i < txData.vout.size(); i++) {
-        if (txData.vout[i].scriptPubKey.type == "nulldata") {
-            dataIndex = i;
-            break;
+        if (txData.vout[i].scriptPubKey.type != "nulldata") continue;
+        //Skip a DigiDollar metadata OP_RETURN.  A transaction can legitimately carry both a
+        //DigiAsset OP_RETURN and a DigiDollar one; matching the DigiAsset decoders against the
+        //wrong output would make the asset transfer invisible.  Only applied from the DigiDollar
+        //activation height so historical decoding is unchanged.
+        if ((height >= DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT) &&
+            (txData.vout[i].scriptPubKey.hex.rfind("6a024444", 0) == 0)) {
+            continue;
         }
+        dataIndex = i;
+        break;
     }
     if (dataIndex == -1) return;
 
@@ -225,6 +249,55 @@ bool DigiByteTransaction::decodeEncryptedKeyTx(const getrawtransaction_t& txData
  * @param txData
  * @param dataIndex
  */
+/**
+ * Decodes a DigiDollar mint, transfer or redemption.
+ *
+ * DigiAsset Core does not validate DigiDollar - the node already did that before the block was
+ * accepted - so this only reads what the transaction declares about itself.  The version marker
+ * is checked first because it is a single integer compare and rules out every ordinary
+ * transaction before any script is touched.
+ *
+ * @param txData chain data
+ * @return true if this is a DigiDollar transaction
+ */
+bool DigiByteTransaction::decodeDigiDollar(const getrawtransaction_t& txData) {
+    DigiDollar::Metadata metadata;
+    if (!DigiDollar::decodeMetadata(txData, _height, metadata)) return false;
+
+    switch (metadata.type) {
+        case DigiDollar::TX_MINT: {
+            _txType = DIGIDOLLAR_MINT;
+            _ddMinted = metadata.amounts.empty() ? 0 : metadata.amounts[0];
+            _ddLockHeight = static_cast<unsigned int>(metadata.lockHeight);
+            _ddLockTier = metadata.lockTier;
+            _ddVaultOutput = DigiDollar::findVaultOutput(txData);
+            if (_ddVaultOutput >= 0) {
+                _ddCollateral = txData.vout[_ddVaultOutput].valueS;
+            }
+            break;
+        }
+        case DigiDollar::TX_TRANSFER:
+            _txType = DIGIDOLLAR_TRANSFER;
+            break;
+        case DigiDollar::TX_REDEEM:
+            _txType = DIGIDOLLAR_REDEEM;
+            break;
+        default:
+            return false;
+    }
+
+    //Map the declared amounts onto outputs.  This deliberately returns nothing when the counts
+    //disagree, in which case we record the transaction type but no balances rather than writing a
+    //guess the chain could never correct.
+    _ddOutputs = DigiDollar::mapAmountsToOutputs(txData, metadata);
+    if (_ddOutputs.empty() && !metadata.amounts.empty() && (metadata.type != DigiDollar::TX_REDEEM)) {
+        Log::GetInstance()->addMessage(
+                "DigiDollar amounts in " + _txid + " do not line up with its outputs, balances not recorded",
+                Log::WARNING);
+    }
+    return true;
+}
+
 void DigiByteTransaction::storeUnknown(const getrawtransaction_t& txData, int dataIndex) {
     if (dataIndex == -1) return;
 
@@ -544,6 +617,18 @@ KYC DigiByteTransaction::getKYC() const {
     return _kycData;
 }
 
+bool DigiByteTransaction::isDigiDollarTransaction() const {
+    return (_txType == DIGIDOLLAR_MINT) || (_txType == DIGIDOLLAR_TRANSFER) || (_txType == DIGIDOLLAR_REDEEM);
+}
+
+bool DigiByteTransaction::isDigiDollarMint() const {
+    return (_txType == DIGIDOLLAR_MINT);
+}
+
+bool DigiByteTransaction::isDigiDollarRedeem() const {
+    return (_txType == DIGIDOLLAR_REDEEM);
+}
+
 bool DigiByteTransaction::isExchangeTransaction() const {
     return (_txType == EXCHANGE_PUBLISH);
 }
@@ -651,6 +736,21 @@ void DigiByteTransaction::addToDatabase() {
             db->addEncryptedKey(_outputs[0].address, Blob(_opReturnHex));
             break;
         }
+        case DIGIDOLLAR_MINT: {
+            //record the collateral vault before its DigiDollar so a partial write can never leave
+            //DigiDollar in circulation with nothing backing it in our books
+            if ((_ddVaultOutput >= 0) && (_ddCollateral > 0)) {
+                const AssetUTXO& vault = _outputs[_ddVaultOutput];
+                db->createDigiDollarVault(_txid, static_cast<uint16_t>(_ddVaultOutput), vault.address,
+                                          _ddCollateral, _ddMinted, _ddLockHeight, _ddLockTier, _height);
+            }
+            break;
+        }
+        case DIGIDOLLAR_TRANSFER:
+        case DIGIDOLLAR_REDEEM: {
+            //nothing beyond the per output handling below
+            break;
+        }
         case STANDARD: {
             if (!_opReturnHex.empty()) {
                 db->addUnknown(_txid, Blob(_opReturnHex));
@@ -659,10 +759,28 @@ void DigiByteTransaction::addToDatabase() {
         }
     }
 
+    //Spending a DigiDollar output destroys that balance, and spending a vault output is what a
+    //redemption looks like.  These run for every input rather than only on transactions we typed
+    //as DigiDollar, so that a DigiDollar output spent by some other transaction shape still
+    //clears.  They are gated on the activation height because nothing below it can be DigiDollar,
+    //and two extra indexed lookups per input across the pre-activation chain would cost far more
+    //sync time than the entire rest of this feature.
+    bool checkDigiDollarSpends = (_height >= DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT);
+
     //mark spent old UTXOs
     for (const AssetUTXO& vin: _inputs) {
         if (vin.txid == "") continue; //coinbase
         db->spendUTXO(vin.txid, vin.vout, _height, _txid);
+
+        if (!checkDigiDollarSpends) continue;
+        db->spendDigiDollarUTXO(vin.txid, vin.vout, _height, _txid);
+        db->redeemDigiDollarVault(vin.txid, vin.vout, _height, _txid);
+    }
+
+    //add new DigiDollar outputs
+    for (const auto& ddOutput: _ddOutputs) {
+        const AssetUTXO& vout = _outputs[ddOutput.first];
+        db->createDigiDollarUTXO(_txid, ddOutput.first, vout.address, ddOutput.second, _height);
     }
 
     //add utxos
@@ -797,9 +915,40 @@ Value DigiByteTransaction::toJSON(const Value& original) const {
             assetArray.append(asset.toJSON(true));
         }
         outputObject["assets"] = assetArray;
+
+        //DigiDollar carried by this output, in cents.  Only added when non zero so ordinary
+        //transactions keep the output shape they have always had.
+        for (const auto& ddOutput: _ddOutputs) {
+            if (ddOutput.first != output.vout) continue;
+            outputObject["digidollar"] = static_cast<Json::UInt64>(ddOutput.second);
+            break;
+        }
+
         outputArray.append(outputObject);
     }
     result["vout"] = outputArray;
+
+    // Add DigiDollar transaction data
+    if (isDigiDollarTransaction()) {
+        Json::Value digidollar(Json::objectValue);
+        digidollar["type"] = isDigiDollarMint() ? "mint" : (isDigiDollarRedeem() ? "redeem" : "transfer");
+
+        uint64_t total = 0;
+        for (const auto& ddOutput: _ddOutputs) total += ddOutput.second;
+        digidollar["cents"] = static_cast<Json::UInt64>(total);
+
+        if (isDigiDollarMint()) {
+            //vault details are only meaningful on a mint - this is the collateral being locked
+            Json::Value vault(Json::objectValue);
+            vault["vout"] = _ddVaultOutput;
+            vault["collateral"] = static_cast<Json::UInt64>(_ddCollateral);
+            vault["minted"] = static_cast<Json::UInt64>(_ddMinted);
+            vault["lockHeight"] = _ddLockHeight;
+            vault["lockTier"] = _ddLockTier;
+            digidollar["vault"] = vault;
+        }
+        result["digidollar"] = digidollar;
+    }
 
     // Add issuance
     if (isIssuance()) {

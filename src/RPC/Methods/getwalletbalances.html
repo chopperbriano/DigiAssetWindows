@@ -36,6 +36,10 @@ http://opensource.org/licenses/MIT. -->
                                     //     locked in asset UTXOs)
         "amount": "123.45678900"    // same value in decimal DGB
     },
+    "digidollar": {
+        "cents": 2500,              // DigiDollar held, in cents(100 == $1.00)
+        "amount": "25.00"           // same value in decimal dollars
+    },
     "assets": [
         {
             "assetIndex": 2,
@@ -50,6 +54,13 @@ http://opensource.org/licenses/MIT. -->
 }
 </pre
                 >
+                <p>
+                    DigiDollar is not a DigiAsset, so it is reported as its own
+                    top level key rather than as an entry in <tt>assets</tt>. It
+                    is summed per address across the wallet's UTXOs, so an
+                    address holding DigiDollar is counted once no matter how many
+                    UTXOs it appears on.
+                </p>
             </div>
             <div class="section" id="examples">
                 <h2>Examples</h2>

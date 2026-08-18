@@ -45,6 +45,13 @@ namespace utils {
     // Remainder of a 256-bit big-endian number (32 bytes) divided by a 64-bit divisor.
     uint64_t mod256by64(const std::array<uint8_t, 32>& numerator, uint64_t divisor);
 
+    /**
+     * Renders a fixed point integer as a decimal string, e.g. toDecimalString(12345, 2) == "123.45".
+     * Used for the display-only "amount" fields in RPC output - the authoritative value is always
+     * the integer alongside it, never this string.
+     */
+    std::string toDecimalString(uint64_t value, unsigned int decimals);
+
     // Blocking console prompt: read Y/N and return the corresponding bool.
     bool getAnswerBool();
     // Blocking console prompt: read and return an int within [min, max], re-prompting on bad input.
