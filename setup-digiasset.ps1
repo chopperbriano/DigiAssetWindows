@@ -73,7 +73,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.21.0'
+$SCRIPT_VERSION = '2.22.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1097,6 +1097,11 @@ function Write-NodeConfig($rpc) {
         # top-up would re-enable psp1 on every re-run -> double-registration.
         if ($PayoutAddress -and -not ($existing -match '^\s*psp2payout\s*=') -and -not ($existing -match '^\s*psp1payout\s*=')) { $add += @('psp2subscribe=1',"psp2payout=$PayoutAddress",'psp1subscribe=0') }
         if (-not ($existing -match '^\s*verifydatabasewrite\s*=')) { $add += 'verifydatabasewrite=0' }   # fast path
+        # DigiDollar indexing (win.124+). Only added when the key is ABSENT, so an
+        # operator who deliberately set trackdigidollar=0 is never overridden on a
+        # re-run. The node itself also persists this key on first start; writing it
+        # here makes the intent explicit and documented in the file.
+        if (-not ($existing -match '^\s*trackdigidollar\s*=')) { $add += 'trackdigidollar=1' }
         if ($changed -or $add.Count -gt 0) {
             $out = @($existing)
             if ($add.Count -gt 0) {
@@ -1166,7 +1171,18 @@ function Write-NodeConfig($rpc) {
         'storenonassetutxo=0',
         'pruneage=5760',
         'bootstrapchainstate=1',
-        'pipelinesync=0'
+        'pipelinesync=0',
+        '',
+        '# --- DigiDollar ---------------------------------------------------------------',
+        '#   trackdigidollar=1 indexes DigiDollar balances, collateral vaults and the',
+        '#     oracle DGB/USD price, and powers getdigidollarinfo / digidollarstats plus',
+        '#     the digidollar fields on getaddressholdings and getwalletbalances.',
+        '#   DigiDollar activated at block 23,869,440. The FIRST start after enabling it',
+        '#     on an already-synced node rewinds to that height and re-scans forward,',
+        '#     which takes a while - that is expected, not a fault.',
+        '#   Set to 0 to skip all of it. Turning it off and back on forces a fresh',
+        '#     rewind: a gap in DigiDollar history cannot be filled in by later blocks.',
+        'trackdigidollar=1'
     )
     Set-Content -Path $NodeConfig -Value $lines -Encoding ASCII
     Log "  + config.cfg (documented; pool=$PoolServer, payout=$PayoutAddress)" 'OK'

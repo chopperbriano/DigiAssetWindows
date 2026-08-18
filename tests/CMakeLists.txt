@@ -47,6 +47,7 @@ set(TESTS
         Base58Tests.cpp
         DigiAssetTest.cpp
         DigiDollarTest.cpp
+        MigrationTest.cpp
         DigiAssetRulesTest.cpp
         DigiAssetTransactionTest.cpp
         DigiByteTransactionBuilderTest.cpp

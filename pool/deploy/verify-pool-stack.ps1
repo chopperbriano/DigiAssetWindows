@@ -259,6 +259,20 @@ if ($dgb['digidollar'] -eq '1') {
     Warn "DigiDollar not enabled" "For full DigiByte support set digidollar=1. On an already-synced chain this may need a one-time -reindex, so ideally set it BEFORE initial sync."
 }
 
+# The NODE side of DigiDollar is a separate switch (config.cfg trackdigidollar),
+# and it is what powers getdigidollarinfo / digidollarstats. Report only - the
+# first start after enabling it rewinds to activation (block 23,869,440) and
+# re-scans, so this is never flipped on automatically.
+if ($node.Count -gt 0) {
+    if ($node['trackdigidollar'] -eq '0') {
+        Warn "Node DigiDollar indexing OFF (trackdigidollar=0)" "getdigidollarinfo/digidollarstats and the digidollar fields on getaddressholdings will report nothing. Set trackdigidollar=1 in config.cfg to enable; the first start then rewinds to block 23,869,440 and re-scans forward."
+    } elseif ($node.ContainsKey('trackdigidollar')) {
+        Ok "Node DigiDollar indexing enabled (trackdigidollar=1)"
+    } else {
+        Ok "Node DigiDollar indexing enabled (trackdigidollar defaults to on)"
+    }
+}
+
 # Optional service-node indexes: report only. Absent = feature off (fine for the
 # pool). Present = will build in the background one time (no -reindex).
 Section "Optional service-node indexes (not required for the pool)"

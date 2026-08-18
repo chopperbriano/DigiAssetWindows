@@ -84,6 +84,10 @@ $lines = @(
   "rpcuser=$($cfg['rpcuser'])","rpcpassword=$($cfg['rpcpassword'])","rpcbind=127.0.0.1","rpcport=$($cfg['rpcport'])",
   "rpcassetport=$AssetPort","webport=$WebPort","eventport=$EventPort","rpcallow*=1",
   "bootstrapchainstate=0","pruneage=-1","verifydatabasewrite=0",
+  # match production (win.124+). Safe here: this builds a fresh chain.db from
+  # height 0 and the run is seconds long, so it never reaches DigiDollar
+  # activation (23,869,440) and no backfill is triggered.
+  "trackdigidollar=1",
   "psp0subscribe=1","psp0payout=$payout","psp1subscribe=0","psp1server=https://pool.digistamp.co","psp1payout=$payout"
 )
 [System.IO.File]::WriteAllText((Join-Path $TestDir 'config.cfg'), ($lines -join "`n"), (New-Object System.Text.UTF8Encoding($false)))

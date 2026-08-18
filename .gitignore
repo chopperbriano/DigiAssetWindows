@@ -49,3 +49,6 @@ src/sqlite3_stubs.cpp
 
 # Cloudflare R2 snapshot config (machine-specific; no secrets, but keep local)
 snapshots/snapshot-config.json
+
+# scratch copy made by MigrationTest (the v6 fixture itself IS tracked)
+tests/testFiles/_testMigrationWork.db*
