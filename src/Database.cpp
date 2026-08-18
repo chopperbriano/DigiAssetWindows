@@ -569,6 +569,7 @@ void Database::initializeClassValues() {
     _stmtAddDDRate.prepare(_db, "INSERT OR IGNORE INTO ddoracle (epoch,height,price,time,participants) VALUES (?,?,?,?,?);");
     _stmtGetDDRateAtHeight.prepare(_db, "SELECT height,epoch,price,time,participants FROM ddoracle WHERE height<=? ORDER BY height DESC LIMIT 1;");
     _stmtGetDDRateHistory.prepare(_db, "SELECT height,epoch,price,time,participants FROM ddoracle WHERE height>=? AND height<=? ORDER BY height ASC LIMIT ?;");
+    _stmtGetDDRateLatest.prepare(_db, "SELECT height,epoch,price,time,participants FROM ddoracle ORDER BY height DESC LIMIT 1;");
     _stmtGetDDLastEpoch.prepare(_db, "SELECT COALESCE(MAX(epoch),0) FROM ddoracle;");
 
 
@@ -2498,7 +2499,18 @@ DigiDollarRate Database::getDigiDollarRateAtHeight(unsigned int height) {
 }
 
 DigiDollarRate Database::getCurrentDigiDollarRate() {
-    return getDigiDollarRateAtHeight(numeric_limits<unsigned int>::max());
+    //Deliberately its own statement rather than getDigiDollarRateAtHeight(UINT_MAX): the bind
+    //takes a signed int, so UINT_MAX arrives as -1 and "WHERE height<=-1" silently matches
+    //nothing.  Asking for the newest row directly cannot be got wrong that way.
+    LockedStatement getDDRateLatest{_stmtGetDDRateLatest};
+    if (getDDRateLatest.executeStep() != SQLITE_ROW) throw out_of_range("No DigiDollar oracle price known");
+    DigiDollarRate rate;
+    rate.height = getDDRateLatest.getColumnInt(0);
+    rate.epoch = getDDRateLatest.getColumnInt(1);
+    rate.price = static_cast<uint64_t>(getDDRateLatest.getColumnInt64(2));
+    rate.time = getDDRateLatest.getColumnInt(3);
+    rate.participants = getDDRateLatest.getColumnInt(4);
+    return rate;
 }
 
 vector<DigiDollarRate> Database::getDigiDollarRateHistory(unsigned int startHeight, unsigned int endHeight,
@@ -2506,7 +2518,7 @@ vector<DigiDollarRate> Database::getDigiDollarRateHistory(unsigned int startHeig
     vector<DigiDollarRate> results;
     LockedStatement getDDRateHistory{_stmtGetDDRateHistory};
     getDDRateHistory.bindInt(1, startHeight);
-    getDDRateHistory.bindInt(2, endHeight);
+    getDDRateHistory.bindInt64(2, endHeight); //64 bit: an unsigned max sentinel binds as -1 otherwise
     getDDRateHistory.bindInt64(3, static_cast<int64_t>(limit));
     while (getDDRateHistory.executeStep() == SQLITE_ROW) {
         DigiDollarRate rate;
@@ -3459,7 +3471,7 @@ std::vector<DigiDollarStats> Database::getDigiDollarStats(unsigned int start, un
         return results; //no DigiDollar stats yet
     }
     sqlite3_bind_int(stmt, 1, start);
-    sqlite3_bind_int(stmt, 2, end);
+    sqlite3_bind_int64(stmt, 2, end); //64 bit: the default end time is the unsigned max sentinel
     while (executeSqliteStepWithRetry(stmt) == SQLITE_ROW) {
         DigiDollarStats stats;
         stats.time = sqlite3_column_int(stmt, 0);

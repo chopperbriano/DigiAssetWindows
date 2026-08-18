@@ -8,9 +8,13 @@
 //
 
 #include "DigiAssetConstants.h"
+#include "Database.h"
 #include "DigiDollar.h"
 #include "gtest/gtest.h"
 
+#include <cstdio>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -304,4 +308,68 @@ TEST(DigiDollar, redeem_withNoChangeCarriesNoOpReturn) {
     ASSERT_TRUE(DigiDollar::decodeMetadata(tx, AFTER_ACTIVATION, metadata));
     EXPECT_EQ(metadata.type, DigiDollar::TX_REDEEM);
     EXPECT_TRUE(metadata.amounts.empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Database round trip
+//
+// These exist because of a real bug: getCurrentDigiDollarRate() used to ask for
+// "the newest row at or below UINT_MAX", and the bind takes a signed int, so the
+// sentinel arrived as -1 and matched nothing.  getexchangerates passes a real
+// sync height and worked, which hid it - only the callers using the sentinel
+// (getdgbequivalent, getdigidollarinfo, the Qt oracle panel) reported no price.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DigiDollarDatabase, currentRateDoesNotDependOnAHeightSentinel) {
+    remove("../tests/testFiles/_testDigiDollarRate.db");
+    Database db("../tests/testFiles/_testDigiDollarRate.db");
+
+    db.addDigiDollarRate(23869440, 596736, 4216, 1786932137, 7);
+    db.addDigiDollarRate(24045800, 601145, 4300, 1786932500, 9);
+
+    //newest row, however it is reached internally
+    DigiDollarRate current = db.getCurrentDigiDollarRate();
+    EXPECT_EQ(current.price, 4300u);
+    EXPECT_EQ(current.height, 24045800u);
+    EXPECT_EQ(current.participants, 9u);
+
+    //and the historic lookup still resolves to the older row
+    DigiDollarRate historic = db.getDigiDollarRateAtHeight(23900000);
+    EXPECT_EQ(historic.price, 4216u);
+    EXPECT_EQ(historic.height, 23869440u);
+}
+
+TEST(DigiDollarDatabase, rateHistoryAcceptsAnUnsignedMaxUpperBound) {
+    remove("../tests/testFiles/_testDigiDollarHist.db");
+    Database db("../tests/testFiles/_testDigiDollarHist.db");
+
+    db.addDigiDollarRate(23869440, 596736, 4216, 1786932137, 7);
+    db.addDigiDollarRate(24045800, 601145, 4300, 1786932500, 9);
+
+    //the default "no upper bound" callers pass must not wrap to -1 and return nothing
+    auto all = db.getDigiDollarRateHistory(0, std::numeric_limits<unsigned int>::max(), 100);
+    EXPECT_EQ(all.size(), 2u);
+}
+
+TEST(DigiDollarDatabase, oneRowPerEpochIsKept) {
+    remove("../tests/testFiles/_testDigiDollarEpoch.db");
+    Database db("../tests/testFiles/_testDigiDollarEpoch.db");
+
+    //every block inside an epoch republishes the same commitment - keep the first sighting only
+    db.addDigiDollarRate(24045800, 601145, 4300, 1786932500, 9);
+    db.addDigiDollarRate(24045801, 601145, 4300, 1786932500, 9);
+    db.addDigiDollarRate(24045802, 601145, 4300, 1786932500, 9);
+
+    auto all = db.getDigiDollarRateHistory(0, std::numeric_limits<unsigned int>::max(), 100);
+    ASSERT_EQ(all.size(), 1u);
+    EXPECT_EQ(all[0].height, 24045800u);
+    EXPECT_EQ(db.getDigiDollarLastEpoch(), 601145u);
+}
+
+TEST(DigiDollarDatabase, emptyTableReportsNoPriceRatherThanZero) {
+    remove("../tests/testFiles/_testDigiDollarEmpty.db");
+    Database db("../tests/testFiles/_testDigiDollarEmpty.db");
+
+    EXPECT_THROW(db.getCurrentDigiDollarRate(), std::out_of_range);
+    EXPECT_EQ(db.getDigiDollarLastEpoch(), 0u);
 }
