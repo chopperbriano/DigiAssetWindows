@@ -261,6 +261,7 @@ private:
     Statement _stmtAddDDRate;
     Statement _stmtGetDDRateAtHeight;
     Statement _stmtGetDDRateHistory;
+    Statement _stmtGetDDRateLatest;
     Statement _stmtGetDDLastEpoch;
     Statement _stmtGetNextIPFSJob;
     Statement _stmtSetIPFSPauseSync;
@@ -372,6 +373,7 @@ public:
         result += printStatementInfo("_stmtAddDDRate", _stmtAddDDRate);
         result += printStatementInfo("_stmtGetDDRateAtHeight", _stmtGetDDRateAtHeight);
         result += printStatementInfo("_stmtGetDDRateHistory", _stmtGetDDRateHistory);
+        result += printStatementInfo("_stmtGetDDRateLatest", _stmtGetDDRateLatest);
         result += printStatementInfo("_stmtGetDDLastEpoch", _stmtGetDDLastEpoch);
         result += printStatementInfo("_stmtGetNextIPFSJob", _stmtGetNextIPFSJob);
         result += printStatementInfo("_stmtSetIPFSPauseSync", _stmtSetIPFSPauseSync);
