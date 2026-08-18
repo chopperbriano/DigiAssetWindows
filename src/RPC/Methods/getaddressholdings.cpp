@@ -13,8 +13,13 @@ namespace RPC {
         * Returns address kyc information
         * params[0] - address(string)
         *
-        * return an object with assetIndex as key and asset quantity as value.
-        * Please note assetIndex 1 is DigiByte and this will be included if storenonassetutxo=1
+        * return an object with assetIndex as key and asset quantity as value.  Quantities are in
+        * the asset's smallest unit - sats for assetIndex 1.
+        * Please note assetIndex 1 is DigiByte and this will be included if storenonassetutxo=1 and
+        * the address actually holds some.  Only unspent holdings are reported, and an index whose
+        * unspent total is zero is omitted rather than reported as 0 - so an address holding only
+        * DigiDollar has no "1" key even though its DigiDollar output technically sits in the utxo
+        * table carrying 0 DigiByte.
         *
         * DigiDollar is not a DigiAsset and has no assetIndex, so it is reported under the separate
         * key "digidollar" holding the balance in cents(100 == $1.00).  The key is only present when

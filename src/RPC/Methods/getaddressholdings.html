@@ -37,6 +37,13 @@ JSON object with asset indexes as keys and quantities as values:
 </pre
                 >
                 <p>
+                    Quantities are in the asset's smallest unit &mdash; sats for
+                    assetIndex 1, which is DigiByte itself. Only unspent holdings
+                    are counted, and an index whose unspent total is zero is
+                    omitted rather than reported as <tt>0</tt>, so every key
+                    present represents something the address actually holds.
+                </p>
+                <p>
                     DigiDollar is not a DigiAsset and has no assetIndex, so it is
                     reported under the reserved non numeric key
                     <tt>digidollar</tt>, in cents (100 == $1.00). The key is only
