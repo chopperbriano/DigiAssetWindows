@@ -12,11 +12,14 @@
     TWO MODES in one file:
 
     -Mode Install  (default, run it yourself the first time)
-        Interactive, newbie-friendly walkthrough. Downloads and installs the
-        pinned baseline versions (DigiByte 9.26.5, kubo 0.49.0, latest
-        DigiAsset for Windows), writes every config file for you, opens the
-        local firewall, registers all the boot tasks, tests internet
-        reachability, and installs itself as a maintenance task.
+        Interactive, newbie-friendly walkthrough. Downloads and installs
+        DigiByte Core (pinned to 9.26.5 by -DigiByteVersion), plus the CURRENT
+        latest IPFS Desktop and DigiAsset for Windows - neither of those is
+        pinned, both track their newest GitHub release. IPFS Desktop bundles
+        its own kubo, so kubo is never downloaded separately. Then writes every
+        config file for you, opens the local firewall, registers all the boot
+        tasks, tests internet reachability, and installs itself as a
+        maintenance task.
 
     -Mode Service  (runs itself automatically at every boot, as SYSTEM)
         Non-interactive. Checks GitHub / IPFS for newer versions of ALL THREE
@@ -73,7 +76,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.22.0'
+$SCRIPT_VERSION = '2.22.1'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
