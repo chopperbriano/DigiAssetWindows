@@ -3211,7 +3211,17 @@ void Database::getNextIPFSJob(unsigned int& jobIndex, string& cid, string& sync,
             LockedStatement clearIPFSPause{_stmtClearIPFSPause};
             clearIPFSPause.bindInt64(1, currentTime);
             int rc = clearIPFSPause.executeStep();
-            if (rc != SQLITE_DONE) throw exceptionFailedUpdate();
+            //Same reasoning as the job lock below: this is housekeeping on a 100ms
+            //poll, so losing a race with a long analyzer transaction is expected and
+            //not worth a CRITICAL. The in-RAM entries were already dropped above, so
+            //a skipped DELETE leaves expired rows in the table until the next entry
+            //expires - harmless, because the statement sweeps by time rather than by
+            //id and so clears the stragglers along with it, and every reader filters
+            //on time anyway. Only a real error is worth raising.
+            if ((rc != SQLITE_DONE) && (rc != SQLITE_BUSY) && (rc != SQLITE_LOCKED)) {
+                handleSpecialErrors(__LINE__);
+                throw exceptionFailedUpdate();
+            }
         }
     }
 
@@ -3271,7 +3281,28 @@ void Database::getNextIPFSJob(unsigned int& jobIndex, string& cid, string& sync,
         setIPFSLockSync.bindText(1, sync);
         rc = setIPFSLockSync.executeStep();
     }
-    if (rc != SQLITE_DONE) throw exceptionFailedUpdate();
+    //Contention is NOT an error here. The IPFS worker polls this every 100ms, so
+    //it collides with any long write transaction the analyzer is running. There is
+    //a 5s busy_timeout, but a DigiDollar activation rewind deletes ~179k blocks
+    //worth of rows across nine tables in ONE transaction and comfortably outlasts
+    //it - which surfaced in the field as
+    //    CRITICAL: Threaded mainFunction exception: Database Exception: Update failed
+    //~21s into the rewind. IPFS inherits Threaded, so its exception reads exactly
+    //like an analyzer failure. It self-healed on the next poll, but it was logged
+    //CRITICAL and looked like data loss during a migration.
+    //
+    //Report "no job this pass" instead: we did NOT take the lock, so we must not
+    //hand the caller a job it would process unlocked. The worker sleeps 100ms and
+    //retries, which is exactly the right behaviour while another writer holds the
+    //database. Same treatment as the SQLITE_LOCKED/SQLITE_BUSY path further down.
+    if ((rc == SQLITE_BUSY) || (rc == SQLITE_LOCKED)) {
+        jobIndex = 0;
+        return;
+    }
+    if (rc != SQLITE_DONE) {
+        handleSpecialErrors(__LINE__);
+        throw exceptionFailedUpdate();
+    }
 }
 
 /**
