@@ -188,6 +188,42 @@ if ($havePool) {
     } else {
         Warn "config.cfg has no psp2server/psp1server" "This node will not join any remote pool."
     }
+
+    # HAIRPIN CHECK. A node ON the pool box that points psp<N>server at the pool's
+    # PUBLIC hostname sends its own traffic out to its own public IP and back.
+    # Plenty of routers don't support that, and the failure is silent and
+    # misleading: the request "succeeds" with an EMPTY body, so the node logs
+    # "PSP permanent page N returned non-JSON (len=0)" and "PSP keepalive returned
+    # UNEXPECTED response:" - both of which read as a broken POOL, when the pool is
+    # serving those exact URLs perfectly to everyone else. Loopback avoids it.
+    if ($psp1 -and ($psp1 -notmatch '^https?://(127\.0\.0\.1|localhost|\[::1\])')) {
+        $pspHost = $null
+        try { $pspHost = ([uri]$psp1).Host } catch {}
+        if ($pspHost) {
+            # Every address this machine could answer on: its own NICs, plus its
+            # public IP (which in a NAT setup lives on the router, not a NIC).
+            $mine = @()
+            try { $mine += (Get-NetIPAddress -ErrorAction Stop | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress) } catch {}
+            try { $mine += (Invoke-RestMethod 'https://api.ipify.org' -TimeoutSec 8).Trim() } catch {}
+            $mine = $mine | Where-Object { $_ } | Sort-Object -Unique
+
+            $resolved = @()
+            try { $resolved = [System.Net.Dns]::GetHostAddresses($pspHost) | ForEach-Object { $_.IPAddressToString } } catch {}
+
+            $clash = $resolved | Where-Object { $mine -contains $_ }
+            if ($clash) {
+                Warn "psp server points at THIS box's own public address (NAT hairpin)" (
+                    "$psp1 resolves to $($clash -join ', '), which is this machine. " +
+                    "Many routers return an EMPTY body for that round trip, which shows up as " +
+                    "'PSP permanent page N returned non-JSON (len=0)' and 'PSP keepalive returned UNEXPECTED response:' " +
+                    "even though the pool serves those URLs fine to everyone else.")
+                Write-Host ("       Fix: set psp2server=http://127.0.0.1:" + $poolPort + " in config.cfg and restart the node") -ForegroundColor DarkGray
+                Write-Host  "       (the base URL is read once at startup, so a restart is required)." -ForegroundColor DarkGray
+            } elseif ($resolved.Count -gt 0) {
+                Ok "psp server is a genuinely remote address (no NAT hairpin)" ($pspHost + " -> " + ($resolved -join ', '))
+            }
+        }
+    }
 }
 
 # ---- inline-comment / trailing-space corruption ---------------------------
