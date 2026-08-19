@@ -598,6 +598,19 @@ void WebServer::serverLoop() {
                 std::string content((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
                 res.result(http::status::ok);
                 res.set(http::field::content_type, getMimeType(path));
+                // Static assets were served with NO cache header, which lets a browser
+                // cache index.html heuristically and effectively forever. The result:
+                // after updating the node you keep seeing the OLD console, while the
+                // version badge reads the NEW build - because that comes from
+                // /api/status.json, which is no-store. Every web change silently
+                // required a manual hard refresh that nobody knew to do.
+                //
+                // "no-cache" does NOT mean don't cache; it means revalidate before
+                // use. The browser still keeps the file and we still answer most
+                // requests cheaply, but a console shipped in a new release is picked
+                // up on the next normal reload. This matters for the /rpc/*.html docs
+                // too - the console fetches those with cache:'force-cache'.
+                res.set(http::field::cache_control, "no-cache");
                 res.body() = content;
                 res.keep_alive(req.keep_alive());
                 res.prepare_payload();

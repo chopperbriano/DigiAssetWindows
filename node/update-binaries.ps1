@@ -191,7 +191,14 @@ try {
     }
 
     # Refresh the web console before restarting the node so it finds web\ at boot.
-    if ($updated -gt 0) { Update-WebConsole }
+    # UNCONDITIONAL, deliberately. This used to be gated on `$updated -gt 0`, so a
+    # box whose exes were already current never refreshed its web\ folder - and a
+    # release that changes only the console (new dashboard cards, new RPC doc
+    # pages) shipped nothing at all. The symptom is nasty: the version badge reads
+    # the new build, because it comes from the live status JSON, while the page
+    # around it is the old one. Re-extracting a ~240 KB zip costs nothing next to
+    # that, so it now happens on every run.
+    Update-WebConsole
 
     if ($updated -gt 0) {
         foreach ($r in $restartList) {

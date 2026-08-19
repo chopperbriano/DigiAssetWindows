@@ -82,9 +82,18 @@ try { $tag = (Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/lat
 Say ("Latest release: " + $(if ($tag) { $tag } else { '(could not read - will still try)' })) 'White'
 
 # Already up to date?
+# Still refresh the web console before returning. The exes and the :8090 console
+# ship in the same release but are separate files, and a box can legitimately have
+# current exes with a stale web\ folder - a partly-failed earlier run, a manual exe
+# copy, or simply that this check passed on a release whose only change WAS the
+# console. Skipping it produces a confusing result: the version badge reads the new
+# build (it comes from the live status JSON) while the page around it is the old
+# one. Re-extracting a ~240 KB zip is cheap enough to just always do.
 $tagFile = Join-Path $DigiAssetDir '.installed-tag'
 if (-not $Force -and $tag -and (Test-Path $tagFile) -and (((Get-Content $tagFile -Raw) + '').Trim() -eq $tag)) {
-    Say "Already on $tag - nothing to do. (Use -Force to reinstall.)" 'Green'
+    Say "Already on $tag - checking the web console is current..." 'Green'
+    Update-WebAssets $DigiAssetDir $Repo
+    Say "Nothing else to do. (Use -Force to reinstall the binaries.)" 'Green'
     return
 }
 
