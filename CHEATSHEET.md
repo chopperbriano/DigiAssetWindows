@@ -18,9 +18,10 @@ the one most people want:
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
 ```
 
-**Just a DigiByte Core wallet, seeded** — installs DigiByte, writes its config, and
+**Just a DigiByte Core wallet, seeded** — installs DigiByte, writes its config,
 fast-syncs it from the published snapshot so it starts near the chain tip instead of
-syncing for days. No IPFS, no node, no pool:
+syncing for days, then **creates a wallet and offers to encrypt it** (modern
+DigiByte Core does not create one on its own). No IPFS, no node, no pool:
 
 ```powershell
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-digibyte.ps1 -OutFile "$env:TEMP\install-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-digibyte.ps1"
@@ -37,6 +38,13 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snap
 
 > **Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.**
 > `install-digibyte.ps1` checks and warns before committing to the download.
+> Both scripts read the published manifest at run time, so you always get the
+> newest snapshot rather than a pinned one — currently **DigiByte 9.26.5, block
+> ~24,045,000** (published Aug 2026). Archives are SHA256-verified, and a failure
+> falls back to a normal sync rather than leaving a half-written data directory.
+>
+> Back up `wallet.dat` off the machine once it is created — there is no recovery
+> if the disk dies or the passphrase is lost.
 >
 > Handy switches for the two DigiByte scripts: `-DataDir "$env:APPDATA\DigiByte"`
 > (stock DigiByte layout instead of `C:\DigiByte\Data`) and `-Force` (unattended).

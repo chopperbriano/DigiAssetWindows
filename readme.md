@@ -35,7 +35,8 @@ Want **just DigiByte Core** — no IPFS, no DigiAsset node, no pool — up and
 running near the chain tip instead of syncing for days? This one script does the
 whole job: installs DigiByte Core, writes a complete `digibyte.conf`, seeds the
 blockchain from the same pre-synced snapshot the node installer uses, opens the
-firewall for P2P, and starts the wallet. In an **Administrator PowerShell**:
+firewall for P2P, starts the wallet, **creates a wallet for you, and offers to
+encrypt it**. In an **Administrator PowerShell**:
 
 ```powershell
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/install-digibyte.ps1 -OutFile "$env:TEMP\install-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-digibyte.ps1"
@@ -49,8 +50,20 @@ fully unattended run. Re-running is safe — an existing `digibyte.conf` is topp
 up rather than overwritten (your RPC password survives), and an existing
 blockchain is left alone.
 
-> Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.
-> The script checks first and warns you before committing to the download.
+**About the wallet.** Modern DigiByte Core (Bitcoin Core base) does *not* create a
+wallet on its own, so a fresh install has nothing to receive into. This script
+creates one once RPC is up, then offers to encrypt it — a passphrase is needed to
+**spend**, while receiving still works without one. Answer `n` to skip and do it
+later in DigiByte-Qt (*Settings > Encrypt Wallet*). **Back up `wallet.dat` and keep
+a copy off the machine**; there is no recovery if the disk dies or you lose the
+passphrase.
+
+> **Seeding** reads the published manifest at run time, so you always get the
+> newest snapshot rather than a pinned one — currently **DigiByte 9.26.5, block
+> ~24,045,000** (published Aug 2026). It downloads ~34 GB and needs roughly
+> **86 GB free** while it unpacks; the script checks and warns before committing
+> to the download. Every archive is SHA256-verified, and any failure falls back to
+> a normal sync rather than leaving a half-written data directory.
 
 ### Already have DigiByte Core installed?
 
