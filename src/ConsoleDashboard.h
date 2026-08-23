@@ -84,6 +84,12 @@ private:
     std::chrono::steady_clock::time_point _lastTime;
     double _blocksPerSec = 0.0;
 
+    // When the analyzer entered INITIALIZING, so a startup that never completes is
+    // reported as stuck instead of sitting on a hopeful yellow "Initializing..."
+    // forever (a node showed that for 4.6 hours after its startup thread died).
+    // Zero-initialized time_point means "not currently initializing".
+    std::chrono::steady_clock::time_point _initializingSince{};
+
     // Payout address and balance (refreshed every 60 seconds)
     std::string _payoutAddress;
     std::string _payoutBalance;

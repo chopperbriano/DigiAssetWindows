@@ -163,7 +163,7 @@ void DigiByteCore::makeConnection() {
     } catch (DigiByteException& e) {
         dropConnection();
         if (e.getMessage() != "Failed to authenticate successfully") {
-            throw exceptionCoreOffline();
+            throw exceptionCoreOffline(e.getMessage());
         }
         throw Config::exceptionConfigFileInvalid();
     }
@@ -199,13 +199,12 @@ auto DigiByteCore::errorCheckAPI(fn_t fn) -> decltype(fn()) {
     try {
         return fn();
     } catch (DigiByteException& e) {
-        string temp = e.getMessage();
         if (e.getMessage() != "Failed to authenticate successfully") {
-            throw exceptionCoreOffline();
+            throw exceptionCoreOffline(e.getMessage());
         }
         throw exception(e.getMessage());
     } catch (const std::exception& e) {
-        throw exception();
+        throw exception(e.what());
     }
 }
 

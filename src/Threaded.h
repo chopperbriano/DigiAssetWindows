@@ -30,16 +30,26 @@ class Threaded {
     std::atomic<bool> _running{false};
     std::atomic<bool> _stopRequest{false};
     void _threadFunction();                 // thread entry point: runs the startup/main-loop/shutdown lifecycle
+    bool _runStartupWithRetry();            // startupFunction() with backoff; false if stop() came first
     size_t _parallels = 1;//if task is asynchronous allows running sub threads within thread.
 
 protected:
-    virtual void startupFunction();         // override: one-time setup run once when the thread starts
+    // override: one-time setup run when the thread starts. MUST be idempotent - it is
+    // retried with backoff if it throws, so it can run more than once per start().
+    virtual void startupFunction();
+
+    // Backoff pacing for the startupFunction() retry loop. Exposed so a subclass whose
+    // dependency comes up on a different timescale can tune it (and so tests can drive
+    // the loop without real-time sleeps). Set before start().
+    unsigned _startupRetryDelayMs = 2000;
+    unsigned _startupRetryMaxDelayMs = 60000;
     virtual void mainFunction();            // override: the repeatedly-executed work (called in a loop until stop)
     virtual void shutdownFunction();        // override: one-time cleanup run once when the thread stops
     void setMaxParallels(size_t max = 1);   // set how many mainFunction() sub-tasks may run concurrently per loop
 
 public:
     bool stopRequested();                   // true once stop() has requested shutdown; poll from mainFunction() to exit early
+    bool isRunning() const;                 // true while the worker thread is alive; lets a watchdog spot a dead worker
     void start();                           // spawn the worker thread (no-op if already running)
     virtual void stop();                    // request shutdown and block until the worker thread has fully exited
     // IMPORTANT: ~Threaded() calls the virtual stop(), but during base destruction

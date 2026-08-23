@@ -280,6 +280,16 @@ void ChainAnalyzer::startupFunction() {
     Database* db = main->getDatabase();
     DigiByteCore* dgb = main->getDigiByteCore();
 
+    //find block we left off at
+    _height = db->getBlockHeight();
+
+    // Core answered once during boot, but that does NOT mean it can serve this call
+    // yet: it may still be warming up, or be behind our stored height after its own
+    // reindex/rewind, and getblockhash then throws.  Wait it out here rather than
+    // letting the throw escape - waiting is always right for a local node that is
+    // coming up, and this keeps the common case out of the log entirely.
+    if (!waitForCoreHeight(_height)) return; //stop requested while waiting
+
     //make sure everything is set up.
     // Always use the fast/relaxed-durability pragmas for the genesis->tip
     // catch-up: chain.db is fully re-derivable from the blockchain, so a crash
@@ -287,11 +297,11 @@ void ChainAnalyzer::startupFunction() {
     // initial-sync speedup (avoids an fsync per block + gives a 256MB cache).
     // If the operator asked for durable writes (verifydatabasewrite=true, the
     // default), they're restored once we reach the tip in phaseSync().
+    // Deliberately AFTER the wait above so a node that never gets past startup is
+    // not left sitting in relaxed-durability mode with no sync running.
     db->disableWriteVerification();
     _writeVerificationRestored = false;
 
-    //find block we left off at
-    _height = db->getBlockHeight();
     _nextHash = dgb->getBlockHash(_height);
 
     //clear the block we left off on just in case it was partially processed
@@ -310,6 +320,56 @@ void ChainAnalyzer::startupFunction() {
 
     //rewind far enough to index the DigiDollar era if we have never done it
     phaseDigiDollarBackfill();
+}
+
+/**
+ * Blocks until DigiByte Core is answering RPC and has at least `height` blocks.
+ *
+ * Every non-auth RPC failure reaches us as exceptionCoreOffline, so a node that is
+ * merely mid-warmup is indistinguishable from one that is genuinely down - and both
+ * used to escape startupFunction() and kill this thread permanently.  A local node
+ * that is starting will always finish starting, so waiting is the correct response;
+ * the caller only gives up if the operator asks to shut down.
+ *
+ * Logs once when it starts waiting and once when the wait clears, so a slow Core
+ * start is visible without the log filling up while we poll.
+ *
+ * @param height block height Core must be able to serve
+ * @return true once Core is ready, false if stop() was requested while waiting
+ */
+bool ChainAnalyzer::waitForCoreHeight(int height) {
+    Log* log = Log::GetInstance();
+    DigiByteCore* dgb = AppMain::GetInstance()->getDigiByteCore();
+
+    bool announced = false;
+    while (!stopRequested()) {
+        std::string reason;
+        try {
+            if (static_cast<long long>(dgb->getBlockCount()) >= static_cast<long long>(height)) {
+                if (announced) {
+                    log->addMessage("DigiByte Core is ready - starting chain analysis at block " +
+                                    to_string(height) + ".");
+                }
+                return true;
+            }
+            reason = "it has not reached block " + to_string(height) + " yet";
+        } catch (const std::exception& e) {
+            reason = e.what();
+        }
+
+        if (!announced) {
+            announced = true;
+            log->addMessage("Waiting for DigiByte Core before chain analysis can start (" + reason +
+                                    ").  This is normal while the node finishes starting up.",
+                            Log::WARNING);
+        }
+
+        //poll in slices so a shutdown request is honoured promptly
+        for (int waited = 0; (waited < 5000) && !stopRequested(); waited += 100) {
+            this_thread::sleep_for(chrono::milliseconds(100));
+        }
+    }
+    return false;
 }
 
 /**

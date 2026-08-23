@@ -163,6 +163,9 @@ private:
     long long _clearAddressCacheRunTime = 0;
     unsigned int _clearAddressCacheRunCount = 0;
 
+    //wait for DigiByte Core to be able to serve a given height (false = shutdown requested)
+    bool waitForCoreHeight(int height);
+
     //phases functions
     void phaseRewind();//detect a fork at the current height and roll the DB back to the fork point
     void phaseSync();  //main catch-up/tip-follow loop: fetch, process, and store each block

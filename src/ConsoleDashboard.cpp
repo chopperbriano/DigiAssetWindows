@@ -490,6 +490,12 @@ void ConsoleDashboard::render() {
     }
     chainTip = (_cachedChainTip > 0) ? _cachedChainTip : syncHeight; // fallback while unset
 
+    auto now = std::chrono::steady_clock::now();
+
+    // Track how long the analyzer has been INITIALIZING so a startup that never
+    // completes can be reported as stuck rather than as ordinary progress.
+    if (syncState != ChainAnalyzer::INITIALIZING) _initializingSince = {};
+
     // Determine sync status text
     if (syncState == ChainAnalyzer::SYNCED) {
         syncStatusText = "Fully Synced";
@@ -498,8 +504,20 @@ void ConsoleDashboard::render() {
         syncStatusText = "Stopped";
         syncColor = FG_RED;
     } else if (syncState == ChainAnalyzer::INITIALIZING) {
-        syncStatusText = "Initializing...";
-        syncColor = FG_YELLOW;
+        // Initializing is normally seconds. If it persists, say so loudly and for how
+        // long: the failure this guards against is a startup that never finished, and
+        // an unqualified "Initializing..." gave the operator no way to tell the two
+        // apart while the node sat thousands of blocks behind.
+        if (_initializingSince.time_since_epoch().count() == 0) _initializingSince = now;
+        double stuckSec = std::chrono::duration<double>(now - _initializingSince).count();
+        if (stuckSec >= 120.0) {
+            syncStatusText = "Initializing - STUCK for " + formatDuration(stuckSec) +
+                             " (check log for the cause)";
+            syncColor = FG_RED;
+        } else {
+            syncStatusText = "Initializing...";
+            syncColor = FG_YELLOW;
+        }
     } else if (syncState == ChainAnalyzer::REWINDING) {
         syncStatusText = "Rewinding (fork detected)";
         syncColor = FG_YELLOW;
@@ -514,7 +532,6 @@ void ConsoleDashboard::render() {
     }
 
     // Compute blocks/sec from height delta
-    auto now = std::chrono::steady_clock::now();
     double elapsed = std::chrono::duration<double>(now - _lastTime).count();
     if (elapsed >= 1.0 && syncHeight > _lastHeight) {
         _blocksPerSec = (syncHeight - _lastHeight) / elapsed;
@@ -533,6 +550,11 @@ void ConsoleDashboard::render() {
     if (chainTip > 0 && syncHeight > 0) {
         progress = (double)syncHeight / (double)chainTip;
         if (progress > 1.0) progress = 1.0;
+        // Never let a node that is still behind round up to a full bar / "100.0%".
+        // 3,194 blocks behind out of 24 million is 99.99%, which printed as 100.0%
+        // and made a stalled node look finished. Cap the DISPLAY just below full
+        // until the height actually reaches the tip.
+        if (syncHeight < chainTip && progress > 0.999) progress = 0.999;
     }
     if (syncState < 0 && _blocksPerSec > 0.01) {
         int blocksBehind = -syncState;

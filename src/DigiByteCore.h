@@ -373,10 +373,16 @@ public:
 
     // Thrown when the node was reachable before but a call now fails to reach
     // (or is refused by) DigiByte Core.
+    //
+    // errorCheckAPI() funnels EVERY non-auth RPC failure through here, so the name
+    // oversells what is known: a node that is merely warming up ("Loading block
+    // index..."), a getblockhash past the tip, or an rpctimeout all land here too.
+    // Carry the underlying message so the log names the real cause instead of
+    // claiming the node is offline while the dashboard shows it Online.
     class exceptionCoreOffline : public exception {
     public:
-        explicit exceptionCoreOffline()
-            : exception("Core Offline") {}
+        explicit exceptionCoreOffline(const std::string& detail = "")
+            : exception(detail.empty() ? "Core Offline" : "Core Offline (" + detail + ")") {}
     };
 
     // Thrown when a connection-requiring call runs before makeConnection().
