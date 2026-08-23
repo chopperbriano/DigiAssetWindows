@@ -12,14 +12,28 @@
     TWO MODES in one file:
 
     -Mode Install  (default, run it yourself the first time)
-        Interactive, newbie-friendly walkthrough. Downloads and installs
-        DigiByte Core (pinned to 9.26.5 by -DigiByteVersion), plus the CURRENT
-        latest IPFS Desktop and DigiAsset for Windows - neither of those is
-        pinned, both track their newest GitHub release. IPFS Desktop bundles
-        its own kubo, so kubo is never downloaded separately. Then writes every
-        config file for you, opens the local firewall, registers all the boot
-        tasks, tests internet reachability, and installs itself as a
-        maintenance task.
+        UNATTENDED. Approve the one Administrator prompt and it runs to the end
+        with no further questions or clicks - the target user is someone who
+        does not know what a DigiByte address is, so nothing is asked that the
+        script can work out for itself:
+          * payout address  - CREATED in the DigiByte wallet it sets up on this
+                              PC (earnings land in the user's own desktop
+                              wallet). Override with -PayoutAddress.
+          * full vs lean    - chosen from free disk space. Override with -Lean.
+          * pool URL        - the default is right unless you run your own pool.
+          * firewall        - every listening program is pre-authorized BEFORE
+                              it first starts, so Windows never raises its
+                              "allow this app?" alert.
+          * wallet encryption - skipped (see -EncryptWallet); a passphrase the
+                              owner forgets destroys the earnings for good.
+
+        Downloads and installs DigiByte Core (pinned to 9.26.5 by
+        -DigiByteVersion), plus the CURRENT latest IPFS Desktop and DigiAsset
+        for Windows - neither of those is pinned, both track their newest
+        GitHub release. IPFS Desktop bundles its own kubo, so kubo is never
+        downloaded separately. Then writes every config file, opens the local
+        firewall, registers all the boot tasks, tests internet reachability,
+        and installs itself as a maintenance task.
 
     -Mode Service  (runs itself automatically at every boot, as SYSTEM)
         Non-interactive. Checks GitHub / IPFS for newer versions of ALL THREE
@@ -66,8 +80,18 @@ param(
     [switch]$Lean,
     # -NoUpnp: skip the automatic router port-forward (UPnP) attempt.
     [switch]$NoUpnp,
-    # -NoEncryptPrompt: skip offering to encrypt the wallet during an interactive install.
-    [switch]$NoEncryptPrompt
+    # -NoEncryptPrompt: accepted for backwards compatibility only. Wallet encryption
+    # is now opt-in (see -EncryptWallet), so this switch no longer changes anything.
+    [switch]$NoEncryptPrompt,
+    # -EncryptWallet: ask for a passphrase and encrypt the payout wallet.
+    #
+    # OFF by default, deliberately. The install is meant to run start-to-finish with
+    # no questions, and this is the one prompt that cannot be answered for the user:
+    # a passphrase they later forget means the hosting earnings are gone with no
+    # recovery whatsoever. The wallet holds small hosting tips, so silently skipping
+    # is the safer default; the summary tells them how to encrypt it in DigiByte-Qt
+    # (Settings > Encrypt Wallet) whenever they want to.
+    [switch]$EncryptWallet
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,7 +100,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.23.0'
+$SCRIPT_VERSION = '2.24.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -361,6 +385,10 @@ function Ensure-Firewall {
     Open-Port 'DigiStamp IPFS swarm (TCP 4001)' TCP 4001
     Open-Port 'DigiStamp IPFS swarm (UDP 4001)' UDP 4001
     Open-Port 'DigiByte P2P (TCP 12024)'        TCP 12024
+    # Backstop: the programs are pre-authorized before they are first launched, but
+    # re-assert it here so a repair run fixes an install whose rules were removed or
+    # whose exe moved. Port rules alone never suppress the per-program popup.
+    Add-IpfsFirewallRules
 }
 
 # Best-effort automatic router port-forward via UPnP (IGD). Opens 4001 TCP/UDP
@@ -401,13 +429,49 @@ function Invoke-UpnpForward {
 # allow rule for the program before it starts suppresses that prompt.
 function Add-ProgramAllowRule($name, $exePath) {
     if (-not $exePath -or -not (Test-Path $exePath)) { return }
+    try { $exePath = (Resolve-Path -LiteralPath $exePath).Path } catch {}
     $disp = "DigiStamp allow $name"
-    if (-not (Get-NetFirewallRule -DisplayName $disp -ErrorAction SilentlyContinue)) {
-        try {
-            New-NetFirewallRule -DisplayName $disp -Direction Inbound -Action Allow -Program $exePath -Profile Any -ErrorAction Stop | Out-Null
-            Log "  + firewall: pre-authorized $name (no popup)"
-        } catch { Log "  (could not pre-authorize $name in firewall: $($_.Exception.Message))" 'WARN' }
+    $existing = Get-NetFirewallRule -DisplayName $disp -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) {
+        # An app upgrade moves the exe, and a rule still pointing at the OLD path
+        # authorizes nothing - Windows prompts again for the new binary while the
+        # name check above says "already done". Compare the path, not just the name.
+        $current = ''
+        try { $current = ($existing | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program } catch {}
+        if ($current -and ($current -ieq $exePath)) { return }
+        try { Remove-NetFirewallRule -DisplayName $disp -ErrorAction Stop } catch {}
+        Log "  firewall: $name moved - refreshing its allow rule"
     }
+    try {
+        New-NetFirewallRule -DisplayName $disp -Direction Inbound -Action Allow -Program $exePath -Profile Any -ErrorAction Stop | Out-Null
+        Log "  + firewall: pre-authorized $name (no popup)"
+    } catch { Log "  (could not pre-authorize $name in firewall: $($_.Exception.Message))" 'WARN' }
+}
+
+# Pre-authorize IPFS so port 4001 never raises a "Windows Security Alert".
+#
+# The Open-Port 4001 rules do NOT prevent that popup: Windows prompts PER PROGRAM,
+# not per port, so a listening binary with no program rule is prompted for even when
+# the port is already open. It is the kubo daemon bundled INSIDE IPFS Desktop - not
+# the Electron app - that binds 4001, and its path moves with every IPFS Desktop
+# version, so find whatever ipfs.exe is actually shipped rather than hard-coding it.
+#
+# MUST run after the install (the exe has to exist) but BEFORE the first launch -
+# once the daemon binds the port with no rule, the prompt has already appeared.
+function Add-IpfsFirewallRules {
+    $exe = Get-IpfsDesktopExe
+    if (-not $exe) { Log '  (IPFS Desktop not found - firewall pre-authorization skipped)' 'WARN'; return }
+    Add-ProgramAllowRule 'IPFS Desktop' $exe
+
+    $root = Split-Path $exe -Parent
+    $kubo = @()
+    try { $kubo = @(Get-ChildItem -LiteralPath $root -Filter 'ipfs.exe' -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 4) } catch {}
+    if ($kubo.Count -eq 0) {
+        Log '  (bundled kubo ipfs.exe not found under IPFS Desktop - port 4001 may prompt once)' 'WARN'
+        return
+    }
+    $n = 0
+    foreach ($k in $kubo) { $n++; Add-ProgramAllowRule "IPFS kubo daemon $n" $k.FullName }
 }
 
 # The node/pool exes are MSVC-built and need the Visual C++ x64 runtime
@@ -460,6 +524,108 @@ function Invoke-DgbRpc([string]$method, [string]$paramsJson = '[]') {
     return $r.result
 }
 
+# Same as Invoke-DgbRpc but aimed at a NAMED wallet. Wallet calls like getnewaddress
+# are rejected on the base endpoint when more than one wallet is loaded, so anything
+# wallet-specific has to name the wallet in the URL.
+function Invoke-DgbWalletRpc([string]$wallet, [string]$method, [string]$paramsJson = '[]') {
+    $cfg = Read-Conf $DgbConf
+    $port = $RpcPort; if ($cfg['rpcport']) { try { $port = [int]$cfg['rpcport'] } catch {} }
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($cfg['rpcuser']):$($cfg['rpcpassword'])"))
+    $body = '{"jsonrpc":"1.0","id":"setup","method":"' + $method + '","params":' + $paramsJson + '}'
+    $uri = "http://127.0.0.1:$port/wallet/" + [uri]::EscapeDataString($wallet)
+    $r = Invoke-RestMethod -Uri $uri -Method Post -ContentType 'text/plain' `
+            -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 20 -Body $body
+    return $r.result
+}
+
+# Settle on the DigiByte address the pool pays hosting earnings to.
+#
+# If the caller passed -PayoutAddress we use it. Otherwise we CREATE one in the
+# DigiByte wallet this installer just set up on this PC. That wallet belongs to the
+# user, runs on their machine, and only they hold its keys - so it is a correct
+# payout destination, and it removes the one question a non-technical user could not
+# answer during setup ("paste a DigiByte address"). Nobody has to already own a
+# wallet, find an address, or risk mistyping one; the earnings simply arrive in the
+# DigiByte wallet on their desktop.
+#
+# Needs DigiByte RPC up and a wallet loaded, so call it after Wait-ForDigiByteRpc +
+# Ensure-DigiByteWallet and before Write-NodeConfig (which writes it to config.cfg).
+function Resolve-PayoutAddress {
+    if ($script:PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
+        Log "  payout address (supplied): $script:PayoutAddress" 'OK'
+        return
+    }
+    if ($script:PayoutAddress) {
+        Log "  ignoring -PayoutAddress '$script:PayoutAddress' - not a valid DigiByte address." 'WARN'
+        $script:PayoutAddress = ''
+    }
+
+    $wallet = ''
+    try { $w = @(Invoke-DgbRpc 'listwallets'); if ($w.Count -gt 0) { $wallet = "$($w[0])" } } catch {}
+
+    # The wallet can still be finishing its first load right after createwallet, so
+    # give it a few tries rather than dropping the user into an unpaid install.
+    for ($try = 1; $try -le 5; $try++) {
+        try {
+            $addr = if ($wallet) { Invoke-DgbWalletRpc $wallet 'getnewaddress' '["DigiAsset hosting payout"]' }
+                    else         { Invoke-DgbRpc 'getnewaddress' '["DigiAsset hosting payout"]' }
+            $addr = ("$addr").Trim()
+            if ($addr -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
+                $script:PayoutAddress = $addr
+                Log "  payout address created in your own DigiByte wallet: $addr" 'OK'
+                Log '  earnings arrive in the DigiByte wallet on this PC - no address to paste, nothing to set up.'
+                return
+            }
+        } catch {
+            if ($try -eq 5) { Log "  could not create a payout address: $($_.Exception.Message)" 'WARN' }
+        }
+        Start-Sleep 3
+    }
+
+    # Non-fatal on purpose: hosting still works and still helps the network, and a
+    # half-finished install is worse for the user than an unpaid one. The summary
+    # calls this out, and re-running the installer fixes it.
+    Log '  NO payout address could be created - this node will host but will NOT be paid.' 'WARN'
+    Log '  the maintenance run retries this automatically; no action needed from you.' 'WARN'
+}
+
+# Maintenance self-heal for the case above: config.cfg has no payout address because
+# DigiByte RPC was not answering when the installer needed it. Left alone the node
+# would host forever without ever being paid, and nothing would tell the user why -
+# so every maintenance run retries it once DigiByte is up. No-op when already set.
+function Repair-PayoutAddress {
+    if (-not (Test-Path $NodeConfig)) { return }
+    $raw = ''
+    try { $raw = Get-Content -LiteralPath $NodeConfig -Raw } catch { return }
+    if ($raw -match '(?m)^\s*psp2payout\s*=\s*\S') { return }   # already has a real value
+
+    Ensure-DigiByteWallet
+    $script:PayoutAddress = ''
+    Resolve-PayoutAddress
+    if ($script:PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') { return }
+
+    # Replace the commented placeholder in place so the surrounding documentation
+    # comments survive; append only if the key is absent entirely.
+    $out = @(); $set2 = $false; $set0 = $false
+    foreach ($ln in (Get-Content -LiteralPath $NodeConfig)) {
+        if ($ln -match '^\s*#?\s*psp2payout\s*=') {
+            if (-not $set2) { $out += "psp2payout=$script:PayoutAddress"; $set2 = $true }
+            continue
+        }
+        if ($ln -match '^\s*#?\s*psp0payout\s*=') {
+            if (-not $set0) { $out += "psp0payout=$script:PayoutAddress"; $set0 = $true }
+            continue
+        }
+        $out += $ln
+    }
+    if (-not $set2) { $out += "psp2payout=$script:PayoutAddress" }
+    if (-not $set0) { $out += "psp0payout=$script:PayoutAddress" }
+    try {
+        Set-Content -LiteralPath $NodeConfig -Value $out -Encoding ASCII
+        Log "  self-heal: payout address set to $script:PayoutAddress (node registers with the pool on its next restart)." 'OK'
+    } catch { Log "  could not write the payout address into config.cfg: $($_.Exception.Message)" 'WARN' }
+}
+
 # Ensure a DigiByte wallet exists + is loaded. Modern DigiByte Core (Bitcoin Core
 # base) does NOT auto-create one, so a fresh node has no wallet - the node can't
 # get a payout address and the user has nothing to receive into. Idempotent: if a
@@ -481,7 +647,8 @@ function Ensure-DigiByteWallet {
 # encrypted, or the wallet/RPC isn't ready. The passphrase is never stored or
 # logged. encryptwallet stops DigiByte, so we restart the wallet afterward.
 function Protect-Wallet {
-    if ($NoEncryptPrompt -or -not [Environment]::UserInteractive) { return }
+    # Opt-in only - see the -EncryptWallet parameter for why this is not the default.
+    if (-not $EncryptWallet -or -not [Environment]::UserInteractive) { return }
     Ensure-DigiByteWallet
     $wi = $null
     try { $wi = Invoke-DgbRpc 'getwalletinfo' } catch { return }   # no wallet/RPC yet
@@ -1065,6 +1232,14 @@ function Write-NodeConfig($rpc) {
         }
         return
     }
+    # Resolve-PayoutAddress is best-effort, so the address CAN still be empty here.
+    # Write a commented placeholder rather than a bare "psp2payout=" - an empty value
+    # is a malformed setting the node would have to interpret, while a comment leaves
+    # config.cfg valid and the maintenance run fills it in later.
+    $payout2Line = if ($PayoutAddress) { "psp2payout=$PayoutAddress" }
+                   else { '#psp2payout=      # NOT SET yet - this node hosts but is NOT paid until it is' }
+    $payout0Line = if ($PayoutAddress) { "psp0payout=$PayoutAddress" } else { '#psp0payout=' }
+
     # NOTE: the comment lines below are written INTO config.cfg (the node's config
     # parser keeps lines starting with # and preserves them on write-back). Keep
     # them ASCII and apostrophe-free to stay valid in this single-quoted array.
@@ -1096,7 +1271,7 @@ function Write-NodeConfig($rpc) {
         "psp2server=$PoolServer",
         'psp2subscribe=1',
         '#   psp2payout = the DGB address the pool pays your hosting earnings to.',
-        "psp2payout=$PayoutAddress",
+        $payout2Line,
         '#   psp2secret is auto-generated on first run (this node identity). Never copy',
         '#   it from another node - each node must have its own unique secret.',
         '#   Pool 1 (legacy MCTrivia PSP) is deprecated; kept OFF so this node does not',
@@ -1106,7 +1281,7 @@ function Write-NodeConfig($rpc) {
         '# --- Local pool (psp0) - your own private pin list ---------------------------',
         '#   Pool 0 is your own local pin list; pool 2 (above) is the pool you join.',
         'psp0subscribe=1',
-        "psp0payout=$PayoutAddress",
+        $payout0Line,
         '',
         '# --- Sync / storage tuning ---------------------------------------------------',
         '#   verifydatabasewrite=0 -> fast initial sync (relaxed durability only during',
@@ -1332,93 +1507,39 @@ function Invoke-Install {
     Write-Host "Nothing here spends your coins." -ForegroundColor Green -NoNewline
     Write-Host "  (These router steps are shown again at the end.)" -ForegroundColor DarkGray
     Write-Host ""
-    $go = Read-Host 'Press Enter to continue, or type N then Enter to cancel'
-    if ($go -match '^[Nn]') { Write-Host 'Cancelled - nothing was changed.' -ForegroundColor Yellow; return }
+    # From here the install runs start to finish with NO questions. Everything that
+    # used to be a prompt is either derived automatically (payout address, full vs
+    # lean) or has a default that is right for essentially everyone (pool URL).
+    # Advanced users override with -PayoutAddress / -PoolServer / -Lean.
 
     # 0. Payout address ------------------------------------------------------
+    # NOT resolved here: the address is created in the user's own DigiByte wallet,
+    # which does not exist until step 1 installs and starts DigiByte Core. See
+    # Resolve-PayoutAddress, called in step 3 just before config.cfg is written.
     $treasury = Get-TreasuryInfo   # pool's published treasury address + balance (may be $null if unreachable)
-    if (-not $PayoutAddress) {
-        Write-Host "`n--- Your payout address ---" -ForegroundColor Cyan
-        Write-Host 'The DigiByte address where the pool sends your hosting earnings.' -ForegroundColor White
-        Write-Host 'Use an address from a wallet YOU control (starts with D, S, or dgb1).' -ForegroundColor White
-        Write-Host ''
-        Write-Host 'Please be realistic about earnings:' -ForegroundColor Yellow
-        Write-Host '  * Payments are TINY - this is a tip jar for hosting, not a salary.' -ForegroundColor White
-        Write-Host '  * You are ONLY paid when the pool TREASURY has funds. The treasury is' -ForegroundColor White
-        Write-Host '    shared out among all verified nodes; when it is empty, nobody is paid' -ForegroundColor White
-        Write-Host '    that period. The pool never pays money it does not have.' -ForegroundColor White
-        Write-Host "  * See the live treasury balance + every payout at $PoolServer" -ForegroundColor White
-        if ($treasury -and $treasury.donationAddress) {
-            Write-Host "  * Pool treasury (donation) address: $($treasury.donationAddress)" -ForegroundColor Gray
-        }
-        Write-Host "  Don't have a DGB address yet? Make one in the DigiByte mobile/desktop wallet" -ForegroundColor Gray
-        Write-Host '  or your exchange, then paste it here (you can also re-run later to change it).' -ForegroundColor Gray
-        Write-Host ''
-        # Loop on a typo instead of aborting a long install over one bad paste.
-        for ($tries = 0; $tries -lt 5; $tries++) {
-            $script:PayoutAddress = Read-Host '  Paste your DGB payout address'
-            $PayoutAddress = ("$script:PayoutAddress").Trim()
-            if ($PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
-                # Read it back and confirm - the format check can't catch a
-                # transposed/truncated paste, and a wrong address = lost earnings.
-                Write-Host ''
-                Write-Host "  You entered:  $PayoutAddress" -ForegroundColor Cyan
-                Write-Host '  Earnings will be sent here. Double-check it matches YOUR wallet exactly.' -ForegroundColor Gray
-                if ((Read-Host '  Is this correct? (Y/n)') -notmatch '^[Nn]') { break }
-                Write-Host '  OK - paste it again.' -ForegroundColor Yellow
-                $PayoutAddress = ''; continue
-            }
-            Write-Host '  That does not look like a DigiByte address (should start with D, S, or dgb1). Try again.' -ForegroundColor Yellow
-            $PayoutAddress = ''
-        }
+    Write-Host "`n--- Your hosting earnings ---" -ForegroundColor Cyan
+    Write-Host 'Earnings are paid into the DigiByte wallet this installer sets up on THIS PC.' -ForegroundColor White
+    Write-Host 'You do not need an address, an exchange account, or an existing wallet.' -ForegroundColor White
+    Write-Host ''
+    Write-Host 'Please be realistic about earnings:' -ForegroundColor Yellow
+    Write-Host '  * Payments are TINY - this is a tip jar for hosting, not a salary.' -ForegroundColor White
+    Write-Host '  * You are ONLY paid when the pool TREASURY has funds. The treasury is' -ForegroundColor White
+    Write-Host '    shared out among all verified nodes; when it is empty, nobody is paid' -ForegroundColor White
+    Write-Host '    that period. The pool never pays money it does not have.' -ForegroundColor White
+    Write-Host "  * See the live treasury balance + every payout at $PoolServer" -ForegroundColor White
+    if ($treasury -and $treasury.donationAddress) {
+        Write-Host "  * Pool treasury (donation) address: $($treasury.donationAddress)" -ForegroundColor Gray
     }
-    if ($PayoutAddress -notmatch '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
-        throw 'No valid DigiByte address provided. Re-run and paste a valid D..., S..., or dgb1... address.'
-    }
+    Write-Host ''
 
     # 0b. Which pool to join --------------------------------------------------
-    # Only ask if the caller did not pass -PoolServer explicitly. Almost everyone
-    # should accept the default; the prompt exists so a self-hosted-pool operator
-    # sets the right PUBLIC url and nobody accidentally leaves it as localhost.
-    if (-not $PSBoundParameters.ContainsKey('PoolServer')) {
-        Write-Host "`n--- Which pool will this node join? ---" -ForegroundColor Cyan
-        Write-Host 'Your node registers with a pool and hosts its files. Most people should just' -ForegroundColor White
-        Write-Host 'press Enter to use the main pool:' -ForegroundColor White
-        Write-Host "  $PoolServer" -ForegroundColor Green
-        Write-Host 'Only change this if you run your OWN pool - then paste its PUBLIC https address' -ForegroundColor Gray
-        Write-Host '(like https://pool.example.com). NEVER use 127.0.0.1 / localhost on a node -' -ForegroundColor Gray
-        Write-Host 'that only works on the pool server itself and shows "Pool unreachable" here.' -ForegroundColor Gray
-        $poolIn = ("$(Read-Host '  Pool URL (press Enter for the default)')").Trim()
-        if ($poolIn) {
-            if ($poolIn -notmatch '^[A-Za-z]+://') { $poolIn = "https://$poolIn" }   # assume https if no scheme
-            $script:PoolServer = $poolIn.TrimEnd('/')
-            $PoolServer = $script:PoolServer
-            if ($PoolServer -match '127\.0\.0\.1|localhost') {
-                Write-Host '  WARNING: that is a localhost URL - a remote node cannot reach it. Continuing,' -ForegroundColor Yellow
-                Write-Host '  but this node will show "Pool unreachable" unless it IS the pool server.' -ForegroundColor Yellow
-            }
-        }
-        Write-Host "  This node will join: $PoolServer" -ForegroundColor Green
+    # No prompt: the default is correct for everyone except someone running their
+    # own pool, and that person passes -PoolServer. Asking a non-technical user to
+    # judge a URL gains nothing and is one more thing to get wrong.
+    if ($PoolServer -match '127\.0\.0\.1|localhost') {
+        Log '  pool URL is a localhost address - only correct ON the pool server itself.' 'WARN'
     }
-
-    # 0c. Service level (full vs lean) ---------------------------------------
-    # Full = also serve DigiByte light clients + explorers (best for the network,
-    # and FREE on a fresh sync - the indexes build while the chain downloads).
-    # Lean = skip those optional indexes to save disk + CPU on a small box.
-    if (-not $Lean -and [Environment]::UserInteractive) {
-        Write-Host "`n--- How much should this node help the network? ---" -ForegroundColor Cyan
-        Write-Host 'FULL service node (recommended): also serves DigiByte light clients + explorers' -ForegroundColor White
-        Write-Host '  (compact block filters, coin stats, DigiDollar stats). On a fresh sync this is' -ForegroundColor White
-        Write-Host '  FREE - the extra indexes build while the blockchain downloads.' -ForegroundColor White
-        Write-Host 'LEAN node: skips those optional indexes to save disk + CPU on a small box.' -ForegroundColor Gray
-        Write-Host 'Either way, this node fully hosts DigiAssets and can be paid.' -ForegroundColor Gray
-        if ((Read-Host '  Press Enter for FULL, or type L for Lean') -match '^[Ll]') {
-            $script:LeanNode = $true
-            Write-Host '  This node will be LEAN (optional service indexes skipped).' -ForegroundColor Yellow
-        } else {
-            Write-Host '  This node will be a FULL public service node. Thank you for supporting DigiByte!' -ForegroundColor Green
-        }
-    }
+    Log "  this node will join: $PoolServer"
 
     # --- Prerequisites ------------------------------------------------------
     # Internet: everything below downloads from GitHub / IPFS. Fail fast + clearly
@@ -1429,18 +1550,33 @@ function Invoke-Install {
 
     # Disk space: a full archival node + fast-sync snapshot is tens of GB. Warn
     # BEFORE downloading so a small disk doesn't fill up mid-sync with weird errors.
+    # Also decides FULL vs LEAN, which used to be a prompt. Free space is exactly what
+    # that choice depends on, so measuring it answers the question better than asking
+    # a user who has no way to judge. -Lean still forces lean explicitly.
+    # Measure first, decide after - so a failure to READ the disk is shrugged off
+    # while a genuine "not enough space" still stops the install.
+    $freeGB = $null; $driveName = ''
     try {
         $drive = New-Object System.IO.DriveInfo((Split-Path $DigiByteDir -Qualifier) + '\')
         $freeGB = [math]::Round($drive.AvailableFreeSpace / 1GB, 1)
-        if ($freeGB -lt 70) {
-            Write-Host ''
-            Write-Host "  DISK SPACE WARNING: a full node + fast-sync snapshot needs about 60-80 GB." -ForegroundColor Yellow
-            Write-Host "  You have $freeGB GB free on drive $($drive.Name). It may fill up during sync." -ForegroundColor Yellow
-            if ((Read-Host '  Continue anyway? (y/N)') -notmatch '^[Yy]') { Write-Host 'Cancelled - free up disk space and re-run.' -ForegroundColor Yellow; return }
-        } else {
-            Log ("  disk space: {0:N0} GB free on {1} - OK." -f $freeGB, $drive.Name) 'OK'
-        }
+        $driveName = $drive.Name
     } catch { Log '  (could not check free disk space - continuing)' 'WARN' }
+
+    if ($null -ne $freeGB) {
+        if ($freeGB -lt 25) {
+            throw "Not enough disk space: $freeGB GB free on drive $driveName, and this needs at least 25 GB to install and sync. Free up space (or point -DigiByteDir at a bigger drive) and re-run."
+        }
+        if ($freeGB -lt 70) {
+            $script:LeanNode = $true
+            Log "  disk space: $freeGB GB free on $driveName - installing a LEAN node automatically." 'WARN'
+            Log '  lean skips the optional service indexes to fit. It still hosts DigiAssets and is still paid.'
+        } else {
+            Log "  disk space: $freeGB GB free on $driveName - OK." 'OK'
+        }
+    }
+
+    if ($script:LeanNode) { Log '  node type: LEAN (optional service indexes skipped).' }
+    else { Log '  node type: FULL public service node - also serves DigiByte light clients + explorers.' 'OK' }
 
     Log 'Checking prerequisites (Visual C++ x64 runtime the node needs)...' 'STEP'
     Ensure-VCRuntime
@@ -1474,6 +1610,9 @@ function Invoke-Install {
         }
     } catch { Log "  (could not check IPFS_PATH: $($_.Exception.Message))" 'WARN' }
     $ipfsVer = Install-IpfsDesktop
+    # Pre-authorize BEFORE the first launch. Step 4's Ensure-Firewall runs too late:
+    # by then kubo has already bound 4001 and Windows has already shown its prompt.
+    Add-IpfsFirewallRules
     Start-IpfsDesktop | Out-Null
     Log '  IPFS Desktop running (tray icon) + auto-starts at logon.' 'OK'
     Log '  what this does: IPFS stores the DigiAsset files; your node PINS them so they stay online for everyone.'
@@ -1481,16 +1620,21 @@ function Invoke-Install {
     # 3. DigiAsset node ------------------------------------------------------
     Step 3 'Installing DigiAsset for Windows (latest release)...'
     Install-DigiAsset
-    Write-NodeConfig $rpc
-    Protect-SecretFile $NodeConfig   # config.cfg mirrors the RPC password (B-INST7)
     # The node depends on IPFS + DigiByte RPC - wait for them before launching so
     # it doesn't FATAL on an IPFS timeout. (The logon task, registered in step 5,
     # does the same wait every login.) Registered/launched after step 5 copies
     # the script the launch task runs.
+    #
+    # This wait now also has to happen BEFORE config.cfg is written: the payout
+    # address is created in the local DigiByte wallet, which needs RPC answering.
     Log '  waiting for IPFS + DigiByte to be ready before the node starts...'
     Wait-ForIpfs 300 | Out-Null
     Wait-ForDigiByteRpc 300 | Out-Null
-    Protect-Wallet             # offer to encrypt the payout wallet (may restart the wallet + re-wait for RPC)
+    Ensure-DigiByteWallet      # a fresh DigiByte Core has no wallet until one is created
+    Resolve-PayoutAddress      # creates the payout address in that wallet (no prompt)
+    Write-NodeConfig $rpc
+    Protect-SecretFile $NodeConfig   # config.cfg mirrors the RPC password (B-INST7)
+    Protect-Wallet             # opt-in (-EncryptWallet); may restart the wallet + re-wait for RPC
     Start-Node | Out-Null
     Log '  DigiAsset node dashboard started.' 'OK'
 
@@ -1569,7 +1713,9 @@ function Invoke-Install {
         $note = @(
             'DigiStamp pool - earnings & treasury',
             '',
-            "Your payout address : $PayoutAddress",
+            "Your payout address : $(if ($PayoutAddress) { $PayoutAddress } else { '(not set yet - the maintenance run will create one)' })",
+            'This address lives in the DigiByte wallet on THIS PC. Open the DigiByte',
+            'wallet to see your earnings arrive - there is nothing else to set up.',
             "Pool                : $PoolServer"
         )
         if ($treasury -and $treasury.donationAddress) {
@@ -1592,6 +1738,13 @@ function Invoke-Install {
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.' -ForegroundColor White
     Write-Host ''
     Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
+    if ($PayoutAddress) {
+        Write-Host '  * Earnings go into the DigiByte wallet on THIS PC - open it to see them.' -ForegroundColor White
+        Write-Host "    Your payout address: $PayoutAddress" -ForegroundColor Gray
+    } else {
+        Write-Host '  * No payout address yet (DigiByte was still starting). The maintenance' -ForegroundColor Yellow
+        Write-Host '    task creates one automatically within the hour - nothing for you to do.' -ForegroundColor Yellow
+    }
     Write-Host '  * Payments are TINY and only shared when the pool treasury has funds.' -ForegroundColor White
     if ($treasury -and $treasury.donationAddress) {
         Write-Host "  * Pool treasury address: $($treasury.donationAddress)" -ForegroundColor Gray
@@ -1625,7 +1778,7 @@ function Invoke-Install {
     Write-Host "  * Config file : $NodeConfig" -ForegroundColor Gray
     Write-Host '                  (open in Notepad - every setting has a # comment explaining it)' -ForegroundColor DarkGray
     Write-Host "  * Pool joined : $PoolServer   (key: psp2server - DigiStamp Pool)" -ForegroundColor Gray
-    Write-Host "  * Payout addr : $PayoutAddress   (key: psp2payout; re-run this installer to change)" -ForegroundColor Gray
+    Write-Host "  * Payout addr : $(if ($PayoutAddress) { $PayoutAddress } else { '(pending - created automatically)' })   (key: psp2payout; change with -PayoutAddress)" -ForegroundColor Gray
     Write-Host '  * In the node window, the "PSP Pool" line reads "reachable" once it connects to' -ForegroundColor Gray
     Write-Host '    the pool. If it says "unreachable", double-check psp2server is the pool PUBLIC' -ForegroundColor Gray
     Write-Host '    https URL (not 127.0.0.1) and that the pool is online.' -ForegroundColor Gray
@@ -1654,15 +1807,16 @@ function Invoke-Install {
     # Last thing on screen (most visible) - securing the wallet is a MUST.
     Write-Host ''
     Write-Host '============================================================' -ForegroundColor Yellow
-    Write-Host ' ONE MORE THING - CREATE AND ENCRYPT YOUR WALLET (IMPORTANT)' -ForegroundColor Yellow
+    Write-Host ' ONE MORE THING - BACK UP YOUR WALLET (IMPORTANT)' -ForegroundColor Yellow
     Write-Host '============================================================' -ForegroundColor Yellow
-    Write-Host '  Your DigiByte wallet holds your private keys. Secure it BEFORE it holds coins:' -ForegroundColor White
+    Write-Host '  Your wallet is already created and your payout address is already in it.' -ForegroundColor White
+    Write-Host '  Your earnings live in THIS wallet, on THIS PC - so protect it:' -ForegroundColor White
     Write-Host '   1. Open the DigiByte wallet (it is starting now / on your taskbar).' -ForegroundColor White
-    Write-Host '   2. Let it create a wallet (accept the default), or File > Create Wallet.' -ForegroundColor White
-    Write-Host '   3. Settings > Encrypt Wallet -> set a STRONG passphrase and WRITE IT DOWN.' -ForegroundColor White
-    Write-Host '      If you lose that passphrase, your coins are GONE - nobody can recover them.' -ForegroundColor Red
-    Write-Host '   4. File > Backup Wallet... -> save wallet.dat somewhere safe/offline.' -ForegroundColor White
-    Write-Host '   Encrypting does NOT affect RECEIVING payouts; you only unlock when YOU send.' -ForegroundColor Gray
+    Write-Host '   2. File > Backup Wallet... -> save wallet.dat somewhere safe/offline.' -ForegroundColor White
+    Write-Host '      Without a backup, a dead disk or a Windows reinstall loses the earnings.' -ForegroundColor Red
+    Write-Host '   3. OPTIONAL - Settings > Encrypt Wallet -> set a passphrase and WRITE IT DOWN.' -ForegroundColor White
+    Write-Host '      Only do this if you will not lose the passphrase: lose it and the coins are' -ForegroundColor Red
+    Write-Host '      GONE, and nobody can recover them. Receiving payouts works either way.' -ForegroundColor Red
     Write-Host '============================================================' -ForegroundColor Yellow
 
     # VERY LAST on screen (most visible) - the one manual action to get hosting + paid.
@@ -1710,6 +1864,11 @@ function Invoke-LaunchNode {
         Log 'launch-node: IPFS Desktop not installed - installing now...' 'WARN'
         try { Install-IpfsDesktop | Out-Null } catch { Log "launch-node: IPFS Desktop install failed: $($_.Exception.Message)" 'WARN' }
     }
+    # Again before launching, to catch a rule lost to an IPFS Desktop auto-update.
+    # This task runs as the USER, not elevated, so New-NetFirewallRule may be denied -
+    # it is best-effort here and the elevated installer/maintenance run is what
+    # reliably repairs it. Never let a refused rule stop the node from starting.
+    try { Add-IpfsFirewallRules } catch { Log "launch-node: firewall pre-authorization skipped: $($_.Exception.Message)" 'WARN' }
     Start-IpfsDesktop | Out-Null
 
     # Persistent supervisor: keep the node alive for the whole logon session. The
@@ -1824,7 +1983,7 @@ function Invoke-Service {
     #        them "not running", which is normal; Autologon makes boot -> login
     #        automatic. Real problems (missing binaries / failed updates) alert. -
     $prog = Get-DigiByteProgress
-    if ($null -ne $prog) { Log ('DigiByte wallet: running, sync {0:P1}' -f $prog) 'OK'; Ensure-DigiByteWallet }
+    if ($null -ne $prog) { Log ('DigiByte wallet: running, sync {0:P1}' -f $prog) 'OK'; Ensure-DigiByteWallet; Repair-PayoutAddress }
     elseif (Test-ProcRunning 'digibyte-qt') { Log 'DigiByte wallet running (RPC not up yet - still starting/syncing).' 'WARN' }
     else { Log 'DigiByte wallet not running - starts when you log in (see Autologon).' 'WARN' }
 
@@ -1882,11 +2041,22 @@ try {
         'LaunchNode' { Invoke-LaunchNode }
         default      { Invoke-Install }
     }
-    # The self-elevated install runs in its own window that would otherwise close
-    # the instant the script ends - leaving no proof it finished. Hold it open for
-    # a manual, interactive install (never for the headless SYSTEM service task).
+    # The self-elevated install runs in its own window that would otherwise close the
+    # instant the script ends - leaving no proof it finished. Hold it open long enough
+    # to read the summary, but on a TIMER rather than a keypress: a successful install
+    # should not need one last click from the user. Enter closes it early.
     if ($Mode -eq 'Install' -and [Environment]::UserInteractive) {
-        try { Read-Host "`nAll done - press Enter to close this window" | Out-Null } catch {}
+        try {
+            Write-Host ''
+            for ($s = 60; $s -gt 0; $s--) {
+                Write-Host ("`r  All done. This window closes in {0,2}s (press Enter to close now)..." -f $s) -NoNewline -ForegroundColor Gray
+                if ($Host.UI.RawUI.KeyAvailable) { break }
+                Start-Sleep -Seconds 1
+            }
+            Write-Host ''
+        } catch {
+            # No interactive console (piped/redirected host): nothing to hold open.
+        }
     }
 } catch {
     Log ("FATAL: $($_.Exception.Message)") 'ERROR'

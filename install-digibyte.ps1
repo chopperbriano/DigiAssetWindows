@@ -225,13 +225,23 @@ function Open-Port($name, $proto, $port) {
 # want to allow this app?" dialog the first time DigiByte listens.
 function Add-ProgramAllowRule($name, $exePath) {
     if (-not $exePath -or -not (Test-Path $exePath)) { return }
+    try { $exePath = (Resolve-Path -LiteralPath $exePath).Path } catch {}
     $disp = "DigiByte allow $name"
-    if (-not (Get-NetFirewallRule -DisplayName $disp -ErrorAction SilentlyContinue)) {
-        try {
-            New-NetFirewallRule -DisplayName $disp -Direction Inbound -Action Allow -Program $exePath -Profile Any -ErrorAction Stop | Out-Null
-            Log "  + firewall: pre-authorized $name (no popup)"
-        } catch { Log "  (could not pre-authorize $name in firewall: $($_.Exception.Message))" 'WARN' }
+    $existing = Get-NetFirewallRule -DisplayName $disp -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) {
+        # A DigiByte Core upgrade moves the exe, and a rule still pointing at the OLD
+        # path authorizes nothing - Windows prompts again for the new binary while the
+        # name check above says "already done". Compare the path, not just the name.
+        $current = ''
+        try { $current = ($existing | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program } catch {}
+        if ($current -and ($current -ieq $exePath)) { return }
+        try { Remove-NetFirewallRule -DisplayName $disp -ErrorAction Stop } catch {}
+        Log "  firewall: $name moved - refreshing its allow rule"
     }
+    try {
+        New-NetFirewallRule -DisplayName $disp -Direction Inbound -Action Allow -Program $exePath -Profile Any -ErrorAction Stop | Out-Null
+        Log "  + firewall: pre-authorized $name (no popup)"
+    } catch { Log "  (could not pre-authorize $name in firewall: $($_.Exception.Message))" 'WARN' }
 }
 
 # Best-effort router port-forward via UPnP (IGD) for P2P 12024, so this node can
