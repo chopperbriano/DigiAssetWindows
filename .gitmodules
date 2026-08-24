@@ -7,7 +7,14 @@
 [submodule "jsoncpp"]
 	path = jsoncpp
 	url = https://github.com/open-source-parsers/jsoncpp.git
+	# Built in place by config-jsoncpp.bat, which writes install/ into the working
+	# tree. That build output is not ours to commit and is not worth reporting, so
+	# only a change to the PINNED COMMIT shows up in git status.
+	ignore = dirty
 [submodule "libjson-rpc-cpp"]
 	path = libjson-rpc-cpp
 	url = https://github.com/l0stman/libjson-rpc-cpp.git
 	branch = master
+	# Same, plus config-libjson-rpc.bat patches its CMakeLists.txt for CMake 4.x
+	# (see patches/libjson-rpc-cpp-cmp0042.patch), so a dirty tree here is expected.
+	ignore = dirty

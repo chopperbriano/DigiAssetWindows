@@ -210,6 +210,13 @@ Open `jsoncpp\build\jsoncpp.sln` in Visual Studio. Select your build configurati
 
 Open `libjson-rpc-cpp\build\libjson-rpc-cpp.sln`. Use the **same** configuration as above. Build `ALL_BUILD`, then `INSTALL`.
 
+> The pinned upstream commit calls `cmake_policy(SET CMP0042 OLD)`, which CMake 4.x
+> refuses outright, so this dependency cannot configure as-shipped. `config-libjson-rpc.bat`
+> applies `patches\libjson-rpc-cpp-cmp0042.patch` for you before running CMake — it is
+> idempotent, so re-running the script is safe. This leaves the submodule with a modified
+> `CMakeLists.txt`, which is expected; `.gitmodules` marks both dependency submodules
+> `ignore = dirty` so that build-time churn does not show up in `git status`.
+
 ### Install Boost (required for web server)
 
 ```cmd
