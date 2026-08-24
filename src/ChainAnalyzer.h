@@ -145,6 +145,7 @@ private:
     bool _writeVerificationRestored = false;
     bool _hasRunOnce = false;   //tracks if mainFunction has been called before (for error recovery)
     int _errorCount = 0;        //consecutive error count for backoff/stop
+    unsigned int _errorStreakHeight = 0; //block of the previous failure; advancing past it clears the streak
     std::string _lastError;     //text of the last sync exception (for an informative recovery log)
     unsigned int _lastErrorHeight = 0; //block being processed when the last error was thrown
 

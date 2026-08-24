@@ -447,6 +447,20 @@ void ChainAnalyzer::mainFunction() {
         // On the first call after startupFunction(), state is already correct.
         // On subsequent calls (after an exception), re-read from DB to recover.
         if (_hasRunOnce) {
+            // _errorCount exists to catch ONE block that keeps failing. But it only
+            // resets after phaseSync() RETURNS, and phaseSync() does not return until
+            // it reaches the chain tip - so during a long catch-up (a DigiDollar
+            // backfill replays ~212,000 blocks) the reset never runs. Unrelated
+            // transient RPC hiccups, minutes apart and each recovered on the first
+            // try, accumulated into a fake streak that would hit the give-up at 10
+            // and STOP a sync that was making perfectly good progress.
+            //
+            // Advancing past the previous failure proves the chain is moving, so the
+            // streak is over however many hiccups came before it. Only repeated
+            // failures at the SAME (or an earlier) block still count as a streak,
+            // which is the poison-block case this was built for.
+            if (_lastErrorHeight > _errorStreakHeight) _errorCount = 0;
+            _errorStreakHeight = _lastErrorHeight;
             _errorCount++;
             AppMain* main = AppMain::GetInstance();
             Database* db = main->getDatabase();
@@ -500,17 +514,27 @@ void ChainAnalyzer::mainFunction() {
         _lastError = e.what();
         if (_lastError.empty()) _lastError = std::string("unlabeled exception (") + typeid(e).name() + ")";
         _lastErrorHeight = _height + 1;   // the block we were processing when it threw
+        // Deliberately NOT re-thrown. The old code re-threw "so the Threaded framework
+        // re-enters mainFunction() to recover", but Threaded's loop calls mainFunction()
+        // again on the next iteration whether or not it threw - so the re-throw bought
+        // no recovery at all. All it did was reach Threaded's catch-all, which logs
+        // every mainFunction exception at CRITICAL. The result: a transient RPC hiccup
+        // that recovered on the first attempt one second later still painted a red
+        // CRITICAL line, making a healthy sync look like a failing node.
+        //
+        // Swallowing it here keeps the recovery identical and lets this class report
+        // the failure at the severity it actually has. A genuine unrecoverable fault
+        // still escalates: the give-up path above logs CRITICAL at 10 attempts.
         log->addMessage("Sync interrupted at block " + std::to_string(_lastErrorHeight) +
-            ": " + _lastError, Log::DEBUG);
-        throw; // re-throw so the Threaded framework re-enters mainFunction() to recover
+            ": " + _lastError + " - recovering on the next pass.", Log::WARNING);
     } catch (...) {
         try { AppMain::GetInstance()->getDatabase()->abortTransaction(); } catch (...) {}
         // Non-std::exception failure - still record something useful, never "unknown".
         _lastError = "non-standard (non-std::exception) failure";
         _lastErrorHeight = _height + 1;
+        //same reasoning as above: recovery happens on re-entry, not via the throw
         log->addMessage("Sync interrupted at block " + std::to_string(_lastErrorHeight) +
-            ": non-standard exception", Log::DEBUG);
-        throw;
+            ": non-standard exception - recovering on the next pass.", Log::WARNING);
     }
 }
 
