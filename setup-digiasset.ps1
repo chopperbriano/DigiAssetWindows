@@ -12,20 +12,24 @@
     TWO MODES in one file:
 
     -Mode Install  (default, run it yourself the first time)
-        UNATTENDED. Approve the one Administrator prompt and it runs to the end
-        with no further questions or clicks - the target user is someone who
-        does not know what a DigiByte address is, so nothing is asked that the
-        script can work out for itself:
-          * payout address  - CREATED in the DigiByte wallet it sets up on this
-                              PC (earnings land in the user's own desktop
-                              wallet). Override with -PayoutAddress.
+        ALL QUESTIONS UP FRONT, then walk away. Two things are asked before any
+        download starts, because only you can answer them:
+          * payout address    - press ENTER to have one created in the DigiByte
+                                wallet this sets up on your PC, or paste one you
+                                already control. Pre-answer with -PayoutAddress.
+          * wallet encryption - offered with the passphrase collected now and
+                                applied near the end, once a wallet exists.
+                                -EncryptWallet pre-answers yes, -NoEncryptPrompt
+                                skips the offer.
+
+        Nothing after that point interrupts you. Everything else is worked out
+        rather than asked, because the answer is measurable or the default is
+        right for anyone who is not running their own pool:
           * full vs lean    - chosen from free disk space. Override with -Lean.
           * pool URL        - the default is right unless you run your own pool.
           * firewall        - every listening program is pre-authorized BEFORE
                               it first starts, so Windows never raises its
                               "allow this app?" alert.
-          * wallet encryption - skipped (see -EncryptWallet); a passphrase the
-                              owner forgets destroys the earnings for good.
 
         Downloads and installs DigiByte Core (pinned to 9.26.5 by
         -DigiByteVersion), plus the CURRENT latest IPFS Desktop and DigiAsset
@@ -80,17 +84,11 @@ param(
     [switch]$Lean,
     # -NoUpnp: skip the automatic router port-forward (UPnP) attempt.
     [switch]$NoUpnp,
-    # -NoEncryptPrompt: accepted for backwards compatibility only. Wallet encryption
-    # is now opt-in (see -EncryptWallet), so this switch no longer changes anything.
+    # -NoEncryptPrompt: do not offer wallet encryption at all during setup.
     [switch]$NoEncryptPrompt,
-    # -EncryptWallet: ask for a passphrase and encrypt the payout wallet.
-    #
-    # OFF by default, deliberately. The install is meant to run start-to-finish with
-    # no questions, and this is the one prompt that cannot be answered for the user:
-    # a passphrase they later forget means the hosting earnings are gone with no
-    # recovery whatsoever. The wallet holds small hosting tips, so silently skipping
-    # is the safer default; the summary tells them how to encrypt it in DigiByte-Qt
-    # (Settings > Encrypt Wallet) whenever they want to.
+    # -EncryptWallet: skip the yes/no and go straight to asking for a passphrase.
+    # An interactive install already offers encryption up front (see
+    # Get-InstallAnswers), so this only pre-answers that question.
     [switch]$EncryptWallet
 )
 
@@ -100,7 +98,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.24.0'
+$SCRIPT_VERSION = '2.25.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -139,6 +137,12 @@ $TaskMaint      = 'DigiStampMaintenance'
 # Node service level. $true = lean (skip optional service indexes). Set from the
 # -Lean switch and/or the interactive prompt; read by Write-DigiByteConf.
 $script:LeanNode = [bool]$Lean
+# Wallet passphrase collected UP FRONT by Get-InstallAnswers and applied in step 3,
+# once DigiByte Core exists and has a wallet to encrypt. Held as a SecureString and
+# converted to plaintext only at the moment it is handed to encryptwallet - the
+# install runs for 20-40 minutes between the question and its use. $null means the
+# operator declined, or this is a non-interactive run.
+$script:WalletPassphrase = $null
 
 # GUI apps. IPFS Desktop (Electron) installs per-user and registers its own
 # login auto-start; it exposes the same :5001 API the node uses.
@@ -641,49 +645,126 @@ function Ensure-DigiByteWallet {
     } catch { Log "  could not create a DigiByte wallet yet (will retry): $($_.Exception.Message)" 'WARN' }
 }
 
+# Ask everything the install needs BEFORE any of it starts.
+#
+# The install runs 20-40 minutes and is meant to be walk-away. Prompts scattered
+# through it were worse than either extreme: the operator had to babysit the whole
+# run in case a question arrived fifteen minutes in. So every decision that is
+# genuinely the user's is collected here, in one block, and nothing after this point
+# stops to ask anything.
+#
+# Only two things qualify. The payout address, because it is their money and they may
+# already have a wallet - though ENTER accepts one created on this PC, which is right
+# for most people. And wallet encryption, because a passphrase they forget destroys
+# the earnings with no recovery, so it cannot be defaulted either way.
+#
+# Everything else stays automatic: the pool URL default is right for anyone not
+# running their own pool, and full-vs-lean is decided by measuring free disk, which
+# is a better answer than asking someone who has no way to judge.
+function Get-InstallAnswers {
+    if (-not [Environment]::UserInteractive) { return }   # scheduled + service runs never prompt
+
+    Write-Host ''
+    Write-Host '=== A few questions before we start ===' -ForegroundColor Cyan
+    Write-Host 'After this the install runs on its own - nothing else will interrupt you.' -ForegroundColor Gray
+    Write-Host ''
+
+    # --- 1. Payout address (skipped when -PayoutAddress was passed) ----------
+    if (-not $script:PayoutAddress) {
+        Write-Host '1) Where should your hosting earnings be paid?' -ForegroundColor White
+        Write-Host '   Press ENTER to create an address in the DigiByte wallet on this PC (recommended -' -ForegroundColor Gray
+        Write-Host '   only you hold its keys). Or paste an address you already control (D..., S..., dgb1...).' -ForegroundColor Gray
+        for ($t = 0; $t -lt 5; $t++) {
+            $a = ("$(Read-Host '   Payout address (or press Enter)')").Trim()
+            if (-not $a) {
+                Write-Host '   OK - one will be created in your wallet on this PC.' -ForegroundColor Green
+                break
+            }
+            if ($a -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
+                # Read it back: the format check cannot catch a truncated or transposed
+                # paste, and a wrong address means the earnings go to a stranger.
+                Write-Host "   Earnings will go to: $a" -ForegroundColor Cyan
+                if ((Read-Host '   Is that exactly right? (Y/n)') -notmatch '^[Nn]') { $script:PayoutAddress = $a; break }
+                Write-Host '   OK - paste it again.' -ForegroundColor Yellow
+                continue
+            }
+            Write-Host '   That does not look like a DigiByte address. Try again, or press Enter to have one made.' -ForegroundColor Yellow
+        }
+    } else {
+        Log "  payout address supplied on the command line: $script:PayoutAddress"
+    }
+
+    # --- 2. Wallet encryption -----------------------------------------------
+    if ($NoEncryptPrompt) { return }
+    Write-Host ''
+    Write-Host '2) Encrypt the DigiByte wallet on this PC?' -ForegroundColor White
+    Write-Host '   A passphrase is then needed to SPEND earnings, so someone with access to this PC' -ForegroundColor Gray
+    Write-Host '   cannot drain it. RECEIVING payouts still works normally either way.' -ForegroundColor Gray
+    Write-Host '   WRITE THE PASSPHRASE DOWN. If you lose it the coins are GONE - there is no reset,' -ForegroundColor Yellow
+    Write-Host '   no recovery, and nobody can help you.' -ForegroundColor Yellow
+    if (-not $EncryptWallet) {
+        if ((Read-Host '   Encrypt the wallet? (y/N)') -notmatch '^[Yy]') {
+            Write-Host '   Skipping. You can do it any time in DigiByte-Qt: Settings > Encrypt Wallet.' -ForegroundColor Gray
+            return
+        }
+    }
+    for ($i = 0; $i -lt 3; $i++) {
+        $sec1 = Read-Host '   Enter a wallet passphrase' -AsSecureString
+        $sec2 = Read-Host '   Re-enter to confirm'       -AsSecureString
+        $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec1)
+        $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2)
+        try {
+            $p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b1)
+            $p2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b2)
+            if ($p1 -ne $p2)      { Write-Host '   Passphrases do not match - try again.' -ForegroundColor Yellow; continue }
+            if ($p1.Length -lt 8) { Write-Host '   Please use at least 8 characters.'     -ForegroundColor Yellow; continue }
+            $script:WalletPassphrase = $sec1
+            Write-Host '   Got it - the wallet is encrypted near the end of the install.' -ForegroundColor Green
+            return
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
+        }
+    }
+    Write-Host '   Could not set a passphrase - continuing WITHOUT encryption.' -ForegroundColor Yellow
+    Write-Host '   Do it later in DigiByte-Qt: Settings > Encrypt Wallet.' -ForegroundColor Yellow
+}
+
 # Offer to encrypt the payout wallet during an interactive install. Encrypting
 # protects the earnings on this box (a passphrase is required to SPEND; receiving
 # still works with no passphrase). Skips silently when non-interactive, already
 # encrypted, or the wallet/RPC isn't ready. The passphrase is never stored or
 # logged. encryptwallet stops DigiByte, so we restart the wallet afterward.
 function Protect-Wallet {
-    # Opt-in only - see the -EncryptWallet parameter for why this is not the default.
-    if (-not $EncryptWallet -or -not [Environment]::UserInteractive) { return }
+    # Never prompts. The passphrase was collected by Get-InstallAnswers before any
+    # install work began; $null here means the operator declined or this run is
+    # non-interactive. Applied at this point because encryptwallet needs a wallet,
+    # which does not exist until DigiByte Core is installed and answering RPC.
+    if (-not $script:WalletPassphrase) { return }
     Ensure-DigiByteWallet
     $wi = $null
     try { $wi = Invoke-DgbRpc 'getwalletinfo' } catch { return }   # no wallet/RPC yet
     if ($null -ne $wi -and $null -ne $wi.unlocked_until) { Log '  wallet is already encrypted - good.' 'OK'; return }
 
-    Write-Host "`n--- Protect your wallet (recommended) ---" -ForegroundColor Cyan
-    Write-Host 'Encrypting means a passphrase is needed to SPEND your earnings, so someone with' -ForegroundColor White
-    Write-Host 'access to this PC cannot drain it. Receiving payouts still works normally.' -ForegroundColor White
-    Write-Host 'WRITE THE PASSPHRASE DOWN and keep it safe - if you lose it, the coins are GONE.' -ForegroundColor Yellow
-    Write-Host 'There is no reset or recovery.' -ForegroundColor Yellow
-    if ((Read-Host 'Encrypt the wallet now? (Y/n)') -match '^[Nn]') {
-        Log '  skipped wallet encryption. You can do it later in DigiByte-Qt: Settings > Encrypt Wallet.' 'WARN'
-        return
-    }
-    for ($i = 0; $i -lt 3; $i++) {
-        $sec1 = Read-Host 'Enter a wallet passphrase' -AsSecureString
-        $sec2 = Read-Host 'Re-enter to confirm'       -AsSecureString
-        $p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec1))
-        $p2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2))
-        if ($p1 -ne $p2)      { Write-Host '  Passphrases do not match - try again.' -ForegroundColor Yellow; continue }
-        if ($p1.Length -lt 8) { Write-Host '  Please use at least 8 characters.'    -ForegroundColor Yellow; continue }
-        try {
-            # JSON-escape backslash first, then double-quote, so odd passphrases survive.
-            $esc = ($p1 -replace '\\', '\\\\') -replace '"', '\"'
-            Invoke-DgbRpc 'encryptwallet' ('["' + $esc + '"]') | Out-Null
-            Log '  wallet ENCRYPTED. DigiByte is restarting to apply the change.' 'OK'
-            $p1 = $null; $p2 = $null; $esc = $null
-            Start-Sleep -Seconds 5
-            for ($w = 0; $w -lt 30 -and (Test-ProcRunning 'digibyte-qt'); $w++) { Start-Sleep -Seconds 1 }
-            Start-DigiByteWallet | Out-Null
-            Wait-ForDigiByteRpc 180 | Out-Null
-        } catch {
-            Log "  encryptwallet failed: $($_.Exception.Message). Encrypt later in DigiByte-Qt (Settings > Encrypt Wallet)." 'WARN'
-        }
-        break
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($script:WalletPassphrase)
+    try {
+        $p1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        # JSON-escape backslash first, then double-quote, so odd passphrases survive.
+        $esc = ($p1 -replace '\\', '\\\\') -replace '"', '\"'
+        Invoke-DgbRpc 'encryptwallet' ('["' + $esc + '"]') | Out-Null
+        Log '  wallet ENCRYPTED. DigiByte is restarting to apply the change.' 'OK'
+        $p1 = $null; $esc = $null
+        Start-Sleep -Seconds 5
+        for ($w = 0; $w -lt 30 -and (Test-ProcRunning 'digibyte-qt'); $w++) { Start-Sleep -Seconds 1 }
+        Start-DigiByteWallet | Out-Null
+        Wait-ForDigiByteRpc 180 | Out-Null
+    } catch {
+        Log "  encryptwallet failed: $($_.Exception.Message). Encrypt later in DigiByte-Qt (Settings > Encrypt Wallet)." 'WARN'
+    } finally {
+        # Drop the plaintext copy and the SecureString the moment we are done with it,
+        # rather than leaving either alive for the rest of the run.
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        $script:WalletPassphrase = $null
     }
 }
 function Test-IpfsUp {
@@ -1532,6 +1613,10 @@ function Invoke-Install {
     }
     Write-Host ''
 
+    # Ask everything now, before a single byte is downloaded, so the rest of the
+    # install is genuinely walk-away.
+    Get-InstallAnswers
+
     # 0b. Which pool to join --------------------------------------------------
     # No prompt: the default is correct for everyone except someone running their
     # own pool, and that person passes -PoolServer. Asking a non-technical user to
@@ -1634,7 +1719,7 @@ function Invoke-Install {
     Resolve-PayoutAddress      # creates the payout address in that wallet (no prompt)
     Write-NodeConfig $rpc
     Protect-SecretFile $NodeConfig   # config.cfg mirrors the RPC password (B-INST7)
-    Protect-Wallet             # opt-in (-EncryptWallet); may restart the wallet + re-wait for RPC
+    Protect-Wallet             # applies the passphrase collected up front; may restart the wallet + re-wait for RPC
     Start-Node | Out-Null
     Log '  DigiAsset node dashboard started.' 'OK'
 
