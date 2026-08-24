@@ -395,13 +395,27 @@
 
   <h2>Run a node and get paid</h2>
   <p>
-    You need <strong>DigiAsset for Windows</strong> plus DigiByte Core and IPFS.
-    Full setup instructions are in the GitHub repository.
+    One installer sets up everything &mdash; <strong>DigiAsset for Windows</strong>, DigiByte Core
+    and IPFS. Paste this into an <strong>Administrator PowerShell</strong> on Windows 10 or 11,
+    approve the one Windows prompt, and it runs to the end on its own:
+  </p>
+  <pre>iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"</pre>
+  <p class="muted">
+    It asks you nothing. <strong>You do not need a DigiByte address</strong> &mdash; the installer
+    creates your payout address in the DigiByte wallet it sets up on your own PC, so your earnings
+    arrive in a wallet only you hold the keys to. It also opens your firewall, registers everything
+    to start at login, and keeps itself updated. Back up <code>wallet.dat</code> once it is done.
+  </p>
+
+  <h3 style="font-size:1rem;margin:28px 0 6px;color:#8b949e">Manual setup</h3>
+  <p class="muted">
+    Only needed if you are not using the installer above &mdash; it already does all of this.
+    Requires <strong>DigiByte Core v9.26.5 or newer</strong>: earlier releases cannot validate
+    DigiDollar, and the node refuses to start against them.
   </p>
   <ol>
     <li>Install and sync DigiAsset for Windows (see the repo).</li>
-    <li>Point it at this pool &mdash; add to your <code>config.cfg</code>
-      (the installer sets all of this for you; this is for manual setups):
+    <li>Point it at this pool &mdash; add to your <code>config.cfg</code>:
       <pre>psp0subscribe=1
 psp0payout=YOUR_DGB_ADDRESS
 psp2server=https://pool.digistamp.co
