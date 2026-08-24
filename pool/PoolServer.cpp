@@ -938,6 +938,12 @@ void PoolServer::handleStats(std::string& outBody) {
     js.setf(std::ios::fixed);
     js.precision(8);
     js << "{"
+       // Build this pool server is running. Nothing else exposes it: after a deploy
+       // there was no way to confirm from outside the box that the new binary had
+       // actually taken, and a peer pool running a stale build was invisible until
+       // it misbehaved. Bare version ("0.3.3-win.131"), not the product string, so
+       // consumers can compare it without parsing a prefix.
+       << "\"version\":\"" << jsonEscape(getVersionString()) << "\","
        << "\"donationAddress\":\"" << jsonEscape(donationAddress) << "\","
        << "\"payoutsEnabled\":" << (_payoutsEnabled.load() ? "true" : "false") << ","
        << "\"receivedTotal\":" << received << ","

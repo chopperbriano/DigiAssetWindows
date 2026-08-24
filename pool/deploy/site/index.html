@@ -435,6 +435,17 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
     DigiStamp pool &middot; Powered by
     <a href="https://github.com/chopperbriano/DigiAssetWindows">DigiAsset for Windows</a>,
     a Windows port of <a href="https://github.com/DigiAsset-Core/DigiAsset_Core">DigiAsset Core</a> by mctrivia.
+    <!-- Two DIFFERENT things, deliberately shown side by side:
+           pool server = the running DigiAssetPoolServer.exe build, read from
+             stats.json. Blank on a pool that predates the version field.
+           page = a stamp baked into this file. It changes the moment the HTML
+             itself is refreshed, so a page deploy is verifiable on its own without
+             waiting for a binary update. Bump SITE_REV whenever this file changes. -->
+    <br>
+    <span class="muted">
+      pool server <code id="statVersion">&mdash;</code>
+      &middot; page <code id="siteRev">2026-08-23.1</code>
+    </span>
   </footer>
 </div>
 
@@ -450,6 +461,10 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
     document.getElementById("statTreasury").textContent = fmt(d.treasuryBalance);
     document.getElementById("statPaid").textContent     = fmt(d.paidToHosts);
     document.getElementById("statNodes").textContent    = (d.verifiedNodes || 0) + " / " + ((d.activeNodes != null ? d.activeNodes : d.totalNodes) || 0);
+    // Pool servers older than win.131 do not send a version. Say so plainly rather
+    // than leaving an em-dash that reads like the fetch failed.
+    var verEl = document.getElementById("statVersion");
+    if (verEl) { verEl.textContent = d.version || "pre-win.131"; }
 
     var net = d.network || {};
     var banner = document.getElementById("netBanner");
