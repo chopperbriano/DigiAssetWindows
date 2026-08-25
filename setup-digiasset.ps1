@@ -114,7 +114,6 @@ $DgbData        = Join-Path $DigiByteDir  'Data'          # blockchain (blocks/c
 $DgbExeMarker   = Join-Path $DigiAssetDir 'state\digibyted-path.txt'
 $DgbExeDefault  = Join-Path $DigiByteDir  'daemon\digibyted.exe'
 $NodeExe        = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
-$CliExe         = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
 $PoolExe        = Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'  # present only on a pool box
 # Legacy headless-kubo paths. Nothing installs or runs these any more (IPFS
 # Desktop bundles its own kubo + repo), but the names are kept so the upgrade
@@ -328,14 +327,11 @@ function Get-LocalIPv4 {
 # ---------------------------------------------------------------------------
 #  Scheduled tasks (idempotent)
 # ---------------------------------------------------------------------------
-function Register-DaemonTask($name, $exe, $arguments, $workdir) {
-    $a = New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory $workdir
-    $t = New-ScheduledTaskTrigger -AtStartup
-    $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 2) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
-}
+# NOTE: Register-DaemonTask + Register-DigiByteTask were removed here. They created
+# the SYSTEM-level headless DigiByte task ($TaskDigiByte), which this script now
+# UNREGISTERS on upgrade in favour of the GUI wallet started by a logon task - so
+# they were not merely uncalled, they built the thing the install tears down. The
+# node/pool daemons use Register-GuardedLogonTask + the maintenance task instead.
 
 # Visible logon task that only starts the node if it isn't already running
 # (so a manual start + the logon task can't produce two windows).
@@ -905,11 +901,6 @@ function Start-DigiByte {
         Start-Process $dgb -ArgumentList "-datadir=`"$DgbData`" -conf=`"$DgbConf`"" -WindowStyle Hidden
     }
     return $true
-}
-
-function Register-DigiByteTask {
-    $dgb = Get-Digibyted
-    Register-DaemonTask $TaskDigiByte $dgb "-datadir=`"$DgbData`" -conf=`"$DgbConf`"" (Split-Path -Parent $dgb)
 }
 
 # The GUI wallet (visible, taskbar). Served RPC comes from digibyte-qt with
