@@ -33,6 +33,7 @@ set(TESTS
         PermanentStoragePoolTest.cpp
         PermanentStoragePoolListTest.cpp
         ConfigTest.cpp
+        EventBroadcasterTest.cpp
         KYCTest.cpp
         BlobTest.cpp
         UtilsTest.cpp

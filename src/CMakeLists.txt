@@ -65,6 +65,7 @@ set(HEADER_FILES
         Threaded.h
         ChainAnalyzer.h
         EventBroadcaster.h
+        AcceptWaker.h
         Database.h
         DigiByteCore.h
         Blob.h

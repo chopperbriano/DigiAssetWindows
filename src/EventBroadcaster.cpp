@@ -3,6 +3,7 @@
 //
 
 #include "EventBroadcaster.h"
+#include "AcceptWaker.h"
 #include "Log.h"
 
 using boost::asio::ip::tcp;
@@ -51,6 +52,9 @@ void EventBroadcaster::start(unsigned int port, const std::string& bindAddress) 
 void EventBroadcaster::stop() {
     if (!_running) return;
     _running = false;
+    //the accept thread is parked in accept() and closing the acceptor will not bring it back, so
+    //knock on the door first - without this the daemon never exits unless something connects
+    if (_acceptor != nullptr) wakeBlockedAccept(*_acceptor);
     try {
         _acceptor->close();
     } catch (...) {}
