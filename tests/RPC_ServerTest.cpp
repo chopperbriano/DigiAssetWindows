@@ -19,6 +19,9 @@
 #include <cstdio>
 #include <fstream>
 #include <jsoncpp/json/value.h>
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -139,6 +142,41 @@ RPC::Cache* RPCServerTest::cache = nullptr;
 /*
  * Direct (non-socket) behavior
  */
+
+// Regression: stop() closed the acceptor and joined the accept thread, but closing a socket does
+// not wake a thread already inside accept() on Linux.  A server nothing is talking to therefore
+// never finished stopping, which held up shutdown of the whole daemon.
+TEST_F(RPCServerTest, stopReturnsWithNothingConnected) {
+    const string config = "serverTestShutdown.cfg";
+    ofstream out(config);
+    out << "rpcuser=testuser\n"
+        << "rpcpassword=testpass\n"
+        << "rpcassetport=42126\n"
+        << "rpcparallel=2\n"
+        << "rpcallow*=1\n";
+    out.close();
+
+    RPC::Server* server = new RPC::Server(config);
+    server->start();
+    //the accept thread has to actually be inside accept() for this to test anything - stop it too
+    //early and the acceptor closes first, accept() fails at once and the broken code passes too
+    this_thread::sleep_for(chrono::milliseconds(300));
+
+    auto done = make_shared<atomic<bool>>(false);
+    thread([server, done]() {
+        server->stop();
+        done->store(true);
+    }).detach(); //deliberately detached: if stop() hangs there is nothing safe to join
+
+    auto deadline = chrono::steady_clock::now() + chrono::seconds(5);
+    while ((chrono::steady_clock::now() < deadline) && !done->load()) {
+        this_thread::sleep_for(chrono::milliseconds(20));
+    }
+
+    EXPECT_TRUE(done->load()) << "stop() did not return - the accept thread is still parked in accept()";
+    if (done->load()) delete server; //only safe to destroy once its threads are joined
+    remove(config.c_str());
+}
 
 TEST_F(RPCServerTest, getPortReturnsConfiguredPort) {
     EXPECT_EQ(openServer->getPort(), OPEN_PORT);
