@@ -52,3 +52,4 @@ snapshots/snapshot-config.json
 
 # scratch copy made by MigrationTest (the v6 fixture itself IS tracked)
 tests/testFiles/_testMigrationWork.db*
+release-staging/
