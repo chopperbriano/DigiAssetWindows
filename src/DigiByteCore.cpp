@@ -21,10 +21,37 @@
 #include <thread>
 
 #include <cmath>
+#include <cstdlib>
 #include <jsonrpccpp/client.h>
 #include <jsonrpccpp/client/connectors/httpclient.h>
 #include <stdexcept>
 #include <string>
+
+namespace {
+    /**
+     * True if a diagnostic environment variable is set (the value is not used).
+     *
+     * std::getenv is rejected under /sdl (C4996): it hands back a pointer into a
+     * shared buffer that a later getenv/putenv on another thread can invalidate.
+     * Every call site here only asks "is this set", so the race is not actually
+     * reachable - but suppressing the warning globally would also hide the cases
+     * where it IS reachable, which is the whole point of enabling /sdl on a binary
+     * that parses attacker-supplied chain data. _dupenv_s returns a private copy
+     * instead, freed immediately.
+     */
+    bool envFlagSet(const char* name) {
+#ifdef _MSC_VER
+        char* value = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&value, &len, name) != 0) return false;
+        const bool isSet = (value != nullptr);
+        std::free(value);
+        return isSet;
+#else
+        return std::getenv(name) != nullptr;
+#endif
+    }
+}// namespace
 
 
 using jsonrpc::Client;
@@ -153,7 +180,7 @@ void DigiByteCore::makeConnection() {
         // "couldn't resolve host" that usually mean a character in
         // rpcuser/rpcpassword/rpcbind broke the URL parser. Using cerr
         // directly (not Log) because the cli doesn't link Log.cpp.
-        if (std::getenv("DGBCORE_DEBUG_URL")) {
+        if (envFlagSet("DGBCORE_DEBUG_URL")) {
             std::cerr << "DGBCORE_URL=" << rpcUrl << std::endl;
         }
         httpClient.reset(new jsonrpc::HttpClient(rpcUrl));
@@ -1619,7 +1646,7 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                         //blocks carry one and logging each would drown out real errors.
                         if (DigiDollar::isOracleCommitmentScript(hex)) {
                             output.scriptPubKey.type = "oracle";
-                        } else if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
+                        } else if (envFlagSet("DGBCORE_DEBUG_SCRIPTS")) {
                             //Genuinely unexpected now that oracle commitments are classified.
                             //Upstream prints this unconditionally; we keep the win.121 env gate
                             //because stderr bypasses the ConsoleDashboard TUI entirely - the text
@@ -1635,7 +1662,7 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                         // A script type we have no handler for at all. Also silenced by
                         // default for the same TUI reason - printJson here dumped an entire
                         // JSON object over the dashboard.
-                        if (std::getenv("DGBCORE_DEBUG_SCRIPTS")) {
+                        if (envFlagSet("DGBCORE_DEBUG_SCRIPTS")) {
                             utils::printJson(val);
                             cerr << "Unexpected scriptPubKey.hex format: " << hex << "\n";
                         }

@@ -27,6 +27,57 @@ if(MSVC)
   set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_FLAGS "/W4 /EHsc /Zc:char8_t-")
 
+  # --- Release hardening -----------------------------------------------------
+  # These binaries are published for the public to download, so the shipped exe
+  # has to stand up to someone running dumpbin/strings on it.
+  #
+  # /guard:cf  Control Flow Guard. ASLR, DEP and high-entropy VA were already on
+  #            (MSVC defaults, confirmed via dumpbin: DLL characteristics 0x8160),
+  #            but CFG is NOT a default and was missing - 0x4000 absent from that
+  #            same field. It has to be passed to BOTH the compiler and the linker
+  #            or it silently does nothing.
+  # /GS        Stack buffer security cookies. On by default, set explicitly so a
+  #            future flag change cannot quietly drop it from a release build.
+  # /sdl       Additional security checks + treats certain security warnings as
+  #            errors. Cheap for code that parses attacker-supplied chain data.
+  # /wd4996    ...but NOT the deprecated-CRT warning, which /sdl promotes to an
+  #            error. That fires inside the vendored sqlite3.c amalgamation
+  #            (GetVersionExA/W), which is compiled into several targets across
+  #            different directories and is not ours to patch. Suppressing just this
+  #            one warning keeps every other /sdl check active everywhere, instead of
+  #            exempting whole files or dropping /sdl outright. Our own getenv uses
+  #            were fixed properly rather than hidden by this - see envFlagSet() in
+  #            DigiByteCore.cpp.
+  # /d1trimfile: strips the build directory from __FILE__, which otherwise bakes
+  #            absolute source paths into the exe. The shipped binary carried 15
+  #            "C:\repo\DigiAssetWindows\packages\boost..." strings from Boost's
+  #            assert machinery, publishing the build layout to anyone who ran
+  #            strings on it. No PDB path or username was leaking (link already
+  #            sets GenerateDebugInformation=false), and this closes the rest.
+  # NOTE: /Qspectre is deliberately absent. It requires the Spectre-mitigated CRT
+  # ("MSB8040: Spectre-mitigated libraries are required"), a separate Visual Studio
+  # component every builder would then have to install. Spectre v1 mitigation buys
+  # little for a single-user desktop node with no untrusted code sharing its
+  # process, so it is not worth making the build harder to reproduce.
+  set(DGB_MSVC_HARDENING "/guard:cf /GS /sdl /wd4996 /d1trimfile:${CMAKE_SOURCE_DIR}\\")
+  set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} ${DGB_MSVC_HARDENING}")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${DGB_MSVC_HARDENING}")
+
+  # /GUARD:CF must also be on the LINK line for the guard tables to be emitted.
+  # /OPT:REF + /OPT:ICF drop unreferenced code and fold identical COMDATs: smaller
+  # download, and less unused code sitting in the shipped image.
+  set(DGB_MSVC_LINK_HARDENING "/GUARD:CF /OPT:REF /OPT:ICF")
+  foreach(_t EXE SHARED MODULE)
+    set(CMAKE_${_t}_LINKER_FLAGS_RELEASE
+        "${CMAKE_${_t}_LINKER_FLAGS_RELEASE} ${DGB_MSVC_LINK_HARDENING}")
+    set(CMAKE_${_t}_LINKER_FLAGS_RELWITHDEBINFO
+        "${CMAKE_${_t}_LINKER_FLAGS_RELWITHDEBINFO} ${DGB_MSVC_LINK_HARDENING}")
+  endforeach()
+  # NOTE: whole-program optimisation (/GL + /LTCG) is deliberately NOT enabled here.
+  # It is a real speed win, but it re-optimises across the entire binary, and the
+  # unit tests do not exercise the sync path where that would matter most. It wants
+  # its own release and a soak test rather than riding along with a security change.
+
   # Disable Windows features not needed.
   add_definitions(-D_WIN32_WINNT=0x0601)
   add_definitions(-DNOMINMAX)              # from asset_features: avoid Windows.h min/max macro clash with std::min/max
@@ -51,7 +102,7 @@ SET(SO_VERSION    0)
 # This is the SOURCE OF TRUTH for the version — it is substituted into
 # src/Version.h.in -> the generated (gitignored) src/Version.h. Bump this to
 # match the win.<N> tag on every release; do NOT hand-edit the generated header.
-SET(WIN_BUILD 132)
+SET(WIN_BUILD 133)
 # NOTE: upstream added a CMAKE_*_OUTPUT_DIRECTORY -> bin/ redirect here. Not
 # adopted: this fork's release/update scripts expect build/<sub>/Release/. Revisit
 # later if we want the bin/ layout (would require updating those scripts).

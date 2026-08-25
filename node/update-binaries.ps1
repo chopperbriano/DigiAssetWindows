@@ -102,12 +102,36 @@ $items = @(
     @{ name = 'DigiAssetPoolServer.exe';  buildSub = 'pool'; proc = 'DigiAssetPoolServer'; restart = $true;  want = $wantPool }
 )
 
+# Release SHA256SUMS, fetched once and cached for the whole run. $null when the
+# release does not publish one (anything before win.133), in which case the exe is
+# still format-checked but not hash-verified.
+#
+# Honest scope: the sums ship in the same release as the binaries, so this catches a
+# corrupt/truncated download or a wrong file attached to a release - not a hostile
+# release, which would need Authenticode signing to detect.
+$script:ReleaseSums = $null
+$script:ReleaseSumsTried = $false
+function Get-ReleaseChecksums {
+    if ($script:ReleaseSumsTried) { return $script:ReleaseSums }
+    $script:ReleaseSumsTried = $true
+    $out = Join-Path $Tmp 'SHA256SUMS'
+    try { Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest/download/SHA256SUMS" -OutFile $out -UseBasicParsing -TimeoutSec 60 }
+    catch { Write-Host '  (this release publishes no SHA256SUMS - format check only)' -ForegroundColor Yellow; return $null }
+    $map = @{}
+    foreach ($line in (Get-Content -LiteralPath $out -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(\S.*?)\s*$') { $map[$Matches[2]] = $Matches[1].ToLower() }
+    }
+    if ($map.Count -gt 0) { $script:ReleaseSums = $map }
+    return $script:ReleaseSums
+}
+
 # Resolve the new exe (download from the release, or the local build path).
 function Get-SourceExe($item) {
     if ($FromBuild) {
         $p = Join-Path $BuildDir "$($item.buildSub)\$Config\$($item.name)"
         if (Test-Path $p) { return $p } else { return $null }
     }
+    $sums = Get-ReleaseChecksums
     $url = "https://github.com/$Repo/releases/latest/download/$($item.name)"
     $out = Join-Path $Tmp $item.name
     for ($i = 1; $i -le 3; $i++) {
@@ -115,7 +139,22 @@ function Get-SourceExe($item) {
             Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 180
             # Verify it's a real exe (not a truncated download or an HTML/error
             # body) BEFORE we let it overwrite the working binary.
-            if (Test-ValidExe $out) { return $out }
+            if (Test-ValidExe $out) {
+                if ($sums -and $sums.ContainsKey($item.name)) {
+                    $got = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLower()
+                    if ($got -ne $sums[$item.name]) {
+                        # Retry rather than return: a corrupted transfer usually
+                        # succeeds on the next attempt, and the working exe is
+                        # untouched either way.
+                        Write-Host "  CHECKSUM MISMATCH on $($item.name) (retry $i)" -ForegroundColor Red
+                        Write-Host "    expected $($sums[$item.name])" -ForegroundColor DarkGray
+                        Write-Host "    got      $got" -ForegroundColor DarkGray
+                        Start-Sleep -Seconds (2 * $i); continue
+                    }
+                    Write-Host "  $($item.name) checksum OK" -ForegroundColor Green
+                }
+                return $out
+            }
             Write-Host "  downloaded $($item.name) failed validation (retry $i)..." -ForegroundColor Yellow
         } catch { Start-Sleep -Seconds (2 * $i) }
     }

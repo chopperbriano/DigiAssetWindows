@@ -999,7 +999,52 @@ function Test-PeImage($path) {
         return ($b[0] -eq 0x4D -and $b[1] -eq 0x5A)   # 'M','Z'
     } catch { return $false }
 }
+# Fetch the release's SHA256SUMS and parse it into @{ filename = hash }.
+# Returns $null when the release does not publish one (anything before win.133).
+#
+# Honest scope: the sums live on the same GitHub release as the binaries, so this
+# does NOT defend against a compromised release - someone who can swap the exe can
+# swap the sums too. What it does catch is the realistic failure: a truncated or
+# corrupted download, a CDN serving a stale object, or the wrong file being attached
+# to a release. Real protection against a hostile release needs Authenticode signing.
+function Get-ReleaseChecksums {
+    $url = "https://github.com/$Repo/releases/latest/download/SHA256SUMS"
+    $tmp = Join-Path $Tmp 'SHA256SUMS'
+    if (-not (Get-File $url $tmp)) { return $null }
+    $map = @{}
+    foreach ($line in (Get-Content -LiteralPath $tmp -ErrorAction SilentlyContinue)) {
+        # "<64 hex>  <filename>" - the sha256sum format, with one or two spaces.
+        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(\S.*?)\s*$') {
+            $map[$Matches[2]] = $Matches[1].ToLower()
+        }
+    }
+    if ($map.Count -eq 0) { return $null }
+    return $map
+}
+
+# Verify one downloaded file against the checksum map.
+# MISMATCH is fatal - that is the signal worth acting on. A MISSING entry only warns,
+# so a rollback to a release published before SHA256SUMS existed still installs.
+function Test-ReleaseChecksum($sums, $name, $path) {
+    if (-not $sums) { return $true }
+    if (-not $sums.ContainsKey($name)) {
+        Log "  ($name is not listed in SHA256SUMS - integrity not verified)" 'WARN'
+        return $true
+    }
+    $got = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $sums[$name]) {
+        Log "  CHECKSUM MISMATCH on $name" 'ERROR'
+        Log "    expected $($sums[$name])" 'ERROR'
+        Log "    got      $got" 'ERROR'
+        return $false
+    }
+    Log "  $name checksum OK" 'OK'
+    return $true
+}
+
 function Install-DigiAsset {
+    $sums = Get-ReleaseChecksums
+    if (-not $sums) { Log '  (this release publishes no SHA256SUMS - falling back to a format check only)' 'WARN' }
     foreach ($f in 'DigiAssetWindows.exe','DigiAssetWindows-cli.exe') {
         $out = Join-Path $DigiAssetDir $f
         $tmp = "$out.new"
@@ -1014,6 +1059,12 @@ function Install-DigiAsset {
         if (-not (Test-PeImage $tmp)) {
             Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             throw "downloaded $f is not a valid Windows executable (corrupt or partial download) - keeping the existing binary"
+        }
+        # Checked BEFORE the live exe is touched, so a bad download can never replace
+        # a working binary - the running one keeps going and the install stops here.
+        if (-not (Test-ReleaseChecksum $sums $f $tmp)) {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+            throw "$f failed its SHA256 check - refusing to install it. The existing binary is untouched. Re-run to download again; if it keeps failing, report it."
         }
         if ($wasRunning) { Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep 2 }
         if (Test-Path $out) { Copy-Item $out "$out.bak" -Force -ErrorAction SilentlyContinue }  # roll-back copy
