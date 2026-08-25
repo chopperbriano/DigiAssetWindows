@@ -360,6 +360,16 @@ The first time you run DigiAsset Core it will ask you several questions to set u
 
 This will create bin/config.cfg the wizard creates only the basic config for a full list of config options see example.cfg
 
+If DigiByte Core has **more than one wallet loaded** it cannot tell which one you mean, and every
+wallet command(issuing, sending, the PSP payout address) fails.  Name the one to use in config.cfg:
+
+```
+rpcwallet=<wallet name>
+```
+
+This is the same option name `digibyte-cli` uses, and it is only needed for multi wallet nodes -
+with a single wallet loaded DigiAsset Core finds it on its own.
+
 Make sure DigiAsset Core is running correctly and then press ctrl+c to stop it and continue with instructions.
 
 ---

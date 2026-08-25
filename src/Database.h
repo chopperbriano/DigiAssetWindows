@@ -516,6 +516,7 @@ public:
     void insertBlock(uint height, const std::string& hash, unsigned int time, unsigned char algo, double difficulty);
     std::string getBlockHash(uint height);
     uint getBlockHeight();
+    bool isHeightIndexed(unsigned int height); //true if the analyzer has finished processing height
     void clearBlocksAboveHeight(uint height);
     std::vector<BlockBasics> getLastBlocks(unsigned int limit, unsigned int start = std::numeric_limits<unsigned int>::max());
 

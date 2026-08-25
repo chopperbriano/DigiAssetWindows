@@ -300,8 +300,66 @@ void ChainAnalyzer::phaseDigiDollarBackfill() {
 }
 
 void ChainAnalyzer::mainFunction() {
-    phaseRewind();
-    phaseSync();
+    try {
+        phaseRewind();
+        phaseSync();
+        _lastErrorMessage.clear(); //a pass that got through means whatever it was is over
+        _repeatErrorCount = 0;
+    } catch (const std::exception& e) {
+        handleSyncError(e.what());
+    } catch (...) {
+        handleSyncError("unknown error");
+    }
+}
+
+/**
+ * Handles a pass that ended in an error.
+ *
+ * A failure part way through leaves the thread loop to simply start the pass over.  The exception
+ * itself used to go nowhere - the thread pool drops it without looking - so an error that repeats
+ * forever was an invisible spin at full speed: one report had 3,851,461 rewind attempts logged and
+ * not one line saying what had gone wrong.  Say what happened, and slow down once it is clear the
+ * error is not going to clear on its own, so the node stays diagnosable instead of filling the disk.
+ *
+ * The retry itself is kept - a failure part way through a block is usually a passing condition and
+ * the next pass picks up where this one left off.
+ *
+ * @param message - what went wrong
+ */
+void ChainAnalyzer::handleSyncError(const string& message) {
+    Log* log = Log::GetInstance();
+
+    if (message == _lastErrorMessage) {
+        _repeatErrorCount++;
+    } else {
+        _lastErrorMessage = message;
+        _repeatErrorCount = 1;
+    }
+
+    if (_repeatErrorCount < REPEAT_ERRORS_BEFORE_PAUSE) {
+        log->addMessage("Chain analyzer error: " + message, Log::ERROR);
+        pause(1);
+        return;
+    }
+    if (_repeatErrorCount == REPEAT_ERRORS_BEFORE_PAUSE) {
+        //say it once at this point rather than every pass from here on
+        log->addMessage("Chain analyzer has hit the same error " + to_string(_repeatErrorCount) +
+                                " times in a row and is not getting past it: " + message +
+                                ".  Still retrying, now every " + to_string(REPEAT_FAILURE_PAUSE_SECONDS) + " seconds",
+                        Log::CRITICAL);
+    }
+    pause(REPEAT_FAILURE_PAUSE_SECONDS);
+}
+
+/**
+ * Waits, but gives up as soon as a shutdown is requested so a pause can never hold up an exit
+ * @param seconds - how long to wait for
+ */
+void ChainAnalyzer::pause(unsigned int seconds) {
+    for (unsigned int i = 0; i < seconds * 2; i++) {
+        if (stopRequested()) return;
+        this_thread::sleep_for(chrono::milliseconds(500));
+    }
 }
 
 void ChainAnalyzer::shutdownFunction() {
@@ -319,7 +377,6 @@ void ChainAnalyzer::shutdownFunction() {
 
 void ChainAnalyzer::phaseRewind() {
     Log* log = Log::GetInstance();
-    log->addMessage("Rewinding Phase Started");
 
     AppMain* main = AppMain::GetInstance();
     Database* db = main->getDatabase();
@@ -330,6 +387,9 @@ void ChainAnalyzer::phaseRewind() {
     //check if we need to rewind
     string hash = dgb->getBlockHash(_height);
     if (hash != _nextHash) {
+        //only say so when there is really something to rewind.  Every pass comes through here, so
+        //saying it up front turned a pass that kept failing into millions of meaningless lines
+        log->addMessage("Rewinding Phase Started");
         _state = ChainAnalyzer::REWINDING;
 
         //rewind until correct
@@ -351,6 +411,23 @@ void ChainAnalyzer::phaseRewind() {
         //delete all data above & including _height
         db->clearBlocksAboveHeight(_height);
         log->addMessage("Rewinding Phase Ended");
+
+        //a chain that keeps reorganising back to the same height is either a very busy fork or
+        //something undoing the same work over and over.  Rewinds are normal so the first few are
+        //left alone, but past that stop hammering the node and the disk
+        if (static_cast<unsigned int>(_height) == _lastRewindHeight) {
+            _repeatRewindCount++;
+        } else {
+            _lastRewindHeight = _height;
+            _repeatRewindCount = 1;
+        }
+        if (_repeatRewindCount > REWINDS_TO_SAME_HEIGHT_BEFORE_PAUSE) {
+            log->addMessage("Rewound to height " + to_string(_height) + " " + to_string(_repeatRewindCount) +
+                                    " times in a row.  Waiting " + to_string(REPEAT_FAILURE_PAUSE_SECONDS) +
+                                    " seconds before carrying on",
+                            Log::WARNING);
+            pause(REPEAT_FAILURE_PAUSE_SECONDS);
+        }
     }
 }
 

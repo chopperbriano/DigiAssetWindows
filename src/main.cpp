@@ -153,6 +153,25 @@ int main(int argc, char* argv[]) {
     log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::WARNING))));
 
     /*
+     * Refuse to run a config that does not mean what it says.
+     * example.cfg writes the per pool options as psp#subscribe and so on, where # stands for the
+     * pool number.  Copied over as is the # ends up part of the key name, so the line quietly does
+     * nothing and the default applies - psp#subscribe=0 leaves the node subscribed.
+     */
+    vector<string> placeholderKeys = config.getPlaceholderKeys();
+    for (const string& key: placeholderKeys) {
+        string message = "config.cfg has \"" + key + "\" which is not a real config key.  The # in example.cfg stands for the pool number";
+        if (key.substr(0, 4) == "psp#") {
+            message += " - use psp0" + key.substr(4) + " or psp1" + key.substr(4);
+        }
+        message += ".  As written it does nothing";
+        if (key == "psp#subscribe") message += ", so the pool stays subscribed";
+        message += ".";
+        log->addMessage(message, Log::CRITICAL);
+    }
+    if (!placeholderKeys.empty()) return 1;
+
+    /*
      * Print starting message
      */
     log->addMessage("Starting DigiAsset Core " + getVersionString());
