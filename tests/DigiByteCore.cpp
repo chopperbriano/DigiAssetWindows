@@ -101,12 +101,17 @@ TEST(DigiByteCore, GetBlockHash) {
     test.makeConnection();
     EXPECT_EQ(test.getBlockHash(1), "4da631f2ac1bed857bd968c67c913978274d8aabed64ab2bcebc1665d7f4d3a0");
 
-    //test a block that probably does not exist yet
+    //test a block that probably does not exist yet.  The node answers with an error of its own, so
+    //that error has to reach us - it used to be replaced with "Core Offline", which sends whoever
+    //is reading the message off looking at connectivity while the node is perfectly healthy
     bool failed = true;
     try {
         test.getBlockHash(1000000000);
-    } catch (const DigiByteCore::exception& e) {
+    } catch (const DigiByteCore::exceptionCoreOffline& e) {
+        failed = true; //the node was not offline, it gave us an answer
+    } catch (const DigiByteException& e) {
         failed = false; //want this exception
+        EXPECT_FALSE(e.getMessage().empty());
     } catch (const std::exception& e) {
         failed = true;
     }

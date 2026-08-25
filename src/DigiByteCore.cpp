@@ -156,10 +156,17 @@ std::string DigiByteCore::getFileName() {
 /**
  * Standard DigiByte Core API call error checking wrapper function.
  * On success returns results.  On failure returns helpful exceptions to allow for easy handling or trouble shooting
+ *
+ * Only a failure to get an answer at all means the node is offline.  When the node did answer, the
+ * DigiByteException constructor has already dug the real error code and message out of the reply,
+ * and both need to survive: an error like "Wallet file not specified" reported as "Core Offline"
+ * sends the operator looking at connectivity while their node is perfectly healthy.
+ *
  * Possible Errors:
  *  exceptionDigiByteCoreNotConnected
  *  exceptionCoreOffline
  *  exception
+ *  DigiByteException - whatever the node itself said
  */
 template<typename fn_t>
 auto DigiByteCore::errorCheckAPI(fn_t fn) -> decltype(fn()) {
@@ -167,11 +174,14 @@ auto DigiByteCore::errorCheckAPI(fn_t fn) -> decltype(fn()) {
     try {
         return fn();
     } catch (DigiByteException& e) {
-        string temp = e.getMessage();
-        if (e.getMessage() != "Failed to authenticate successfully") {
-            throw exceptionCoreOffline();
-        }
-        throw exception(e.getMessage());
+        //could not reach the node(no route, refused, timed out)
+        if (e.getCode() == Errors::ERROR_CLIENT_CONNECTOR) throw exceptionCoreOffline();
+
+        //reached it but it would not talk to us
+        if (e.getMessage() == "Failed to authenticate successfully") throw exception(e.getMessage());
+
+        //the node answered with an error of its own
+        throw;
     } catch (const std::exception& e) {
         throw exception();
     }
