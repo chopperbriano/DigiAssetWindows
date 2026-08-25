@@ -29,8 +29,11 @@ namespace AssetWallet {
             try {
                 entry = db->getAssetUTXO(utxo.txid, utxo.n);
             } catch (const Database::exceptionDataPruned& e) {
-                //can happen if pruning is on and utxo is old.  Wallet UTXOs are safe to treat
-                //as asset free in that case only if we store asset utxos(pruning keeps those)
+                //normal for every plain coin when storenonassetutxo=0, and possible for a recent
+                //coin the analyzer has not reached yet.  Treating the unknown as asset free is the
+                //cautious answer here - it only means a balance is under reported or an input is
+                //not picked, and both fix themselves once the analyzer catches up.  fundSignSend
+                //makes the opposite call because there the unknown coin would be spent as a fee
                 entry.txid = utxo.txid;
                 entry.vout = utxo.n;
                 entry.assets.clear();
@@ -173,8 +176,12 @@ namespace AssetWallet {
         for (int attempt = 0;; attempt++) {
 
             //protect all wallet UTXOs that carry assets or are unconfirmed(the local database can't
-            //know about unconfirmed assets yet) so fundrawtransaction can't select them for fees
+            //know about unconfirmed assets yet) so fundrawtransaction can't select them for fees.
+            //listunspent never returns coins that are already locked, so the unlock at the end of
+            //the attempt can only ever release locks placed here - never one the operator set
+            unsigned int chainHeight = dgb->getBlockCount();
             vector<txout_t> toLock;
+            bool lockedUnconfirmed = false; //true if any coin we locked is still unconfirmed
             for (const unspenttxout_t& utxo: dgb->listUnspent(0)) {
                 //skip utxos that are already explicit inputs
                 bool isInput = false;
@@ -186,12 +193,27 @@ namespace AssetWallet {
                 }
                 if (isInput) continue;
 
-                bool needsLock = (utxo.confirmations == 0);
+                //height the coin was created at, or 0 while it is unconfirmed(or conflicted)
+                unsigned int utxoHeight = 0;
+                if ((utxo.confirmations > 0) && (static_cast<unsigned int>(utxo.confirmations) <= chainHeight)) {
+                    utxoHeight = chainHeight - static_cast<unsigned int>(utxo.confirmations) + 1;
+                }
+
+                bool needsLock = (utxoHeight == 0);
                 if (!needsLock) {
                     try {
                         needsLock = !db->getAssetUTXO(utxo.txid, utxo.n).assets.empty();
                     } catch (const Database::exceptionDataPruned& e) {
-                        needsLock = true; //can't tell so play it safe
+                        //A plain coin never gets a utxos row when storenonassetutxo=0, so "no row"
+                        //is the normal answer for every fee coin under that config, not a gap in
+                        //what we know.  Pruning only ever deletes rows of outputs that have been
+                        //spent and these coins come from listunspent, so an unspent coin holding
+                        //assets always has a row once the analyzer has passed its height - which
+                        //makes a missing row proof of "no assets" for exactly these coins.  A
+                        //height the analyzer has not reached yet is still unknown, so it stays
+                        //locked.  Locking everything would be safe for the assets but leaves
+                        //nothing to pay the fee with, which is why this can't just say true
+                        needsLock = !db->isHeightIndexed(utxoHeight);
                     }
                 }
                 if (!needsLock) {
@@ -204,7 +226,10 @@ namespace AssetWallet {
                     txoutParams.append(true);
                     needsLock = dgb->sendcommand("gettxout", txoutParams).isNull();
                 }
-                if (needsLock) toLock.push_back(txout_t{utxo.txid, utxo.n});
+                if (needsLock) {
+                    toLock.push_back(txout_t{utxo.txid, utxo.n});
+                    if (utxo.confirmations == 0) lockedUnconfirmed = true;
+                }
             }
 
             string fundedHex;
@@ -221,17 +246,7 @@ namespace AssetWallet {
                 //when everything spendable is sitting in still-unconfirmed change(which we
                 //lock because its asset content can't be verified yet), funding fails with
                 //insufficient funds.  A confirmation fixes that, so wait out a block interval
-                bool unconfirmedLocked = false;
-                for (const txout_t& lock: toLock) {
-                    for (const unspenttxout_t& utxo: dgb->listUnspent(0)) {
-                        if ((utxo.txid == lock.txid) && (utxo.n == lock.n) && (utxo.confirmations == 0)) {
-                            unconfirmedLocked = true;
-                            break;
-                        }
-                    }
-                    if (unconfirmedLocked) break;
-                }
-                if ((e.getMessage().find("nsufficient") == string::npos) || !unconfirmedLocked || (attempt >= 4)) throw;
+                if ((e.getMessage().find("nsufficient") == string::npos) || !lockedUnconfirmed || (attempt >= 4)) throw;
                 this_thread::sleep_for(chrono::seconds(5));
                 continue;
             } catch (...) {

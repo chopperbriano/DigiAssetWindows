@@ -1344,6 +1344,29 @@ uint Database::getBlockHeight() {
 }
 
 /**
+ * True if the chain analyzer has finished processing a specific height.
+ *
+ * getBlockHeight() returns the newest block in the database, which is the block that is about to be
+ * processed(the sync phase stores a block before processing it), so everything below it is done.
+ *
+ * This is what lets callers tell "there are no assets on this output" apart from "we don't know".
+ * An unspent output that carries assets always has a utxos row once its height has been processed
+ * because pruning only ever deletes rows of outputs that have been spent(see pruneUTXO), so for an
+ * indexed height a missing row is an answer rather than a gap.  Only valid for outputs known to be
+ * unspent - a spent output's row may well have been pruned.
+ *
+ * @param height - height the output was created at.  0 if the caller does not know
+ */
+bool Database::isHeightIndexed(unsigned int height) {
+    if (height == 0) return false; //caller does not know when it was created so we can't say
+    try {
+        return (height < getBlockHeight());
+    } catch (const exceptionFailedSelect& e) {
+        return false; //no blocks stored yet so nothing is indexed
+    }
+}
+
+/**
  * Clears all blocks above a specific height.
  * Used when rolling back data
  * Possible Errors:
