@@ -23,6 +23,8 @@ namespace jsonrpc {
     class Client;
 } // namespace jsonrpc
 
+class Config;
+
 class DigiByteCore {
 public:
     enum AddressTypes {
@@ -47,6 +49,10 @@ private:
 
 
     std::string _configFileName = "config.cfg";
+    std::string _baseUrl;    //rpc url without any wallet on the end
+    std::string _walletName; //wallet the connection is pointed at.  empty=core picks
+
+    std::string selectWallet(const Config& config);
 
     template<typename fn_t>
     auto errorCheckAPI(fn_t fn) -> decltype(fn());
@@ -57,6 +63,7 @@ private:
 
 public:
     WalletVersion coreVersion();
+    std::string getWalletName() const; //wallet the connection is pointed at.  empty=core picks
 
 
     std::string printProfilingInfo() {

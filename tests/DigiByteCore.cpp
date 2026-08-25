@@ -87,6 +87,28 @@ TEST(DigiByteCore, MakeConnection) {
     EXPECT_FALSE(failed);
 }
 
+TEST(DigiByteCore, WalletSelection) {
+    DigiByteCore test;
+    test.setFileName("config.cfg");
+    test.makeConnection();
+
+    //with one wallet loaded we name it explicitly rather than leaving core to guess, and with
+    //several the operator has to say which in config.cfg.  Either way plain node commands must
+    //still work, since once a wallet is picked every command goes to the /wallet/<name> endpoint
+    EXPECT_GT(test.getBlockCount(), 1);
+
+    const std::string wallet = test.getWalletName();
+    if (!wallet.empty()) {
+        Json::Value params = Json::arrayValue;
+        Json::Value loaded = test.sendcommand("listwallets", params);
+        bool found = false;
+        for (const Json::Value& name: loaded) {
+            if (name.asString() == wallet) found = true;
+        }
+        EXPECT_TRUE(found);
+    }
+}
+
 TEST(DigiByteCore, GetBlockCount) {
     DigiByteCore test;
     test.setFileName("config.cfg");
