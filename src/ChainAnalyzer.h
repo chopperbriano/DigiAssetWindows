@@ -127,6 +127,17 @@ private:
     long long _clearAddressCacheRunTime = 0;
     unsigned int _clearAddressCacheRunCount = 0;
 
+    //repeated failure handling
+    static const unsigned int REWINDS_TO_SAME_HEIGHT_BEFORE_PAUSE = 3;
+    static const unsigned int REPEAT_ERRORS_BEFORE_PAUSE = 10;
+    static const unsigned int REPEAT_FAILURE_PAUSE_SECONDS = 15;
+    unsigned int _lastRewindHeight = 0;   //height the last rewind landed on
+    unsigned int _repeatRewindCount = 0;  //number of times in a row we have rewound to it
+    std::string _lastErrorMessage;        //error the last pass ended with
+    unsigned int _repeatErrorCount = 0;   //number of times in a row it has been the same one
+    void handleSyncError(const std::string& message);
+    void pause(unsigned int seconds); //sleeps but gives up early if a shutdown was requested
+
     //phases functions
     void phaseRewind();
     void phaseSync();
