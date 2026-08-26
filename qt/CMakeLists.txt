@@ -39,6 +39,7 @@ set(HEADER_FILES
         ../src/DigiByteCore.h
         ../src/DigiAssetConstants.h
         ../src/utils.h
+        ../src/Log.h
         )
 
 set(SOURCE_FILES
@@ -54,6 +55,10 @@ set(SOURCE_FILES
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
         ../src/utils.cpp
+        #DigiByteCore.cpp says which wallet it picked and complains when core has more than one
+        #loaded and the config does not say which to use, so it needs Log.cpp, same as the cli.
+        #Log.cpp has no dependencies of its own
+        ../src/Log.cpp
         )
 
 # --- Create the executable ---
