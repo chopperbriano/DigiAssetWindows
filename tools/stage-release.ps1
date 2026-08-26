@@ -71,10 +71,19 @@ Compress-Archive -Path $webSrc -DestinationPath (Join-Path $OutDir 'web.zip') -C
 Write-Host '  web.zip regenerated from web\' -ForegroundColor Green
 
 # sha256sum-compatible: "<hash>  <filename>", two spaces, sorted for a stable diff.
+#
+# Written with LF line endings via WriteAllText, NOT Set-Content: on Windows that
+# emits CRLF, and coreutils sha256sum then takes the trailing \r as part of the
+# FILENAME - every line fails with "No such file or directory" while the hashes are
+# perfectly correct. The published instructions say to run `sha256sum -c SHA256SUMS`,
+# so the file has to work on the tools people actually verify with.
 $lines = Get-ChildItem $OutDir -File | Sort-Object Name | ForEach-Object {
     "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
 }
-Set-Content -Path (Join-Path $OutDir 'SHA256SUMS') -Value $lines -Encoding ASCII
+[System.IO.File]::WriteAllText(
+    (Join-Path $OutDir 'SHA256SUMS'),
+    (($lines -join "`n") + "`n"),
+    (New-Object System.Text.ASCIIEncoding))
 
 # Read the version back from the binary that will actually ship, rather than from
 # CMakeLists - this catches a stale build being staged against a bumped WIN_BUILD.
