@@ -150,16 +150,18 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         "CREATE TABLE IF NOT EXISTS \"encryptedkeys\" (\"address\" TEXT NOT NULL, \"data\" BLOB NOT NULL, PRIMARY KEY(\"address\"));"
 
                         //DigiDollar tables(see the 6 to 7 migration below for column meanings)
-                        "CREATE TABLE \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
-                        "CREATE INDEX idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
-                        "CREATE INDEX idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
-                        "CREATE INDEX idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
-                        "CREATE TABLE \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
-                        "CREATE INDEX idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
-                        "CREATE INDEX idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
-                        "CREATE INDEX idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
-                        "CREATE TABLE \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
-                        "CREATE INDEX idx_ddoracle_height ON ddoracle(height);"
+                        //IF NOT EXISTS matches the rest of this fresh-create block: it lets a
+                        //partially-created database be re-opened instead of erroring out.
+                        "CREATE TABLE IF NOT EXISTS \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
+                        "CREATE TABLE IF NOT EXISTS \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
+                        "CREATE TABLE IF NOT EXISTS \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddoracle_height ON ddoracle(height);"
 
                         "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
@@ -268,11 +270,13 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
                 if (rc != SQLITE_OK) {
+                    //name the real sqlite error - a bare "Table creation failed" told an operator
+                    //nothing about WHICH statement or WHY, same as the fresh-create path above
+                    std::string err = (zErrMsg != nullptr) ? zErrMsg : "unknown sqlite error";
                     sqlite3_free(zErrMsg);
-                    throw exceptionFailedToCreateTable();
+                    throw exceptionFailedToCreateTable("Table creation failed (rc=" + std::to_string(rc) + "): " + err);
                 }
-            }
-
+            },
 
 
             //Unknown Data table
@@ -1710,6 +1714,29 @@ uint Database::getBlockHeight() {
         throw exceptionFailedSelect();
     }
     return getBlockHeight.getColumnInt(0);
+}
+
+/**
+ * True if the chain analyzer has finished processing a specific height.
+ *
+ * getBlockHeight() returns the newest block in the database, which is the block that is about to be
+ * processed(the sync phase stores a block before processing it), so everything below it is done.
+ *
+ * This is what lets callers tell "there are no assets on this output" apart from "we don't know".
+ * An unspent output that carries assets always has a utxos row once its height has been processed
+ * because pruning only ever deletes rows of outputs that have been spent(see pruneUTXO), so for an
+ * indexed height a missing row is an answer rather than a gap.  Only valid for outputs known to be
+ * unspent - a spent output's row may well have been pruned.
+ *
+ * @param height - height the output was created at.  0 if the caller does not know
+ */
+bool Database::isHeightIndexed(unsigned int height) {
+    if (height == 0) return false; //caller does not know when it was created so we can't say
+    try {
+        return (height < getBlockHeight());
+    } catch (const exceptionFailedSelect& e) {
+        return false; //no blocks stored yet so nothing is indexed
+    }
 }
 
 /**

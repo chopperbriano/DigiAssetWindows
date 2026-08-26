@@ -167,6 +167,20 @@ private:
     //wait for DigiByte Core to be able to serve a given height (false = shutdown requested)
     bool waitForCoreHeight(int height);
 
+    //repeated failure handling (from mctrivia 90f0ea6)
+    static const unsigned int REWINDS_TO_SAME_HEIGHT_BEFORE_PAUSE = 3;
+    static const unsigned int REPEAT_ERRORS_BEFORE_PAUSE = 10;
+    static const unsigned int REPEAT_FAILURE_PAUSE_SECONDS = 15;
+    unsigned int _lastRewindHeight = 0;   //height the last rewind landed on
+    unsigned int _repeatRewindCount = 0;  //number of times in a row we have rewound to it
+    void pause(unsigned int seconds); //sleeps but gives up early if a shutdown was requested
+    // NOTE: upstream's _lastErrorMessage/_repeatErrorCount/handleSyncError are NOT carried
+    // over. This fork already tracks the same thing as _lastError/_errorCount, and does it
+    // by BLOCK HEIGHT (_errorStreakHeight) rather than by comparing error text: during a
+    // long catch-up phaseSync() never returns, so a message-equality streak counts
+    // unrelated hiccups spread over an hour as consecutive. Recovery also has to roll back
+    // the partially-written block, which handleSyncError does not do. See mainFunction().
+
     //phases functions
     void phaseRewind();//detect a fork at the current height and roll the DB back to the fork point
     void phaseSync();  //main catch-up/tip-follow loop: fetch, process, and store each block

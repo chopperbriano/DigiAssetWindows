@@ -41,6 +41,21 @@ TEST(DigiByteException, parsesBareErrorBlob) {
     EXPECT_EQ(e.getMessage(), "Invalid address");
 }
 
+// errorCheckAPI decides "the node is unreachable" from "the node answered with an error" using
+// these two, so they need to keep coming out the way they do here
+TEST(DigiByteException, keepsConnectorCodeSoOfflineCanBeSpotted) {
+    DigiByteException e(Errors::ERROR_CLIENT_CONNECTOR, "libcurl error: 7 -> Could not connect to http://127.0.0.1:14022");
+    EXPECT_EQ(e.getCode(), Errors::ERROR_CLIENT_CONNECTOR);
+    EXPECT_EQ(e.getMessage(), "Could not connect to http://127.0.0.1:14022");
+}
+
+TEST(DigiByteException, recognizesAuthenticationFailure) {
+    // a rejected login is the one answer the node sends with no body at all, which jsonrpccpp
+    // turns into its bare "INTERNAL_ERROR: : " prefix(the 18 characters the constructor looks for)
+    DigiByteException e(Errors::ERROR_RPC_INTERNAL_ERROR, "INTERNAL_ERROR: : ");
+    EXPECT_EQ(e.getMessage(), "Failed to authenticate successfully");
+}
+
 TEST(DigiByteException, emptyBlobMessageDoesNotCrash) {
     DigiByteException e(-32603, R"({"error":{"code":-7,"message":""}})");
     EXPECT_EQ(e.getCode(), -7);

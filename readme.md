@@ -274,6 +274,29 @@ This disables SQLite write verification (fsync), significantly reducing sync tim
 
 ## Install DigiByte
 
+> **v9.26.5 is a hard minimum, not a recommendation.** DigiAsset for Windows refuses to
+> sync against an older node and exits on startup (`MINIMUM_NODE_VERSION` in
+> `src/DigiByteCore.h`). Two independent reasons, both from upstream's readme:
+>
+> **DigiDollar.** It activated on mainnet at block **23,869,440** and this node indexes
+> DigiDollar balances, collateral vaults and the oracle DGB/USD rate. DigiDollar activated
+> as a BIP9 *soft* fork, so a v8.x node still follows the same chain and still answers RPC —
+> it simply cannot validate DigiDollar, so anything it reports about those transactions is
+> untrustworthy. v9.26.4 was the first release that works with `prune=`, and v9.26.5 fixed a
+> multi-minute oracle scan hang at node startup.
+>
+> **The Groestl incident.** On 28 June 2026, from block 23,751,096, an attacker exploited a
+> consensus check accidentally dropped during the v8 Bitcoin Core rebase and mined the retired
+> Groestl algorithm at floor difficulty. v8/v9 accepted those blocks; v7.17.3 and older
+> rejected them and forked away. The fix (`algolock`, buried at 23,869,440) rejects retired
+> algorithms going forward but **grandfathers the exploit blocks already in the chain** — so
+> canonical DigiByte history permanently contains Groestl blocks that old nodes reject
+> outright. Those nodes cannot follow the current chain at all.
+>
+> One visible consequence for `algostats`: `ALGO_GROESTL` is algo id **2**, empty from 2019
+> until June 2026. For windows covering the incident, index 2 of the `algo` array is populated
+> rather than `null`. That is correct data, not a bug.
+
 Download and install DigiByte Core Wallet v9.26.5 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-win64-setup.exe
 Install to the default locations, unless you need to change the location on your hard drive. Then add the following lines to the digibyte.conf file.
 
@@ -439,6 +462,31 @@ This fork adds only:
 - Console dashboard UI (VT100-based TUI)
 - Embedded web server (no separate exe)
 - Sync performance optimizations (prefetch pipeline, UTXO caching)
+
+## Generating a Bootstrap Image
+
+New installs can download a prebuilt database from IPFS instead of syncing the whole chain
+themselves (`bootstrapchainstate` in the config).  `--bootgen` builds that image:
+
+```
+./digiasset_core --bootgen
+```
+
+It syncs normally and shuts itself down as soon as it reaches the chain tip.  New blocks
+keep arriving, so the image may end up a block or two behind by the time it is published —
+that is fine, a new node just syncs the remainder itself.  The RPC server and event stream
+stay off for the whole run so nothing outside the process can write to the database while
+the image is being made.
+
+On shutdown the database is folded out of WAL mode and vacuumed, so what is left on disk is
+a single self contained file with no `chain.db-wal` or `chain.db-shm` beside it — safe to
+add to IPFS as is.  Because a normal run keeps the database in WAL mode, copying `chain.db`
+out from under a running daemon does *not* give you a usable image; use this flag.
+
+Vacuuming temporarily needs about as much free disk space as the database itself.  The
+synced block height is printed at the end; put it, along with the CID you get from
+`ipfs add`, into `officialBootstrap` in `src/main.cpp`, and move the CID it replaces into
+`oldBootstrapCIDs` so existing nodes unpin it.
 
 ## Other Notes
 

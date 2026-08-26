@@ -7,7 +7,7 @@
 //
 
 #include "Log.h"
-#include "ConsoleDashboard.h"
+// ConsoleDashboard.h deliberately NOT included - see _dashboardSink in Log.h
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -68,8 +68,8 @@ void Log::setMinLevelToFile(LogLevel level) {
     _minLevelToFile = level;
 }
 
-void Log::setDashboard(ConsoleDashboard* dashboard) {
-    _dashboard = dashboard;
+void Log::setDashboardSink(std::function<void(const std::string&)> sink) {
+    _dashboardSink = std::move(sink);
 }
 
 // Prefix the message with its level name, then (under lock) print it to the dashboard
@@ -100,8 +100,8 @@ void Log::addMessage(const string& message, LogLevel level) {
     string logMessage = logLevelStr + ": " + message;
 
     if (level >= _minLevelToScreen) {
-        if (_dashboard) {
-            _dashboard->addMessage(logMessage);   // the dashboard prepends its own screen timestamp
+        if (_dashboardSink) {
+            _dashboardSink(logMessage);   // the dashboard prepends its own screen timestamp
         } else {
             cout << logStamp() << " " << logMessage << endl;
         }

@@ -89,6 +89,7 @@ set(HEADER_FILES
         static_block.hpp
         Threaded.h
         ChainAnalyzer.h
+        AcceptWaker.h
         Database.h
         DigiByteCore.h
         Blob.h

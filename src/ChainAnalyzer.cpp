@@ -477,22 +477,27 @@ void ChainAnalyzer::mainFunction() {
                 " Usually a transient RPC/tip hiccup.",
                 Log::WARNING);
 
-            // If we keep failing, wait before retrying
-            if (_errorCount >= 3) {
+            // Back off once the error is clearly not clearing on its own, but NEVER give
+            // up permanently. This used to set STOPPED and sleep until someone restarted
+            // the node, which turned a long transient fault into a dead node nobody was
+            // watching - and with a 212,000-block DigiDollar replay in flight, ten
+            // hiccups is not many. Upstream reached the same conclusion independently
+            // (mctrivia 90f0ea6): keep retrying, just slowly, so the node recovers
+            // unattended once the cause clears.
+            if (_errorCount >= static_cast<int>(REPEAT_ERRORS_BEFORE_PAUSE)) {
+                if (_errorCount == static_cast<int>(REPEAT_ERRORS_BEFORE_PAUSE)) {
+                    //said once here rather than on every pass from now on
+                    log->addMessage("Chain analyzer has failed " + std::to_string(_errorCount) +
+                        " times in a row at block " + std::to_string(_lastErrorHeight) +
+                        " and is not getting past it: " + cause +
+                        ".  Still retrying, now every " + std::to_string(REPEAT_FAILURE_PAUSE_SECONDS) +
+                        " seconds.  Please report this block + error.", Log::CRITICAL);
+                }
+                pause(REPEAT_FAILURE_PAUSE_SECONDS);
+            } else if (_errorCount >= 3) {
                 log->addMessage("  still failing at block " + std::to_string(_lastErrorHeight) +
                     " after " + std::to_string(_errorCount) + " tries - waiting 10s before the next retry.", Log::WARNING);
-                std::this_thread::sleep_for(std::chrono::seconds(10));
-            }
-            if (_errorCount >= 10) {
-                log->addMessage("Giving up at block " + std::to_string(_lastErrorHeight) +
-                    " after 10 attempts. Last error: " + cause +
-                    ". Sync stopped - restart the node to try again, and please report this block + error.", Log::CRITICAL);
-                _state = STOPPED;
-                // Sleep forever until stop is requested — prevents Threaded from retrying
-                while (!stopRequested()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
-                return;
+                pause(10);
             }
 
             _height = db->getBlockHeight();          // last fully-committed block (good)
@@ -538,6 +543,19 @@ void ChainAnalyzer::mainFunction() {
     }
 }
 
+/**
+ * Waits, but gives up as soon as a shutdown is requested so a pause can never hold up an exit.
+ * (from mctrivia 90f0ea6 - replaces the raw sleep_for calls that made a shutdown wait out the
+ * full backoff.)
+ * @param seconds - how long to wait for
+ */
+void ChainAnalyzer::pause(unsigned int seconds) {
+    for (unsigned int i = 0; i < seconds * 2; i++) {
+        if (stopRequested()) return;
+        this_thread::sleep_for(chrono::milliseconds(500));
+    }
+}
+
 void ChainAnalyzer::shutdownFunction() {
     _state = STOPPED;
 }
@@ -569,6 +587,9 @@ void ChainAnalyzer::phaseRewind() {
     //check if we need to rewind (blockchain fork detected)
     string hash = dgb->getBlockHash(_height);
     if (hash != _nextHash) {
+        //Only logged once there is really something to rewind. Upstream (90f0ea6) hit
+        //millions of meaningless "Rewinding Phase Started" lines by logging this before
+        //the fork check; this message was already inside the check, and names the block.
         log->addMessage("Fork detected at block " + std::to_string(_height) + " - rewinding", Log::WARNING);
         _state = ChainAnalyzer::REWINDING;
 
@@ -591,6 +612,23 @@ void ChainAnalyzer::phaseRewind() {
         //delete all data above & including _height
         db->clearBlocksAboveHeight(_height);
         log->addMessage("Rewinding Phase Ended");
+
+        //a chain that keeps reorganising back to the same height is either a very busy fork or
+        //something undoing the same work over and over.  Rewinds are normal so the first few are
+        //left alone, but past that stop hammering the node and the disk
+        if (static_cast<unsigned int>(_height) == _lastRewindHeight) {
+            _repeatRewindCount++;
+        } else {
+            _lastRewindHeight = _height;
+            _repeatRewindCount = 1;
+        }
+        if (_repeatRewindCount > REWINDS_TO_SAME_HEIGHT_BEFORE_PAUSE) {
+            log->addMessage("Rewound to height " + to_string(_height) + " " + to_string(_repeatRewindCount) +
+                                    " times in a row.  Waiting " + to_string(REPEAT_FAILURE_PAUSE_SECONDS) +
+                                    " seconds before carrying on",
+                            Log::WARNING);
+            pause(REPEAT_FAILURE_PAUSE_SECONDS);
+        }
     }
 }
 
@@ -652,6 +690,11 @@ void ChainAnalyzer::phaseSync() {
             beginTime = chrono::steady_clock::now();
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
+
+        //record the oracle DGB/USD price this block commits to, if any
+        if (shouldTrackDigiDollar() && !blockData.tx.empty()) {
+            captureOracleCommitment(blockData.height, blockData.tx[0]);
+        }
 
         //record the oracle DGB/USD price this block commits to, if any
         if (shouldTrackDigiDollar() && !blockData.tx.empty()) {
@@ -1043,6 +1086,44 @@ void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
                               ",\"addresses\":[" + addressJson + "],\"txid\":\"" + txid +
                               "\",\"height\":" + to_string(height) + "}");
         }
+    }
+
+    //DigiDollar activity gets its own events for the same reason asset activity does - it is rare
+    //enough not to flood subscribers during sync
+    if (tx.isDigiDollarTransaction()) {
+        EventBroadcaster* events = EventBroadcaster::GetInstance();
+
+        uint64_t amount = 0;
+        for (const auto& ddOutput: tx.getDigiDollarOutputs()) amount += ddOutput.second;
+
+        string type = tx.isDigiDollarMint()
+                              ? "digiDollarMint"
+                              : (tx.isDigiDollarRedeem() ? "digiDollarRedeem" : "digiDollarTransfer");
+
+        //Upstream declares `addresses` at function scope, so its DigiDollar event block just
+        //reuses it. This fork builds that list only inside the `_state >= -110` branch above,
+        //to skip the sort/dedup entirely during bulk sync - so it is out of scope here and has
+        //to be rebuilt. Kept local rather than hoisting the declaration, which would give the
+        //cost back on every block of a from-genesis sync.
+        vector<string> ddAddresses;
+        size_t ddInputCount = tx.getInputCount();
+        for (size_t i = 0; i < ddInputCount; i++) ddAddresses.emplace_back(tx.getInput(i).address);
+        size_t ddOutputCount = tx.getOutputCount();
+        for (size_t i = 0; i < ddOutputCount; i++) ddAddresses.emplace_back(tx.getOutput(i).address);
+        std::sort(ddAddresses.begin(), ddAddresses.end());
+        ddAddresses.erase(std::unique(ddAddresses.begin(), ddAddresses.end()), ddAddresses.end());
+
+        string addressJson;
+        for (const string& address: ddAddresses) {
+            if (address.empty()) continue;
+            if (!addressJson.empty()) addressJson += ",";
+            addressJson += "\"" + address + "\"";
+        }
+
+        //cents is the protocol's own unit, so it is reported without conversion
+        events->broadcast("{\"event\":\"" + type + "\",\"cents\":" + to_string(amount) +
+                          ",\"addresses\":[" + addressJson + "],\"txid\":\"" + txid +
+                          "\",\"height\":" + to_string(height) + "}");
     }
 }
 

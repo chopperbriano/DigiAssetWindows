@@ -54,6 +54,7 @@ public:
     bool getBool(const string& key) const;
     bool getBool(const string& key, bool defaultValue) const;
     bool isKey(const string& key, unsigned char type = UNKNOWN) const;
+    vector<string> getPlaceholderKeys() const; //keys still holding the # placeholder from example.cfg
 
     //*Map getters return every key that starts with keyPrefix, with the prefix
     //stripped from the returned key. Values that don't parse to the requested
