@@ -244,17 +244,17 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         //unspent DigiDollar.  amount is in DigiDollar cents(100 == $1.00).
                         //Keyed on txid/vout rather than including address because a DigiDollar
                         //output has exactly one owner and we look these up by outpoint on spend.
-                        "CREATE TABLE \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
-                        "CREATE INDEX idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
-                        "CREATE INDEX idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
-                        "CREATE INDEX idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
+                        "CREATE TABLE IF NOT EXISTS \"ddutxos\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"amount\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightDestroyed\" INTEGER, \"spentTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_address ON ddutxos(address, heightDestroyed);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_heightCreated ON ddutxos(heightCreated);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddutxos_heightDestroyed ON ddutxos(heightDestroyed);"
 
                         //collateral vaults created by mints.  collateral is DGB sats locked,
                         //minted is DigiDollar cents issued against it.
-                        "CREATE TABLE \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
-                        "CREATE INDEX idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
-                        "CREATE INDEX idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
-                        "CREATE INDEX idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
+                        "CREATE TABLE IF NOT EXISTS \"ddvaults\" (\"txid\" BLOB NOT NULL, \"vout\" INTEGER NOT NULL, \"address\" TEXT NOT NULL, \"collateral\" INTEGER NOT NULL, \"minted\" INTEGER NOT NULL, \"lockHeight\" INTEGER NOT NULL, \"lockTier\" INTEGER NOT NULL, \"heightCreated\" INTEGER NOT NULL, \"heightRedeemed\" INTEGER, \"redeemedTXID\" BLOB DEFAULT NULL, PRIMARY KEY(\"txid\",\"vout\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_address ON ddvaults(address, heightRedeemed);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_heightCreated ON ddvaults(heightCreated);"
+                        "CREATE INDEX IF NOT EXISTS idx_ddvaults_heightRedeemed ON ddvaults(heightRedeemed);"
 
                         //oracle price feed.  price is micro USD per DGB exactly as published, and
                         //time is when the oracles sampled it, not the block time.  Roughly two
@@ -262,10 +262,10 @@ void Database::buildTables(unsigned int dbVersionNumber) {
                         //this is keyed on epoch and keeps the first sighting - one row per 40
                         //blocks, about 13k rows a year, rather than one row per block.  height is
                         //the block we first saw it in and is what the reorg path deletes on.
-                        "CREATE TABLE \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
-                        "CREATE INDEX idx_ddoracle_height ON ddoracle(height);"
+                        "CREATE TABLE IF NOT EXISTS \"ddoracle\" (\"epoch\" INTEGER NOT NULL, \"height\" INTEGER NOT NULL, \"price\" INTEGER NOT NULL, \"time\" INTEGER NOT NULL, \"participants\" INTEGER NOT NULL, PRIMARY KEY(\"epoch\"));"
+                        "CREATE INDEX IF NOT EXISTS idx_ddoracle_height ON ddoracle(height);"
 
-                        "INSERT INTO \"flags\" VALUES (\"ddSyncHeight\",0);"
+                        "INSERT OR IGNORE INTO \"flags\" VALUES (\"ddSyncHeight\",0);"
                         "UPDATE \"flags\" set \"value\"=7 WHERE \"key\"=\"dbVersion\";"
                         "COMMIT;";
                 rc = sqlite3_exec(_db, sql, Database::defaultCallback, nullptr, &zErrMsg);
@@ -299,9 +299,18 @@ void Database::buildTables(unsigned int dbVersionNumber) {
 
     ///IF ADDING ANY MORE TABLES MAKE SURE YOU UPDATE reset();
 
-    //make any necessary changes to database structure to bring up to current version
+    // Bring the database structure up to the current version.
+    //
+    // A fresh database (version 0) is built complete by lambdaFunctions[0], which then sets
+    // skipUpToVersion so the per-version migrations are not replayed over what it just made.
+    // An existing database starts at its own version and walks every migration from there.
+    //
+    // The test is on `i`, not on the loop-invariant `dbVersionNumber` it used to compare.
+    // Both behave identically - skipUpToVersion only ever moves inside lambdaFunctions[0],
+    // which only runs when dbVersionNumber is 0 - but a condition that cannot change inside
+    // its own loop reads like a bug, and this is the function that just produced a real one.
     for (unsigned int i = dbVersionNumber; i < lambdaFunctions.size(); ++i) {
-        if (dbVersionNumber >= skipUpToVersion) lambdaFunctions[i]();
+        if (i >= skipUpToVersion) lambdaFunctions[i]();
     }
 }
 

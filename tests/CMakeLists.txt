@@ -122,7 +122,8 @@ set(UNIT_TESTS
     AssetWalletTest.cpp
     PayoutMathTest.cpp
     RuleBackstopTest.cpp
-    ThreadedStartupTest.cpp)
+    ThreadedStartupTest.cpp
+    DatabaseMigrationTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)
