@@ -77,3 +77,46 @@ TEST_F(ConfigTest, MapPrefixFiltering) {
     EXPECT_TRUE(m["foo"]);
     EXPECT_FALSE(m["bar"]);
 }
+
+// --- Indented comments (regression) -------------------------------------------
+//
+// A comment is any line whose first non-whitespace character is #. Only column 0 used to
+// count, so "   # psp2costpercent=100" parsed as a KEY. That was harmless until the
+// placeholder check landed: the key contains #, so the node refused to start, reporting
+// that the setting "does nothing" while actually preventing startup entirely. Indenting a
+// comment is an ordinary thing to do when hand-editing a config.
+TEST(ConfigIndentedComments, IndentedCommentIsNotParsedAsAKey) {
+    const std::string file = "_testIndentedComment.cfg";
+    std::ofstream out(file);
+    out << "rpcuser=alice\n"
+        << "   # psp2costpercent=100\n"          //spaces
+        << "\t# psp2mincostcents=0\n"            //tab
+        << "#psp3payout=D123\n"                  //column 0, the case that always worked
+        << "   \n"                               //whitespace only
+        << "rpcport=14022\n";
+    out.close();
+
+    Config config(file);
+    EXPECT_EQ(config.getString("rpcuser"), "alice");
+    EXPECT_EQ(config.getInteger("rpcport"), 14022);
+    // None of the commented lines may become keys - a key holding # is what stops startup.
+    EXPECT_TRUE(config.getPlaceholderKeys().empty());
+    std::remove(file.c_str());
+}
+
+// The check must still catch the mistake it exists for: example.cfg documents the pool
+// options as psp#..., and copying one over literally leaves a key that silently does
+// nothing (and for subscribe, leaves the node subscribed to a pool it meant to leave).
+TEST(ConfigIndentedComments, RealPlaceholderKeyIsStillCaught) {
+    const std::string file = "_testRealPlaceholder.cfg";
+    std::ofstream out(file);
+    out << "rpcuser=alice\n"
+        << "psp#subscribe=1\n";
+    out.close();
+
+    Config config(file);
+    const std::vector<std::string> keys = config.getPlaceholderKeys();
+    ASSERT_EQ(keys.size(), 1u);
+    EXPECT_EQ(keys[0], "psp#subscribe");
+    std::remove(file.c_str());
+}

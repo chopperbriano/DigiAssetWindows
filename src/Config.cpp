@@ -53,7 +53,17 @@ void Config::refresh() {
         _rawLines.push_back(line);
 
         if (line.empty()) continue;     //blank line - keep in _rawLines, skip parse
-        if (line[0] == '#') continue;   //comment - keep in _rawLines, skip parse
+
+        // A comment is any line whose first NON-WHITESPACE character is #, not just one
+        // starting in column 0. An indented comment used to be parsed as a key, which was
+        // harmless until the placeholder check landed: "   # psp2costpercent=100" became a
+        // key containing #, and the node then REFUSED TO START with "config.cfg has
+        // '   # psp2costpercent' which is not a real config key ... as written it does
+        // nothing" - describing a no-op while actually bricking the node. Indenting a
+        // comment is an ordinary thing to do when hand-editing a config.
+        const size_t firstReal = line.find_first_not_of(" \t");
+        if (firstReal == std::string::npos) continue; //whitespace only
+        if (line[firstReal] == '#') continue;         //comment - keep in _rawLines, skip parse
 
         istringstream is_line(line);
         string key;
