@@ -61,6 +61,8 @@ namespace jsonrpc {
     class Client;
 } // namespace jsonrpc
 
+class Config;   //upstream: needed by the rpcwallet support added in 7b15f61
+
 /**
  * Typed C++ facade over a DigiByte Core node's JSON-RPC API. Holds the HTTP
  * client/connection, serializes every call through a static mutex, and offers
@@ -106,6 +108,10 @@ private:
 
 
     std::string _configFileName = "config.cfg";
+    std::string _baseUrl;    //rpc url without any wallet on the end
+    std::string _walletName; //wallet the connection is pointed at.  empty=core picks
+
+    std::string selectWallet(const Config& config);
 
     // Wraps an RPC lambda: throws if not connected, and translates raw
     // DigiByteException failures into the class's own exception types.
@@ -141,6 +147,7 @@ public:
     // Returns the detected Core wallet version, forcing a probe RPC if not yet
     // known (see DigiByteCore.cpp).
     WalletVersion coreVersion();
+    std::string getWalletName() const; //wallet the connection is pointed at.  empty=core picks
 
     /**
      * Node version as the integer getnetworkinfo reports, using DigiByte Core's own encoding of

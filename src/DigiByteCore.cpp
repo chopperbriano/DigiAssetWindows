@@ -16,6 +16,7 @@
 #include "DigiDollar.h" // isOracleCommitmentScript() for the scriptPubKey classifier below
 #include "Log.h"
 #include "utils.h" // required by getrawtransaction's scriptPubKey fallback (utils::printJson)
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -162,28 +163,25 @@ void DigiByteCore::makeConnection() {
     int port = _useAssetPort ? config.getInteger("rpcassetport", 14024)
                              : config.getInteger("rpcport", 14022);
 
-    //see if core is online and config if valid
+    //see if core is online and config if valid.  This runs against the plain endpoint so a wallet
+    //that is named wrong can never be mistaken for the node being unreachable
+    _baseUrl = "http://" + urlEncode(config.getString("rpcuser")) + ":" +
+               urlEncode(config.getString("rpcpassword")) + "@" + host + ":" + std::to_string(port);
+    _walletName.clear();
     try {
-        // Build the JSON-RPC URL separately so we can log it at DEBUG, and so
-        // the cli can `-v` itself by enabling DEBUG-level output. libcurl
-        // error 6 ("couldn't resolve host") against this URL usually means
-        // rpcbind, rpcuser, or rpcpassword has a character that breaks the
-        // libcurl URL parser — worth seeing the exact string in the log.
-        // urlEncode() on user/password (from upstream) keeps chars like
-        // /, +, =, @ from breaking the URL parsing.
-        std::string rpcUrl =
-                "http://" + urlEncode(config.getString("rpcuser")) + ":" +
-                urlEncode(config.getString("rpcpassword")) + "@" +
-                host + ":" + std::to_string(port);
-        // Diagnostic hook: set DGBCORE_DEBUG_URL=1 to print the JSON-RPC URL
-        // to stderr on connect. Useful when debugging libcurl errors like
-        // "couldn't resolve host" that usually mean a character in
-        // rpcuser/rpcpassword/rpcbind broke the URL parser. Using cerr
-        // directly (not Log) because the cli doesn't link Log.cpp.
+        // Diagnostic hook: set DGBCORE_DEBUG_URL=1 to print the JSON-RPC URL to stderr
+        // on connect. libcurl error 6 ("couldn't resolve host") against this URL usually
+        // means rpcbind, rpcuser or rpcpassword holds a character that breaks the libcurl
+        // URL parser - worth seeing the exact string. Using cerr rather than Log because
+        // the cli historically did not link Log.cpp.
+        //
+        // The URL itself is now built into _baseUrl above rather than locally: upstream's
+        // rpcwallet support (7b15f61) appends /wallet/<name> to it, so it has to outlive
+        // this function.
         if (envFlagSet("DGBCORE_DEBUG_URL")) {
-            std::cerr << "DGBCORE_URL=" << rpcUrl << std::endl;
+            std::cerr << "DGBCORE_URL=" << _baseUrl << std::endl;
         }
-        httpClient.reset(new jsonrpc::HttpClient(rpcUrl));
+        httpClient.reset(new jsonrpc::HttpClient(_baseUrl));
         client.reset(new jsonrpc::Client(*httpClient, jsonrpc::JSONRPC_CLIENT_V1));
         httpClient->SetTimeout(config.getInteger("rpctimeout", 50000));
         if (!_useAssetPort) getblockcount();
@@ -194,6 +192,83 @@ void DigiByteCore::makeConnection() {
         }
         throw Config::exceptionConfigFileInvalid();
     }
+
+    //the asset port is this daemon talking to itself and has no wallets, so only a connection to
+    //DigiByte Core needs to say which wallet it means
+    if (_useAssetPort) return;
+    _walletName = selectWallet(config);
+    if (!_walletName.empty()) {
+        httpClient->SetUrl(_baseUrl + "/wallet/" + urlEncode(_walletName));
+        Log::GetInstance()->addMessage("Using DigiByte Core wallet \"" + _walletName + "\"");
+    }
+}
+
+/**
+ * Works out which wallet the connection should be pointed at.
+ *
+ * DigiByte Core serves wallet commands at /wallet/<name> and answers on the plain endpoint only
+ * when zero or one wallet is loaded.  With more than one loaded every wallet command comes back
+ * "Wallet file not specified" instead, which is what breaks issuing, sending and the PSP payout
+ * address lookup on a node that has a second wallet open.  rpcwallet is the same option name
+ * digibyte-cli uses, and the name is percent encoded the same way it encodes it.
+ *
+ * @param config - already loaded config file
+ * @return name of the wallet to address, or empty to leave the choice to core
+ */
+std::string DigiByteCore::selectWallet(const Config& config) {
+    Log* log = Log::GetInstance();
+    std::string requested = config.getString("rpcwallet", "");
+
+    //find out what core has loaded.  A core too old to know the command tells us nothing, in which
+    //case we do what has always been done and take the config at its word
+    std::vector<std::string> loaded;
+    bool loadedKnown = false;
+    try {
+        Json::Value params = Json::arrayValue;
+        Json::Value result = sendcommand("listwallets", params);
+        if (result.isArray()) {
+            loadedKnown = true;
+            for (const Json::Value& name: result) loaded.push_back(name.asString());
+        }
+    } catch (const std::exception& e) {
+        //older core, or wallet support compiled out.  Nothing to check against
+    }
+    std::string loadedList;
+    for (const std::string& name: loaded) {
+        if (!loadedList.empty()) loadedList += ", ";
+        loadedList += "\"" + name + "\"";
+    }
+
+    //operator named one
+    if (!requested.empty()) {
+        if (loadedKnown && (std::find(loaded.begin(), loaded.end(), requested) == loaded.end())) {
+            log->addMessage("rpcwallet is set to \"" + requested + "\" but DigiByte Core does not have it loaded." +
+                                    (loaded.empty() ? "  No wallets are loaded." : "  Loaded: " + loadedList),
+                            Log::CRITICAL);
+            throw Config::exceptionConfigFileInvalid("rpcwallet names a wallet DigiByte Core does not have loaded");
+        }
+        return requested;
+    }
+
+    //only one to pick.  Say which one anyway so loading a second wallet later can't change what
+    //this connection means half way through a run
+    if (loaded.size() == 1) return loaded[0];
+
+    //core can't guess either, and would answer every wallet command with an error
+    if (loaded.size() > 1) {
+        log->addMessage("DigiByte Core has " + std::to_string(loaded.size()) + " wallets loaded(" + loadedList +
+                                ") so it cannot tell which one to use.  Add rpcwallet=<name> to " + _configFileName +
+                                " or every wallet command will fail.",
+                        Log::CRITICAL);
+    }
+    return "";
+}
+
+/**
+ * Wallet the connection is pointed at.  Empty means the plain endpoint, which core resolves itself
+ */
+std::string DigiByteCore::getWalletName() const {
+    return _walletName;
 }
 
 /**
@@ -215,10 +290,17 @@ std::string DigiByteCore::getFileName() {
 /**
  * Standard DigiByte Core API call error checking wrapper function.
  * On success returns results.  On failure returns helpful exceptions to allow for easy handling or trouble shooting
+ *
+ * Only a failure to get an answer at all means the node is offline.  When the node did answer, the
+ * DigiByteException constructor has already dug the real error code and message out of the reply,
+ * and both need to survive: an error like "Wallet file not specified" reported as "Core Offline"
+ * sends the operator looking at connectivity while their node is perfectly healthy.
+ *
  * Possible Errors:
  *  exceptionDigiByteCoreNotConnected
  *  exceptionCoreOffline
  *  exception
+ *  DigiByteException - whatever the node itself said
  */
 template<typename fn_t>
 auto DigiByteCore::errorCheckAPI(fn_t fn) -> decltype(fn()) {
@@ -226,10 +308,19 @@ auto DigiByteCore::errorCheckAPI(fn_t fn) -> decltype(fn()) {
     try {
         return fn();
     } catch (DigiByteException& e) {
-        if (e.getMessage() != "Failed to authenticate successfully") {
-            throw exceptionCoreOffline(e.getMessage());
-        }
-        throw exception(e.getMessage());
+        // Upstream's classification (e3abf7f) is taken over this fork's earlier attempt,
+        // which only appended the real message to a still-wrong "Core Offline" label.
+        // Checking the error CODE is the correct test: a healthy node answering "unknown
+        // method" or "wallet not specified" is not a connectivity problem, and reporting
+        // it as one sent operators to look at the network while their node was fine.
+        //could not reach the node(no route, refused, timed out)
+        if (e.getCode() == Errors::ERROR_CLIENT_CONNECTOR) throw exceptionCoreOffline();
+
+        //reached it but it would not talk to us
+        if (e.getMessage() == "Failed to authenticate successfully") throw exception(e.getMessage());
+
+        //the node answered with an error of its own
+        throw;
     } catch (const std::exception& e) {
         throw exception(e.what());
     }
@@ -1648,11 +1739,13 @@ getrawtransaction_t DigiByteCore::getrawtransaction(const string& txid, bool ver
                             output.scriptPubKey.type = "oracle";
                         } else if (envFlagSet("DGBCORE_DEBUG_SCRIPTS")) {
                             //Genuinely unexpected now that oracle commitments are classified.
-                            //Upstream prints this unconditionally; we keep the win.121 env gate
-                            //because stderr bypasses the ConsoleDashboard TUI entirely - the text
-                            //lands wherever the cursor happens to be and smears over the status
-                            //bar. Log.cpp can't be used here (the cli links DigiByteCore.cpp but
-                            //NOT Log.cpp), so gate it - same pattern as DGBCORE_DEBUG_URL above.
+                            //Upstream prints this unconditionally; this fork keeps the win.121
+                            //env gate because stderr bypasses the ConsoleDashboard TUI entirely -
+                            //the text lands wherever the cursor happens to be and smears over the
+                            //status bar. (The cli now links Log.cpp as of upstream ee66c97, so
+                            //this could move to Log later; the TUI reason for gating still holds.)
+                            //Keeps the hex, which upstream's version drops - it is the whole
+                            //point of the line when classifying an unrecognised script.
                             cerr << "nonstandard: " << txid << " hex=" << hex << "\n";
                         }
                     } else if (type=="witness_unknown") {

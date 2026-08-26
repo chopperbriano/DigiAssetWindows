@@ -12,6 +12,7 @@
 // header). See RPC/Server.h for the class overview and error-code constants.
 
 #include "RPC/Server.h"
+#include "AcceptWaker.h"
 #include "AppMain.h"
 #include "Config.h"
 #include "DigiByteCore.h"
@@ -265,7 +266,10 @@ namespace RPC {
     void Server::stop() {
         if (_stopRequested.exchange(true)) return;
         boost::system::error_code ec;
-        _acceptor.close(ec); //unblocks the blocking accept() call so the loop exits
+        //closing the acceptor does NOT unblock a thread already inside accept() - see AcceptWaker.h.
+        //This fork previously assumed it did; upstream (4ae175d) showed otherwise.
+        wakeBlockedAccept(_acceptor);
+        _acceptor.close(ec);
         if (_acceptThread.joinable()) _acceptThread.join();
         _workGuard.reset();
         _io.stop();

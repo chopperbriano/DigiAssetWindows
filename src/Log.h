@@ -16,6 +16,7 @@
 
 
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -67,7 +68,11 @@ private:
     ofstream _logFile;
     LogLevel _minLevelToScreen = INFO;
     LogLevel _minLevelToFile = INFO;
-    ConsoleDashboard* _dashboard = nullptr;
+    // A sink rather than a ConsoleDashboard*, so Log.cpp needs no part of the dashboard.
+    // Upstream (ee66c97) added Log.cpp to the cli so it can report which wallet it picked;
+    // the cli does not link ConsoleDashboard.cpp and pulling that in would drag the whole
+    // TUI (and Database/AppMain/IPFS behind it) into a small command line tool.
+    std::function<void(const std::string&)> _dashboardSink;
 
 public:
     // Open (append mode) the file that messages at/above the file threshold are written to.
@@ -75,7 +80,8 @@ public:
     void setMinLevelToScreen(LogLevel level);
     void setMinLevelToFile(LogLevel level);
     // Attach a dashboard; while set, screen output is routed to it instead of std::cout.
-    void setDashboard(ConsoleDashboard* dashboard);
+    //where screen output goes when a dashboard is attached; unset = plain std::cout
+    void setDashboardSink(std::function<void(const std::string&)> sink);
     // Format and emit a message to screen and/or file according to the level thresholds.
     void addMessage(const string& message, LogLevel level = INFO);
 

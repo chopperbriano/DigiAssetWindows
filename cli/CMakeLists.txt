@@ -19,17 +19,21 @@ set(HEADER_FILES
         ../src/DigiDollar.h
         ../src/Blob.h
         ../src/utils.h
+        ../src/Log.h
         )
 
 #DigiByteCore.cpp classifies the DigiDollar oracle commitment in coinbase outputs, so it needs
 #DigiDollar.cpp, which in turn needs Blob.cpp for its hex decoding.  Keeping that check in one
 #place is worth the two extra files here - duplicating the script format would be worse.
+#It also says which wallet it picked, and complains when core has more than one loaded and the
+#config does not say which to use, so it needs Log.cpp.  Log.cpp has no dependencies of its own
 set(SOURCE_FILES
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
         ../src/DigiDollar.cpp
         ../src/Blob.cpp
         ../src/utils.cpp
+        ../src/Log.cpp
         )
 
 if(WIN32 AND MSVC)
