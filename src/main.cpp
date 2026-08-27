@@ -21,11 +21,55 @@ namespace {
     }
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
     struct bootStrap {
         string cid;
         unsigned int height;
     };
+
+    /*
+     * Parse command line
+     */
+    bool bootGenMode = false; //--bootgen: sync to a chosen height, make the db a single clean file, then exit
+    ///Where the bootstrap image stops unless told otherwise.  This is the block DigiDollar activates
+    ///on.  Stopping here rather than at the tip keeps the image usable by both this build and a
+    ///DigiDollar one: the database schema only diverges above this height, and the upgrade that adds
+    ///the DigiDollar tables runs one way, so an image built past the split could never be read back
+    ///by a node without DigiDollar support
+    const unsigned int DEFAULT_BOOTSTRAP_HEIGHT = 23869440;
+    unsigned int bootGenTarget = DEFAULT_BOOTSTRAP_HEIGHT;
+    for (int i = 1; i < argc; i++) {
+        string arg = argv[i];
+        if ((arg == "--bootgen") || (arg.rfind("--bootgen=", 0) == 0)) {
+            bootGenMode = true;
+            if (arg.size() > 10) { //strlen("--bootgen=")
+                try {
+                    bootGenTarget = stoul(arg.substr(10));
+                } catch (const exception&) {
+                    cerr << "--bootgen needs a block height, eg --bootgen=" << DEFAULT_BOOTSTRAP_HEIGHT
+                         << "\nTry --help\n";
+                    return 1;
+                }
+            }
+        } else if ((arg == "--help") || (arg == "-h")) {
+            cout << "DigiAsset Core " << getVersionString() << "\n"
+                 << "Usage: digiasset_core [options]\n"
+                 << "  --bootgen[=height]\n"
+                 << "              Sync to height(default " << DEFAULT_BOOTSTRAP_HEIGHT
+                 << ", where DigiDollar activated), then compact\n"
+                 << "              the database into a single shareable file and shut down.  Used to\n"
+                 << "              build the IPFS bootstrap image.  The speed indexes are left out so\n"
+                 << "              the image stays small - the node that restores it builds the ones it\n"
+                 << "              actually uses.  Run it against an empty database so no indexes from\n"
+                 << "              an earlier sync are already there.  The RPC server and event stream\n"
+                 << "              stay off.\n"
+                 << "  --help      Show this message\n";
+            return 0;
+        } else {
+            cerr << "Unknown option: " << arg << "\nTry --help\n";
+            return 1;
+        }
+    }
 
     //make sure only one instance
     InstanceLock lock("digiasset_core");
@@ -310,6 +354,7 @@ int main() {
     log->addMessage("Starting Chain Analyzer");
     ChainAnalyzer analyzer;
     analyzer.loadConfig();
+    if (bootGenMode) analyzer.setBootstrapMode(bootGenTarget); //stop at the target, skip the speed indexes
     analyzer.start();
     main->setChainAnalyzer(&analyzer);
 
@@ -318,22 +363,30 @@ int main() {
     /**
      * Start event stream(TCP newline delimited JSON events.  config eventport, 0 disables)
      */
-    EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
-                                           config.getString("eventbind", "127.0.0.1"));
+    //In bootgen mode both the event stream and the RPC server stay off so nothing outside this
+    //process can touch the database while the image is being built
+    if (!bootGenMode) {
+        EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
+                                               config.getString("eventbind", "127.0.0.1"));
+    } else {
+        log->addMessage("Skipping event stream and RPC server(bootgen mode)");
+    }
 
     /**
      * Start RPC Server
      */
     RPC::Server* server = nullptr;
-    try {
-        // Create and start the Bitcoin RPC server
-        log->addMessage("Starting RPC Server");
-        server = new RPC::Server();
-        main->setRpcServer(server);
-        server->start();
+    if (!bootGenMode) {
+        try {
+            // Create and start the Bitcoin RPC server
+            log->addMessage("Starting RPC Server");
+            server = new RPC::Server();
+            main->setRpcServer(server);
+            server->start();
 
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+        }
     }
 
     /*
@@ -341,10 +394,18 @@ int main() {
      */
     std::signal(SIGINT, handleShutdownSignal);
     std::signal(SIGTERM, handleShutdownSignal);
+    //in bootgen mode we stop on our own the moment the analyzer reaches the requested height
+    bool bootGenComplete = false;
     while (!shutdownRequested) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (bootGenMode && (analyzer.getSync() == ChainAnalyzer::SYNCED)) {
+            bootGenComplete = true;
+            break;
+        }
     }
-    log->addMessage("Shutdown signal received.  Stopping");
+    unsigned int bootGenHeight = analyzer.getSyncHeight();
+    log->addMessage(bootGenComplete ? "Reached bootstrap target height.  Stopping to generate bootstrap image"
+                                    : "Shutdown signal received.  Stopping");
 
     //order matters: stop everything that could touch the database before flushing/closing it
     if (server != nullptr) server->stop(); //no new RPC calls; joins all RPC threads
@@ -352,9 +413,23 @@ int main() {
     ipfs.stop();                           //joins the IPFS job threads
     EventBroadcaster::GetInstance()->stop();
     delete server;
-    db->walCheckpoint(); //flush WAL into chain.db so the db file is complete on its own
-    delete psp;          //closes the pools' own sqlite handles
-    delete db;           //closes the chain.db sqlite handles
+    delete psp; //closes the pools' own sqlite handles
+    if (bootGenComplete) {
+        //make the db file self contained and as small as possible so it can be shared as is
+        db->compactForDistribution();
+    } else {
+        db->walCheckpoint(); //flush WAL into chain.db so the db file is complete on its own
+    }
+    delete db; //closes the chain.db sqlite handles
     log->addMessage("Shutdown complete");
+    if (bootGenComplete) {
+        cout << "\nBootstrap image ready: " << dbFilename << " (synced to block " << bootGenHeight << ")\n"
+             << "There should be no " << dbFilename << "-wal or " << dbFilename << "-shm file beside it.\n"
+             << "The speed indexes were left out on purpose - the node that restores this builds the\n"
+             << "ones it needs the first time it catches up, so do not open the file with a normal\n"
+             << "node before sharing it or they will be written back in and the image will grow.\n"
+             << "Add it to IPFS, then update officialBootstrap in src/main.cpp with the new CID and\n"
+             << "height " << bootGenHeight << ", and move the CID it replaces into oldBootstrapCIDs.\n";
+    }
     return 0;
 }
