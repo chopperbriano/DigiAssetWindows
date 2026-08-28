@@ -44,7 +44,7 @@ This fork maintains two primary branches:
 For development work, clone the complete repository history:
 
 ```cmd
-git clone --no-single-branch --recurse-submodules https://github.com/l0stman/DigiAsset_Core.git
+git clone --no-single-branch --recurse-submodules https://github.com/chopperbrian/DigiAsset_Core_Windows.git
 ```
 
 This ensures you have access to both branches and all commit history, which is essential for working with upstream changes.
