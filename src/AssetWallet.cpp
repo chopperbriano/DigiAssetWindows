@@ -46,6 +46,68 @@ namespace AssetWallet {
         return results;
     }
 
+    /**
+     * Refuse to build a transfer that would destroy the asset it moves.
+     *
+     * DigiByteTransaction::decodeAssetTransfer throws exceptionRuleFailed when
+     * an asset's rules are not satisfied, and the handler in
+     * DigiByteTransaction.cpp responds by clearing EVERY asset output in the
+     * transaction:
+     *
+     *     _unintentionalBurn = true;
+     *     for (AssetUTXO& output: _outputs) output.assets.clear();
+     *
+     * That includes the change output carrying the units the sender was
+     * keeping. So a wallet-built transfer of an asset whose rules it cannot
+     * satisfy does not fail — it destroys the sender's entire holding, returns
+     * a txid, and logs nothing.
+     *
+     * The transfer builders here add none of the outputs those rules require
+     * (only issuance calls addRuleOutputs) and cannot guarantee signer inputs,
+     * so for these three rules the outcome is certain rather than likely.
+     * Refuse up front, with a reason.
+     *
+     * DELIBERATELY NOT REFUSED: vote, KYC and expiry. A transfer that actually
+     * satisfies those is legal — a full send to a valid vote or KYC address,
+     * for instance — and rejecting them here would break working transfers to
+     * prevent nothing. They are left to the authoritative rule check that runs
+     * before broadcast.
+     *
+     * This changes no consensus behaviour and no interpretation of any existing
+     * transaction. It only stops this wallet creating one of them.
+     *
+     * Reported by Ray of Brasa Studios, who demonstrated it by deliberately
+     * destroying his own asset and supplied the chain evidence:
+     *
+     *   asset  La9T71BHHeX8fSAnmqnSUkREY3ekJPGiGnhjTW  (5 units, locked, royalty rule)
+     *   issued 8adb12ad7f4b1f979a91a53475a6a9fc5610ed7541e3fa7cbadb4bf53484f73e  block 24,106,262
+     *   killed f385d004eca95a52b415a21d3e8c01c2a5431f41849f7de01c17dfb2a9fdfdc0  block 24,106,276
+     *
+     * He sent 1 unit of 5. All 5 were destroyed, supply went 5 to 0, and
+     * sendasset returned success.
+     */
+    void assertTransferableAsset(const DigiAsset& asset) {
+        DigiAssetRules rules = asset.getRules();
+        if (rules.empty()) return; // no rules -> always transferable (the common case)
+
+        if (rules.getIfRequiresRoyalty())
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has a royalty rule. A wallet-built transfer cannot add the "
+                                    "required royalty output, so the transfer would fail validation and every "
+                                    "unit in the transaction would be destroyed, including the change. Refusing.");
+        if (rules.getRequiredBurn() > 0)
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has a required-burn (deflation) rule. A wallet-built transfer "
+                                    "cannot satisfy it, so the transfer would fail validation and every unit in "
+                                    "the transaction would be destroyed, including the change. Refusing.");
+        if (rules.getRequiredSignerWeight() > 0)
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset requires authorized signers to move. A wallet-built transfer "
+                                    "cannot guarantee those inputs, so the transfer would fail validation and "
+                                    "every unit in the transaction would be destroyed, including the change. "
+                                    "Refusing.");
+    }
+
     vector<AssetUTXO> selectAssetInputs(uint64_t assetIndex, uint64_t amount) {
         vector<AssetUTXO> candidates;
         for (const AssetUTXO& utxo: getWalletUTXOs(1)) {
@@ -73,6 +135,22 @@ namespace AssetWallet {
             if (aPure != bPure) return aPure;
             return countOf(a) > countOf(b);
         });
+
+        //Refuse before selecting anything if this asset cannot survive a
+        //wallet-built transfer. Read from a real DigiAsset in the wallet, so the
+        //rules come from the same source the transfer is validated against.
+        //Rules are a property of the asset, so the first match is enough.
+        for (const AssetUTXO& utxo: candidates) {
+            bool checked = false;
+            for (const DigiAsset& asset: utxo.assets) {
+                if (asset.getAssetIndex() == assetIndex) {
+                    assertTransferableAsset(asset);
+                    checked = true;
+                    break;
+                }
+            }
+            if (checked) break;
+        }
 
         //select until we have enough
         vector<AssetUTXO> selected;
