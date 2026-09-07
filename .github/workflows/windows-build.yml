@@ -41,6 +41,23 @@ jobs:
           cmake -S jsoncpp -B jsoncpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/jsoncpp/install" -DCMAKE_INSTALL_INCLUDEDIR=include/jsoncpp
           cmake --build jsoncpp/build --config Release --target install
 
+      # The pinned upstream commit calls cmake_policy(SET CMP0042 OLD), which CMake 4.x
+      # rejects outright, so this dependency cannot configure as-shipped. The patch lives
+      # in patches/ and is normally applied by config-libjson-rpc.bat; apply it here too
+      # rather than duplicating the fix, so CI and a local build stay in step.
+      # git apply --check succeeds only when it is NOT yet applied, which makes this a
+      # no-op on a tree that already has it.
+      - name: Patch libjson-rpc-cpp for CMake 4.x
+        shell: bash
+        run: |
+          cd libjson-rpc-cpp
+          if git apply --check ../patches/libjson-rpc-cpp-cmp0042.patch 2>/dev/null; then
+            git apply ../patches/libjson-rpc-cpp-cmp0042.patch
+            echo "applied CMP0042 patch"
+          else
+            echo "CMP0042 patch already applied - skipping"
+          fi
+
       - name: Build libjson-rpc-cpp (vendored submodule)
         run: |
           cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install" "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"

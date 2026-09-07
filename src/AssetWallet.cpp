@@ -5,6 +5,7 @@
 #include "AssetWallet.h"
 #include "AppMain.h"
 #include "Database.h"
+#include "DigiAssetRules.h"
 #include "DigiByteCore.h"
 #include "RPC/Server.h" //for the RPC_ error code constants
 #include <algorithm>
@@ -47,12 +48,54 @@ namespace AssetWallet {
         return results;
     }
 
+    void assertTransferableAsset(const DigiAsset& asset) {
+        //getIfExpired() compares against seconds; the expiry itself is stored in ms
+        Database* db = AppMain::GetInstance()->getDatabase();
+        uint64_t nowSeconds = chrono::duration_cast<chrono::seconds>(
+                                      chrono::system_clock::now().time_since_epoch())
+                                      .count();
+        assertTransferableAsset(asset, db->getBlockHeight(), nowSeconds);
+    }
+
+    void assertTransferableAsset(const DigiAsset& asset, unsigned int chainHeight, uint64_t nowSeconds) {
+        DigiAssetRules rules = asset.getRules();
+        if (rules.empty()) return;
+
+        //Rules that need extra outputs the transfer builder never adds.  addRuleOutputs() is
+        //called from issueasset only, so there is no code path that could satisfy these.
+        const string lead = "This asset has a ";
+        const string tail =
+                " rule.  A wallet built transfer cannot add the output that rule requires, so the "
+                "transfer would fail validation and every unit in the transaction would be "
+                "destroyed, including the change.  Refusing.";
+        if (rules.getIfRequiresRoyalty()) throw DigiByteException(RPC_MISC_ERROR, lead + "royalty" + tail);
+        if (rules.getRequiredBurn() > 0) throw DigiByteException(RPC_MISC_ERROR, lead + "required burn" + tail);
+        if (rules.getRequiredSignerWeight() > 0) {
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has a required signer rule.  A wallet built transfer cannot "
+                                    "collect the signatures that rule requires, so the transfer would fail "
+                                    "validation and every unit in the transaction would be destroyed, "
+                                    "including the change.  Refusing.");
+        }
+
+        //An expired asset is a different shape of the same trap: no transfer can ever pass again,
+        //so building one only destroys what is left.
+        if (rules.getIfExpired(chainHeight, nowSeconds)) {
+            throw DigiByteException(RPC_MISC_ERROR,
+                                    "This asset has expired.  No transfer of it can pass validation any more, "
+                                    "and attempting one would destroy every unit in the transaction, including "
+                                    "the change.  Refusing.");
+        }
+    }
+
     vector<AssetUTXO> selectAssetInputs(uint64_t assetIndex, uint64_t amount) {
         vector<AssetUTXO> candidates;
         for (const AssetUTXO& utxo: getWalletUTXOs(1)) {
             if (utxo.assets.empty()) continue;
             for (const DigiAsset& asset: utxo.assets) {
                 if (asset.getAssetIndex() == assetIndex) {
+                    //refuse before any input is chosen - see assertTransferableAsset()
+                    assertTransferableAsset(asset);
                     candidates.push_back(utxo);
                     break;
                 }
@@ -87,32 +130,6 @@ namespace AssetWallet {
         return selected;
     }
 
-    void assertTransferableAsset(const DigiAsset& asset) {
-        DigiAssetRules rules = asset.getRules();
-        if (rules.empty()) return; // no rules -> always transferable (the common case)
-
-        // Early friendly rejection for rules a wallet-built transfer can NEVER
-        // satisfy no matter the recipient - it adds none of the outputs these need
-        // (only issueasset calls addRuleOutputs) and can't guarantee signer inputs.
-        // Sending anyway makes every indexer replay the tx as an unintentional burn
-        // and DESTROY the asset, so we refuse up front with a specific reason.
-        // Royalty/deflation are Phase 2 (add the required outputs); see
-        // docs/rule-aware-transfers-scope.md.
-        //
-        // Vote / KYC / expiry are NOT rejected here: a transfer that actually
-        // satisfies them (e.g. a full send to a valid vote/KYC address) is legal,
-        // and the authoritative checkRulesPass backstop in fundSignSend allows the
-        // compliant ones and refuses the rest before any broadcast.
-        if (rules.getIfRequiresRoyalty())
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset has a royalty rule; transferring it is not yet supported and would burn it. Refusing.");
-        if (rules.getRequiredBurn() > 0)
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset has a deflation (required-burn) rule; transferring it is not yet supported and would burn it. Refusing.");
-        if (rules.getRequiredSignerWeight() > 0)
-            throw DigiByteException(RPC_MISC_ERROR,
-                                    "This asset requires authorized signers to move; wallet-built transfers can't guarantee that and would burn it. Refusing.");
-    }
 
     uint64_t parseAssetAmount(const Json::Value& amount, uint8_t decimals) {
         const uint64_t multiplier = BitIO::pow10(decimals);

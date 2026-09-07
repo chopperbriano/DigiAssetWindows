@@ -438,6 +438,11 @@ in one command with `pool/deploy/provision-peer-pool.ps1`; see
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the pieces fit together · **[CHANGELOG.md](CHANGELOG.md)** — release history.
 - **[Releases](https://github.com/chopperbriano/DigiAssetWindows/releases)** — the `.exe`s + scripts for each build.
 
+For how the rules are enforced and every situation in which assets are destroyed, see
+[docs/asset-rules-and-burns.md](docs/asset-rules-and-burns.md).  Worth reading before
+touching the transfer path: a rule violation burns every asset in the transaction, the
+sender's change included.
+
 ### The Node Console (http://localhost:8090)
 
 Built into `DigiAssetWindows.exe` (no separate exe) — once the node is running,
