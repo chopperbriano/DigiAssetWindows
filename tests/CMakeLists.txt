@@ -123,7 +123,11 @@ set(UNIT_TESTS
     PayoutMathTest.cpp
     RuleBackstopTest.cpp
     ThreadedStartupTest.cpp
-    DatabaseMigrationTest.cpp)
+    DatabaseMigrationTest.cpp
+    # Moved out of TESTS (Google_Tests_run needs a live DigiByte Core + IPFS). These use the
+    # assertTransferableAsset overload that takes chain height and time as arguments precisely
+    # so they need no database, so they belong in the suite that actually runs on every build.
+    AssetWalletRulesTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)

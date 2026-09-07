@@ -179,6 +179,10 @@ typedef enum {
   CURLOPT_WRITEDATA = 10001,
   CURLOPT_READDATA = 10002,
   CURLOPT_TIMEOUT_MS = 155,
+  // Connect-phase timeout, in SECONDS. Upstream (20f498d) sets this so one unreachable
+  // host cannot stall a worker; the WinHTTP backend maps it onto the resolve+connect
+  // timeouts of WinHttpSetTimeouts. Value matches real libcurl so the two agree.
+  CURLOPT_CONNECTTIMEOUT = 78,
   CURLOPT_NOSIGNAL = 99,
   CURLOPT_POSTFIELDSIZE = 60,
   CURLOPT_COPYPOSTFIELDS = 10165,

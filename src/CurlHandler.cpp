@@ -98,6 +98,21 @@ namespace CurlHandler {
             curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCallback);
             curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         }
+
+        ///seconds allowed to establish a connection.  A host that never completes the handshake
+        ///used to block the calling thread forever because CURLOPT_TIMEOUT_MS is optional and
+        ///several callers leave it at 0 - and some of those calls are made by the chain analyzer
+        ///itself, so one unreachable host stopped the node dead in the middle of a block
+        const long CONNECT_TIMEOUT_SECONDS = 10;
+
+        //options every request needs regardless of what it is doing
+        void applyCommonOptions(CURL* curl, unsigned int timeout) {
+            //these run on worker threads and libcurl may use signals for its own timeouts
+            curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT_SECONDS);
+            if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
+            applyAbortCheck(curl);
+        }
     } // namespace
 
     void abortAllTransfers(bool abort) {
@@ -117,8 +132,7 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
-        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-        applyAbortCheck(curl);
+        applyCommonOptions(curl, timeout);
         CURLcode res = curl_easy_perform(curl);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
             discardHandle();
@@ -156,8 +170,7 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
-        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-        applyAbortCheck(curl);
+        applyCommonOptions(curl, timeout);
         CURLcode res = curl_easy_perform(curl);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
             discardHandle();
@@ -195,8 +208,7 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
         curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
-        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-        applyAbortCheck(curl);
+        applyCommonOptions(curl, timeout);
         CURLcode res = curl_easy_perform(curl);
         curl_mime_free(mime);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
@@ -278,8 +290,7 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeData);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-        applyAbortCheck(curl);
+        applyCommonOptions(curl, timeout);
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
         if (res != CURLE_OK) {
@@ -331,8 +342,7 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
-        if (timeout > 0) curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-        applyAbortCheck(curl);
+        applyCommonOptions(curl, timeout);
         CURLcode res = curl_easy_perform(curl);
         fclose(fp);
         if (res != CURLE_OK) {

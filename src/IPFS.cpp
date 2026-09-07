@@ -13,6 +13,7 @@
 #include "Config.h"
 #include "CurlHandler.h"
 #include "Database.h"
+#include "Log.h"
 #include <fstream>
 #include <iostream>
 #include <regex>
@@ -74,6 +75,7 @@ IPFS::IPFS(const string& configFile, bool runStart) {
     _timeoutPin = config.getInteger("ipfstimeoutpin", 1200);
     _timeoutDownload = config.getInteger("ipfstimeoutdownload", 3600);
     _timeoutRetry = config.getInteger("ipfstimeoutretry", 3600);
+    _timeoutCommand = config.getInteger("ipfstimeoutcommand", 30);
     setMaxParallels(config.getInteger("ipfsparallel", 10));
     if (runStart) start();
 }
@@ -168,10 +170,13 @@ void IPFS::mainFunction() {
             //don't worry about failed unpin
         }
     } else {
-        //figure out what the max time we should try to download the file for is
+        //figure out what the max time we should try to download the file for is.
+        //maxSleep 0 means the caller set no deadline of its own(every callOnDownload and pin job
+        //does), so this gets the full download timeout and keeps retrying - it must not be read
+        //as "give up immediately", or a file that simply takes a while to arrive is dropped
         unsigned int timeout = _timeoutDownload * 1000;
         bool lastTry = false;
-        if (maxSleep < timeout) {
+        if ((maxSleep > 0) && (maxSleep < timeout)) {
             timeout = maxSleep;
             lastTry = true;
         }
@@ -269,6 +274,17 @@ string IPFS::cidToSha256(const string& cid) {
 
 
 /**
+ * True if it has been long enough since the last warning of this kind to print another one
+ */
+bool IPFS::_shouldWarn(std::atomic<long long>& lastWarning) {
+    long long now = duration_cast<seconds>(steady_clock::now().time_since_epoch()).count();
+    long long last = lastWarning.load();
+    if ((last != 0) && (now - last < static_cast<long long>(WARNING_REPEAT_SECONDS))) return false;
+    lastWarning.store(now);
+    return true;
+}
+
+/**
  * Sends a command to the IPFS node and return result
  * @param command - should be in the format cat/cid  should not have a / at beginning
  * @param data
@@ -323,6 +339,7 @@ void IPFS::_heartbeatIfIdle() const {
 
 string IPFS::_command(const string& command, const map<string, string>& data, unsigned int timeout, const string& outputPath) const {
     string url = _nodePrefix + command;
+    if (timeout == 0) timeout = _timeoutCommand * 1000; //never wait forever - see _timeoutCommand
     try {
         if (outputPath.empty()) {
             string result = CurlHandler::post(url, data, timeout);
@@ -332,15 +349,29 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
         CurlHandler::postDownload(url, outputPath, data, timeout);
         _markApiUp();
     } catch (const CurlHandler::exceptionTimeout& e) {
+        //shutdown aborts every transfer, which arrives here looking exactly like a timeout
+        if (!stopRequested() && _shouldWarn(_lastTimeoutWarning)) {
+            Log::GetInstance()->addMessage(
+                    "IPFS node did not answer \"" + command + "\" within " + to_string(timeout / 1000) +
+                            " seconds.  Raise ipfstimeoutcommand if this is normal for your node",
+                    Log::WARNING);
+        }
         //A timeout is NOT proof the daemon is down - a legitimate pin is allowed
         //20 minutes and a download an hour. Leave the flag alone rather than
         //reporting a healthy-but-busy node as unreachable.
         throw exceptionTimeout();
     } catch (const std::exception& e) {
+        //Both spellings are kept: libcurl's wording differs by version, and this fork has
+        //seen the "Could not" form in the wild. Upstream only matches "Couldn't".
         if (string(e.what()) == "Couldn't connect to server" ||
             string(e.what()) == "Could not connect to server") {
-                _markApiDown();
-                throw exceptionNoConnection();
+            if (_shouldWarn(_lastOfflineWarning)) {
+                Log::GetInstance()->addMessage("Could not reach the IPFS node at " + _nodePrefix +
+                                                       " - asset metadata will not be processed until it is running",
+                                               Log::WARNING);
+            }
+            _markApiDown();
+            throw exceptionNoConnection();
         }
         //Any other failure (HTTP error, bad payload, ...) says nothing reliable
         //about reachability, so leave the flag as it was.
@@ -349,6 +380,10 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
     return "";
 }
 
+
+///these are small text responses from third party services, and there are three of them to
+///try, so a short limit is right - the point is to move on rather than to succeed
+static const unsigned int IP_LOOKUP_TIMEOUT_MS = 15000;
 
 /**
  * Gets the users current IP address
@@ -361,7 +396,8 @@ string IPFS::getIP() {
 
     for (const auto& url: ipSources) {
         try {
-            string ip = CurlHandler::get(url);
+            //bounded so one unresponsive lookup service does not stop us trying the next
+            string ip = CurlHandler::get(url, IP_LOOKUP_TIMEOUT_MS);
             if (ip.empty()) continue;
             return ip;
         } catch (const runtime_error& e) {
@@ -558,7 +594,7 @@ void IPFS::registerCallback(const string& callbackSymbol, const IPFSCallbackFunc
 */
 /**
  * Function to download data from IPFS and run a pre registered callback when done.
- * If sync is "" call back may be executed immediately if data already downloaded.
+ * The callback always runs on a job thread, never on the caller's.
  * Is sync provided will always execute all values with the same sync value in order.
  * @param cid - cid of file you want downloaded
  * @param sync - "" to specify order execution does not matter.  all values of same sync value otherwise executed in order added
@@ -574,19 +610,13 @@ void IPFS::callOnDownload(const string& cid, const string& sync, const string& e
 
     Database* db = AppMain::GetInstance()->getDatabase();
 
-    //check if we can do synchronously quickly
-    if (sync.empty() && isPinned(cid)) {
-        try {
-            string content = _command("cat/" + cid);
-            db->getIPFSCallback(callbackRegistry)(cid, extra, content, false);
-        } catch (...) {
-            //this function makes the request and does not wait for a response.
-            //If asynchronous exceptions can't be handled, so we will ignore if synchronous, so it responds the same both ways
-        }
-        return;
-    }
-
-    //add type download to database
+    //Always queue, never run it here.  There used to be a shortcut that fetched the content and
+    //ran the callback inline whenever the cid was already pinned, on the theory that local
+    //content is instant.  The content is - the callback is not: a storage pool callback sizes
+    //every file the metadata links to, and those are fetched from the network one at a time.
+    //Since the only callers of this are the chain analyzer processing an issuance, one asset
+    //whose linked files nobody is serving stopped the entire node on that block.  The job
+    //threads exist for exactly this work, so let them do it
     db->addIPFSJob(cid, sync, extra, maxTime, callbackRegistry);
 }
 
@@ -700,8 +730,11 @@ unsigned int IPFS::getSize(const string& cid) const {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
     //files/stat handles both dag-pb(Qm…) and raw-leaves(bafkrei…) cids.  object/stat was
-    //removed in kubo 0.40 so it failed for every cid on modern nodes
-    string stats = _command("files/stat?arg=/ipfs/" + cid);
+    //removed in kubo 0.40 so it failed for every cid on modern nodes.
+    //This is the one command here that is not a local lookup - working out CumulativeSize walks
+    //the whole dag, fetching any block the node does not have, so a large file on a slow link
+    //legitimately takes minutes.  It gets the download timeout, not the short command one
+    string stats = _command("files/stat?arg=/ipfs/" + cid, {}, _timeoutDownload * 1000);
     Json::Value json;
     Json::CharReaderBuilder rbuilder;
     istringstream s(stats);
@@ -725,12 +758,14 @@ unsigned int IPFS::getSize(const string& cid) const {
 void IPFS::downloadFile(const string& cid, const string& filePath, bool pinAlso) {
     if (!isValidCID(cid)) throw exceptionInvalidCID(cid);
     if (isLostCID(cid)) throw exceptionTimeout(); //well it would have timed out if we had let it
+    //this is the one caller that legitimately waits a long time(bootstrap files), so it asks
+    //for the pin/download timeouts instead of the short default every other command gets
     if (pinAlso) {
-        _command("pin/add/" + cid);
+        _command("pin/add/" + cid, {}, _timeoutPin * 1000);
         std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
         _pinnedCache.insert(cid);
     }
-    _command("cat?arg=" + cid, {}, 0, filePath);
+    _command("cat?arg=" + cid, {}, _timeoutDownload * 1000, filePath);
 }
 
 /**

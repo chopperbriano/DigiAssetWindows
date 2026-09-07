@@ -54,6 +54,7 @@ ChainAnalyzer::ChainAnalyzer() {
 
 ChainAnalyzer::~ChainAnalyzer() {
     stop();
+    watchdogStop(); //shutdownFunction does this on the normal path; belt and braces for the rest
 }
 
 /*
@@ -231,7 +232,6 @@ void ChainAnalyzer::setTrackDigiDollar(bool shouldTrack) {
     _trackDigiDollar = shouldTrack;
 }
 
-
 /**
  * returns 0 if we should not prune right now otherwise returns height we can prune up to
  * @param height
@@ -314,6 +314,9 @@ void ChainAnalyzer::startupFunction() {
         //mark as has been pruned if we aren't keeping and database will not store them
         db->setBeenPrunedNonAssetUTXOHistory(true);
     }
+
+    //start watching for steps that never finish
+    watchdogStart();
 
     //remember the newest oracle epoch so the sync loop can skip re-reading commitments it has
     _lastOracleEpoch = db->getDigiDollarLastEpoch();
@@ -558,6 +561,93 @@ void ChainAnalyzer::pause(unsigned int seconds) {
 
 void ChainAnalyzer::shutdownFunction() {
     _state = STOPPED;
+    watchdogStop();
+}
+
+/*
+██╗    ██╗ █████╗ ████████╗ ██████╗██╗  ██╗██████╗  ██████╗  ██████╗
+██║    ██║██╔══██╗╚══██╔══╝██╔════╝██║  ██║██╔══██╗██╔═══██╗██╔════╝
+██║ █╗ ██║███████║   ██║   ██║     ███████║██║  ██║██║   ██║██║  ███╗
+██║███╗██║██╔══██║   ██║   ██║     ██╔══██║██║  ██║██║   ██║██║   ██║
+╚███╔███╔╝██║  ██║   ██║   ╚██████╗██║  ██║██████╔╝╚██████╔╝╚██████╔╝
+ ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝
+ */
+
+long long ChainAnalyzer::steadySeconds() {
+    return chrono::duration_cast<chrono::seconds>(chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void ChainAnalyzer::watchdogStart() {
+    if (_watchdogRunning) return;
+    _watchdogRunning = true;
+    _watchdogThread = std::thread(&ChainAnalyzer::watchdogTask, this);
+}
+
+void ChainAnalyzer::watchdogStop() {
+    _watchdogRunning = false;
+    if (_watchdogThread.joinable()) _watchdogThread.join();
+}
+
+/**
+ * Records what the analyzer is about to do so the watchdog can name it if it never comes back
+ * @param step - human readable description, eg "block 24081128 transaction abc123..."
+ */
+void ChainAnalyzer::watchdogWorkingOn(const string& step) {
+    {
+        lock_guard<mutex> lock(_watchdogMutex);
+        _watchdogStep = step;
+    }
+    _watchdogSince = steadySeconds();
+}
+
+/**
+ * Says the analyzer is deliberately doing nothing(waiting for a new block, or shutting down)
+ * so the watchdog stays quiet
+ */
+void ChainAnalyzer::watchdogIdle() {
+    _watchdogSince = 0;
+}
+
+/**
+ * Complains whenever a single step has been running for longer than _stallWarningSeconds, and
+ * again every _stallWarningSeconds after that for as long as it keeps running.
+ *
+ * Everything the analyzer logs is written after a block completes, so a step that blocks forever
+ * produces no output at all - which is what a node stuck on a single issuance looked like from
+ * the outside.  The message names the block and transaction so the cause can actually be found.
+ */
+void ChainAnalyzer::watchdogTask() {
+    Log* log = Log::GetInstance();
+    long long warnedForSince = 0;
+    long long nextWarnAfter = _stallWarningSeconds;
+
+    while (_watchdogRunning) {
+        this_thread::sleep_for(chrono::milliseconds(200));
+
+        long long since = _watchdogSince;
+        if (since == 0) continue; //idle on purpose
+
+        //a different step than the one last warned about starts the count over
+        if (since != warnedForSince) {
+            warnedForSince = since;
+            nextWarnAfter = _stallWarningSeconds;
+        }
+
+        long long elapsed = steadySeconds() - since;
+        if (elapsed < nextWarnAfter) continue;
+        nextWarnAfter = elapsed + _stallWarningSeconds;
+        _stallWarnings++;
+
+        string step;
+        {
+            lock_guard<mutex> lock(_watchdogMutex);
+            step = _watchdogStep;
+        }
+        log->addMessage("Still working on " + step + " after " + to_string(elapsed) +
+                                " seconds.  Sync is not frozen, it is waiting on something outside the node - "
+                                "usually the IPFS daemon, DigiByte Core, or a storage pool server",
+                        Log::WARNING);
+    }
 }
 
 /*
@@ -579,6 +669,7 @@ void ChainAnalyzer::shutdownFunction() {
  */
 void ChainAnalyzer::phaseRewind() {
     Log* log = Log::GetInstance();
+    watchdogWorkingOn("rewinding from height " + to_string(_height));
 
     AppMain* main = AppMain::GetInstance();
     Database* db = main->getDatabase();
@@ -652,6 +743,7 @@ void ChainAnalyzer::phaseSync() {
     DigiByteCore* dgb = main->getDigiByteCore();
 
     //start syncing
+    watchdogWorkingOn("looking up block " + to_string(_height) + " in DigiByte Core");
     string hash = dgb->getBlockHash(_height);
     bool fastMode = false;
     chrono::steady_clock::time_point beginTime;
@@ -759,6 +851,7 @@ void ChainAnalyzer::phaseSync() {
         phasePrune();
 
         //if fully synced pause until new block
+        watchdogIdle(); //waiting for the chain to move is not a stall
         while (blockData.nextblockhash.empty()) {
             //a new block can be minutes away - don't hold up shutdown waiting for one
             if (stopRequested()) return;
@@ -793,6 +886,19 @@ void ChainAnalyzer::phaseSync() {
                 return;
             }
             blockData = dgb->getBlock(hash);
+        }
+
+        //The block DigiDollar activated on has now been indexed by the normal sync path, so record
+        //it (upstream f37d61d/38dcc31). The marker is the only thing that tells a later start this
+        //database already has DigiDollar in it, and it used to be written solely by
+        //phaseDigiDollarBackfill. That left any database built by syncing FORWARD claiming height
+        //0, so the next start rewound all the way back here to redo work that was already done.
+        //That matters to this fork specifically: the fast-sync snapshot ships a prebuilt chain.db,
+        //and without this every node restoring from it would rewind ~212,000 blocks on its first
+        //restart for nothing.
+        if (shouldTrackDigiDollar() &&
+            (_height == static_cast<int>(DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT))) {
+            db->setDigiDollarSyncHeight(DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT);
         }
 
         //advance to next block

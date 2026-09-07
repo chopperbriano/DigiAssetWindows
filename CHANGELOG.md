@@ -20,7 +20,300 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.105 (current) — CRITICAL: fix win.104 crash (CurlHandler use-after-free)
+## 0.3.3-win.137 (current) — second upstream sync; IPFS bootstrap dropped; asset rules enforced
+
+Two upstream syncs' worth of work, plus the fallout from testing it. Entries for
+win.130–136 follow below; this one covers the September sync.
+
+### Merged `upstream/experimental_digidollar` (12 commits, 11 conflicts)
+
+**The IPFS bootstrap image is gone, and this fork benefits more than upstream does.**
+`main.cpp` pinned `officialBootstrap` **unconditionally on every start** — both the v7 and
+v8 CIDs — whether or not the node ever restored from one. Every node this project has ever
+shipped has been carrying several GB it never used. The retired CIDs move into
+`oldBootstrapCIDs`, which is unpinned on start, so existing nodes **release that space on
+their next run**.
+
+Taking it costs nothing here: `--bootgen` and `Database::compactForDistribution()` existed to
+build a single-file image, but this fork's fast-sync ships `chain.db` **with** its `-wal`/`-shm`
+from a cleanly stopped node (`snapshots/make-snapshot.ps1`) and never used either.
+`bootstrapchainstate` is gone from `example.cfg`; an existing config that still has the key is
+simply ignored. Roughly everyone installs via `setup-digiasset.ps1` and the R2 snapshot, so
+the IPFS fallback was paying a permanent cost for a path almost nobody took.
+
+**A rewind that should never have happened.** `setDigiDollarSyncHeight` is now recorded when
+the *normal sync path* passes the activation block, not only by `phaseDigiDollarBackfill`. A
+database built by syncing **forward** claimed height 0, so the next start rewound ~212,000
+blocks to redo finished work. That matters specifically here: the fast-sync snapshot ships a
+prebuilt `chain.db`, so without this every node restoring from a snapshot would do that rewind
+once, for nothing.
+
+**A `std::terminate` hazard.** `Threaded::start()`/`stop()` only joined when `_running` was
+set. A thread that ended on its own is still joinable, and destroying or assigning over one of
+those ends the process. Both now join whenever there is something to join.
+
+Also adopted: a stall watchdog in `ChainAnalyzer` that names the step a hung pass is waiting
+on; IPFS and pool-server timeouts (a wedged daemon used to stop the analyzer on whichever
+block held the next issuance); throttled IPFS warnings; and a v9 wallet requirement.
+
+Kept over upstream where this fork diverges deliberately: `std::atomic` rather than upstream's
+`volatile` flags; the **startup retry** (upstream logs CRITICAL and ends the thread — this fork
+backs off and recovers, which is the win.130 fix for a node that sat dead for 4.6 hours); the
+height-based error streak; the pipeline-prefetch `phaseSync`; DigiStamp pool defaults; keepalive
+diagnostics; and the dashboard/WebServer/PSP shutdown ordering.
+
+Two things the merge itself broke, both caught by building:
+
+- `_reportResult` calls arrived without their declaration. It had been judged dead code because
+  this fork's lambda already catches everything — that was wrong: `get()` also **retires** the
+  future, which the previous `wait()`/erase did not.
+- `CURLOPT_CONNECTTIMEOUT` does not exist in this fork's WinHTTP curl stub. Added and mapped
+  onto `WinHttpSetTimeouts`' resolve+connect, so an unreachable host fails in ~10s instead of
+  holding the thread for the full request timeout — 20 minutes on a pin, which was the entire
+  point of upstream's change.
+
+### Asset rule enforcement (upstream `62420c4`, `92dae26`)
+
+A transfer of an asset whose rules a wallet-built transaction can never satisfy is now refused
+before any input is chosen. Previously it was built and broadcast, failed `checkRulesPass` when
+decoded, and the failure handler cleared the asset from **every** output including the change —
+so sending 1 of 5 units silently destroyed all 5.
+
+This fork had its own version and upstream credits it for the approach, but upstream's is a
+superset, so **ours was removed rather than kept alongside it** (both defined
+`assertTransferableAsset`; the tree would not have compiled). Upstream's adds what this fork got
+wrong: our comment grouped **expiry** with KYC and vote rules as "not rejected here, because a
+compliant transfer is legal." True for KYC and vote — the recipient decides — but not for
+expiry, which is absolute: an expired asset can never pass validation again, so building the
+transfer only destroys what is left.
+
+It also takes chain height and time as arguments so the logic is testable without a database,
+and logs a WARNING on the burn path, which previously destroyed every asset output in a
+transaction with nothing written anywhere.
+
+The nine tests arrived attached to `Google_Tests_run`, which needs a live DigiByte Core and
+IPFS and so does not run on a normal build. They use the injected-state overload precisely so
+they need neither, and were moved to `Unit_Tests_run` — a test that never runs is not coverage.
+
+**Not taken:** upstream `bfef1ab` and `87b1c3a`. Both are the Linux release pipeline — a
+workflow building `.deb`/`tar.gz` plus the Qt GUI, two Linux `.desktop` entries, and
+`qt/CMakeLists.txt`. This fork ships Windows binaries, releases them by hand, and has
+`BUILD_QT OFF` with no Qt toolchain wired.
+
+### CI
+
+`.github/workflows/release.yml` **removed**. It built Linux, macOS and Windows artifacts on
+every `v*` tag and **had never once succeeded in 20 runs**, so every release this project cut
+left a red X on the repository. It also could not produce what is actually shipped. The release
+process is now documented in [docs/releasing.md](docs/releasing.md).
+
+`windows-build.yml` fixed on two counts:
+
+- It configured `libjson-rpc-cpp` directly and so never applied
+  `patches/libjson-rpc-cpp-cmp0042.patch`, which a CMake 4.x build requires — a gap left when
+  that fix moved into `config-libjson-rpc.bat` in win.133. It now applies it the same
+  idempotent way.
+- The `vcpkg install curl openssl` step is **gone**. It failed on every run this workflow ever
+  had and was never required: `config-libjson-rpc.bat` — the documented local build, which
+  works — configures that submodule with no vcpkg toolchain and no curl or openssl at all.
+
+**103/103 unit tests pass** (was 94). Control Flow Guard, zero absolute build paths, and
+published checksums all re-verified on the shipped binaries.
+
+---
+
+## 0.3.3-win.136 — an indented comment in config.cfg no longer stops the node starting
+
+`Config` treated only a `#` in **column 0** as a comment, so an indented line parsed as a key:
+
+```
+   # psp2costpercent=100
+```
+
+Harmless until the config placeholder check arrived in win.134. That key contains a `#`, so
+`main.cpp` logged CRITICAL and returned 1 — **the node refused to start** — with a message
+describing the opposite of what happened: *"…is not a real config key … as written it does
+nothing."* It was not doing nothing; it was preventing startup entirely. Indenting a comment is
+an ordinary thing to do when hand-editing a config.
+
+A comment is now any line whose first non-whitespace character is `#`; whitespace-only lines are
+skipped too. Raw lines are still preserved, so comments survive write-back unchanged.
+
+Verified against the built binary, not just the parser: the shipped `example.cfg` starts, an
+indented comment containing `=` now starts, and a genuine `psp#subscribe=1` is still refused —
+the check still catches the mistake it exists for. Two regression tests cover both directions.
+
+Found by testing what a deployment would actually do rather than reading the diff.
+
+---
+
+## 0.3.3-win.135 — re-runnable 6→7 migration + migration coverage
+
+win.134 removed a duplicated 6→7 migration lambda that the upstream merge introduced. That bug
+got as far as it did because **nothing covered the migration path at all**.
+
+Every statement in the 6→7 migration is now `IF NOT EXISTS` / `INSERT OR IGNORE`, matching the
+fresh-create path, so a node killed part way through heals on the next start instead of erroring
+forever on tables it already created.
+
+`buildTables`' migration loop tested `dbVersionNumber >= skipUpToVersion` — a condition that
+cannot change inside its own loop, because `skipUpToVersion` only ever moves inside
+`lambdaFunctions[0]`, which only runs when `dbVersionNumber` is 0. It was correct, and it read
+like a bug in the one function that had just produced a real one. Now tests `i`.
+
+Adds `DatabaseMigrationTest` (5 cases): a fresh database lands on the current version, reopening
+a current database does not re-migrate (**the actual regression**), repeated opens stay stable, a
+version 6 database migrates forward and creates the DigiDollar tables, and an interrupted
+migration is safe to re-run.
+
+The tests were verified to have teeth: with the idempotency reverted,
+`InterruptedMigrationIsRerunnable` fails while the other four still pass — the correct split,
+since only that one exercises the re-run case.
+
+`SHA256SUMS` is now written with **LF** endings. The win.134 file had CRLF, which made
+`sha256sum -c` fail on every line while the hashes themselves were correct — and the release
+notes tell people to run exactly that command.
+
+---
+
+## 0.3.3-win.134 — first upstream sync (18 commits) and the defects it introduced
+
+Merged `upstream/experimental_digidollar` since 2026-07-22. Two upstream fixes **replaced this
+fork's own attempts at the same bugs**:
+
+- **Error classification.** win.130 fixed the "everything is Core Offline" problem the wrong
+  way — it appended the real message to a still-incorrect label. Upstream checks the error
+  *code*: only `ERROR_CLIENT_CONNECTOR` means unreachable, an auth failure is its own case, and
+  anything else is rethrown with the node's own code and message. A healthy node answering
+  "unknown method" is not a connectivity problem.
+- **Sync no longer stops permanently.** win.132 gave up after 10 failures, set `STOPPED`, and
+  slept until restarted — turning a long transient fault into a dead node. It now retries every
+  15s. This fork's **height-based** streak reset is kept over upstream's error-text comparison,
+  which counts unrelated hiccups spread over an hour as consecutive.
+
+Also from upstream: `rpcwallet` for multi-wallet nodes; refusing to start on config keys still
+holding the `#` placeholder; asset data on pruning nodes instead of an error; no longer locking
+every fee coin when `storenonassetutxo=0`; a crash fix on duplicate exchange-rate publish in one
+block; and `wakeBlockedAccept` — closing the acceptor does **not** unblock a thread already
+inside `accept()`, which this fork's comment claimed it did.
+
+**Four defects the merge itself introduced**, each found by building or testing:
+
+| Defect | Impact |
+|---|---|
+| Duplicate `getNodeVersion` / `MINIMUM_NODE_VERSION` | Compile error |
+| Duplicate DigiDollar `CREATE TABLE` block | Fresh database creation failed |
+| Duplicate `_stmtReplaceExchangeRate.prepare()` | "Statement already prepared" |
+| **Duplicate 6→7 migration lambda** | **Would have broken every existing node on upgrade** |
+
+Both forks implemented DigiDollar indexing independently, so git kept both migrations. A
+database already at version 7 ran the second and tried to `CREATE TABLE ddutxos` over itself.
+
+Two further fixes the merge exposed: `Log` no longer depends on `ConsoleDashboard` (upstream
+gives the cli `Log.cpp`, and pulling the dashboard in would drag `Database`/`AppMain`/`IPFS`
+into a small CLI tool — it now takes a `std::function` sink); and the two migration paths threw
+a bare `"Table creation failed"` while discarding the sqlite error unread, which is what made
+the duplicate migration slow to find.
+
+---
+
+## 0.3.3-win.133 — hardened binaries and published checksums
+
+These binaries are downloaded by the public, so this release audits what actually ships.
+
+**Control Flow Guard was missing.** ASLR, DEP and high-entropy VA were already on as MSVC
+defaults (`dumpbin`: DLL characteristics `0x8160`), but CFG is not a default and `0x4000` was
+absent. Now compiled with `/guard:cf` and linked with `/GUARD:CF` — **both** are required or the
+guard tables are silently never emitted. Verified `0x8160` → `0xC160` on all three binaries.
+`/GS` is set explicitly so a future flag change cannot quietly drop stack cookies, and `/sdl`
+adds the remaining checks.
+
+**The exe was publishing the build layout.** It carried 15 absolute
+`C:\repo\DigiAssetWindows\packages\boost...` strings, baked in by Boost's assert machinery via
+`__FILE__`. `/d1trimfile:` strips the source root; those are now relative. No PDB path or
+username was ever leaking. Now **0 absolute paths** in all three binaries.
+
+**`SHA256SUMS` published with every release and verified on download.** Generated by
+`tools/stage-release.ps1` so it cannot be forgotten — a checksum file published only when
+someone remembers is worse than none, because the installer silently downgrades to a format
+check and nobody notices. A **mismatch is fatal** and leaves the working binary untouched; a
+**missing** file only warns, so rolling back still installs.
+
+Three `std::getenv` calls were fixed rather than silenced (`/sdl` rejects it: it returns a
+pointer into a shared buffer another thread can invalidate). `envFlagSet()` uses `_dupenv_s`.
+
+`/Qspectre` is deliberately absent — it needs the Spectre-mitigated CRT, a separate Visual
+Studio component every builder would have to install, for little benefit on a single-user
+desktop node. `/GL` + `/LTCG` is also left off: a real speed win, but it re-optimises the whole
+binary and the tests do not cover the sync path, so it wants its own release and a soak test.
+
+---
+
+## 0.3.3-win.132 — transient RPC hiccups no longer stop a healthy sync
+
+A node doing the one-time DigiDollar backfill (a ~212,000 block replay) logged red CRITICALs
+minutes apart, each recovered on the next pass. Chasing why they were CRITICAL turned up a worse
+problem behind them.
+
+`_errorCount` exists to catch **one block that keeps failing**, and is reset by the
+`_errorCount = 0` after `phaseSync()`. But `phaseSync()` walks block by block and does not
+return until it reaches the tip, so during a long catch-up that reset never runs. Unrelated
+transient RPC failures — minutes apart, each recovered on the first attempt — accumulated into a
+fake streak, and at 10 the node logged `Giving up`, set `STOPPED` and slept until restarted. The
+box was at attempt 2 with ~55 minutes of replay left, on course to stop a sync that was making
+steady progress at 64 blocks/sec. The counter now resets whenever the chain has advanced past
+the previous failure.
+
+The CRITICAL itself was pure noise. `mainFunction` re-threw with the comment *"so the Threaded
+framework re-enters mainFunction() to recover"* — but Threaded's loop calls it again on the next
+iteration whether or not it threw. The re-throw bought **no recovery at all**; its only effect
+was reaching Threaded's catch-all, which logs everything at CRITICAL. Now reported at WARNING
+with the real cause; the give-up path still logs CRITICAL.
+
+---
+
+## 0.3.3-win.131 — the pool server reports its build
+
+`stats.json` gains a `version` field and the pool page footer shows it. Nothing exposed which
+build `pool.digistamp.co` was running: after a deploy there was no way to confirm from outside
+the box that the new binary had taken, and a peer pool on a stale build stayed invisible until
+it misbehaved.
+
+The footer shows **two** independent signals, because the site is pulled from `master` while the
+binary ships in a release and the two deploy separately: **pool server**, read from `stats.json`
+(proves the binary updated), and **page**, a stamp baked into `index.html` (proves the page
+refreshed).
+
+---
+
+## 0.3.3-win.130 — a failed worker startup no longer kills the thread for good
+
+A node was found sitting **3,194 blocks behind for 4.6 hours** while its dashboard showed
+`DigiByte Core: Online`, `Initializing...` and a `100.0%` progress bar. The `ChainAnalyzer`
+thread had been dead since 99 seconds after launch.
+
+`Threaded::_threadFunction()` treated any `startupFunction()` exception as fatal: log one
+CRITICAL, clear `_running`, return. Nothing ever restarted the worker. The analyzer calls
+`getBlockHash()` while DigiByte Core may still be warming up, so losing that race killed
+indexing for the life of the process while the rest of the node kept reporting itself healthy.
+
+- Startup now **retries with backoff** (2s→60s) and honours `stop()`, so shutdown never waits
+  out a backoff. Logging is graduated: WARNING per attempt, one CRITICAL on the third, INFO on
+  recovery.
+- The analyzer **waits for Core to reach the height it needs** rather than throwing at it, so
+  the common warmup case never reaches the log.
+- `disableWriteVerification()` moved after that wait — a startup that never completed used to
+  leave `chain.db` in relaxed-durability mode with no sync running.
+- The dashboard caps progress below 100% until the height actually reaches the tip (3,194 blocks
+  behind out of 24 million is 99.99%, which printed as `100.0%`), and reports `INITIALIZING`
+  past 120s as **STUCK** in red with the elapsed time.
+- `Threaded::isRunning()` added so a watchdog can spot a dead worker.
+
+Adds `ThreadedStartupTest`: retry after a transient failure, recovery once the dependency comes
+up, staying alive while startup keeps failing, and `stop()` not hanging in the backoff.
+
+---
+## 0.3.3-win.105 — CRITICAL: fix win.104 crash (CurlHandler use-after-free)
 
 win.104 crashed both the node (heap corruption, `0xc0000374`) and the pool
 (access violation, `0xc0000005`) after running a while. Root cause: the

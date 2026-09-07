@@ -23,7 +23,10 @@
 #include "Database.h"
 #include "DigiByteCore.h"
 #include "Threaded.h"
+#include <atomic>
 #include <cmath>
+#include <mutex>
+#include <string>
 #include <thread>
 
 /**
@@ -167,6 +170,19 @@ private:
     //wait for DigiByte Core to be able to serve a given height (false = shutdown requested)
     bool waitForCoreHeight(int height);
 
+    //stall watchdog.  Progress is only logged once a block is finished, so a step that never
+    //returns - a wedged IPFS daemon, an unreachable pool server, DigiByte Core not answering -
+    //looked exactly like a node that had silently died.  This says what it is waiting on.
+    //Complements waitForCoreHeight above: that one PREVENTS the startup race, this one
+    //reports any step that hangs once running.
+    std::atomic<bool> _watchdogRunning{false};
+    std::atomic<long long> _watchdogSince{0}; //steady clock seconds the step started, 0 = idle
+    std::mutex _watchdogMutex;
+    std::string _watchdogStep;
+    std::thread _watchdogThread;
+    void watchdogTask();
+    static long long steadySeconds();
+
     //repeated failure handling (from mctrivia 90f0ea6)
     static const unsigned int REWINDS_TO_SAME_HEIGHT_BEFORE_PAUSE = 3;
     static const unsigned int REPEAT_ERRORS_BEFORE_PAUSE = 10;
@@ -196,6 +212,18 @@ private:
     void processTX(const std::string& txid, unsigned int height);//parse one tx, store it, invalidate caches
 
     friend class Database; //so database can modify state
+
+protected:
+    //watchdog controls.  Protected rather than private only so the tests can drive them without
+    //a live DigiByte Core - they are not part of the class's job
+    unsigned int _stallWarningSeconds = 60;      //how long a single step may run before it is reported
+    std::atomic<unsigned int> _stallWarnings{0}; //how many stall warnings have been printed
+    void watchdogStart();
+    void watchdogStop();
+    void watchdogWorkingOn(const std::string& step); //what is about to happen, for the watchdog to name
+    void watchdogIdle();                             //deliberately doing nothing, stay quiet
+
+private:
 public:
     /*
    ███████╗██████╗ ██████╗  ██████╗ ██████╗ ███████╗

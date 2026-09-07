@@ -1,7 +1,6 @@
 // main.cpp - entry point for the DigiAssetWindows node executable
-// (DigiAssetWindows.exe). Runs the first-launch config wizard, optionally
-// bootstraps the chain database from IPFS, connects to DigiByte Core, opens the
-// local chain.db, starts the IPFS handler, Permanent Storage Pool list, RPC
+// (DigiAssetWindows.exe). Runs the first-launch config wizard, connects to
+// DigiByte Core, opens the local chain.db, starts the IPFS handler, Permanent Storage Pool list, RPC
 // cache, chain analyzer, RPC server, and web server, then idles until a
 // shutdown signal (Ctrl+C/SIGTERM or the dashboard's quit key) and tears down.
 
@@ -10,6 +9,7 @@
 #include "Config.h"
 #include "ConsoleDashboard.h"
 #include "Database.h"
+#include "DigiAssetConstants.h"
 #include "DigiByteCore.h"
 #include "EventBroadcaster.h"
 #include "IPFS.h"
@@ -51,30 +51,23 @@ namespace {
 // fatal setup failures (bad config, database won't open), 1 on an uncaught
 // exception. Note: the happy path never falls through to `return 0` - it calls
 // std::exit(0) after teardown to kill the detached RPC/web-server threads.
-// Takes argc/argv for --bootgen / --help (upstream 1ddf933).
+// Takes argc/argv for --help.
 int main(int argc, char* argv[]) {
 
   try {
-    struct bootStrap {
-        string cid;
-        unsigned int height;
-    };
-
+    // The bootStrap struct is gone with the IPFS bootstrap image (upstream f37d61d).
     /*
      * Parse command line
      */
-    bool bootGenMode = false; //--bootgen: sync to the tip, make the db a single clean file, then exit
     for (int i = 1; i < argc; i++) {
         string arg = argv[i];
-        if (arg == "--bootgen") {
-            bootGenMode = true;
-        } else if ((arg == "--help") || (arg == "-h")) {
+        //--bootgen removed with the IPFS bootstrap image (upstream f37d61d). This fork's
+        //fast-sync ships chain.db with its -wal/-shm from a cleanly stopped node
+        //(snapshots/make-snapshot.ps1), so it never needed the compacted single-file build.
+        if ((arg == "--help") || (arg == "-h")) {
             //fork branding: upstream prints "DigiAsset Core <ver>" / digiasset_core
             cout << getProductVersionString() << "\n"
                  << "Usage: DigiAssetWindows.exe [options]\n"
-                 << "  --bootgen   Sync to the chain tip, then compact the database into a single\n"
-                 << "              shareable file and shut down.  Used to build the IPFS bootstrap\n"
-                 << "              image.  The RPC server and event stream stay off.\n"
                  << "  --help      Show this message\n";
             return 0;
         } else {
@@ -97,12 +90,32 @@ int main(int argc, char* argv[]) {
     // below still runs.
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
+    ///Bootstrap images are gone - every node syncs from genesis now.  These are the images nodes
+    ///used to pin, kept here only so a node that already has one lets go of it.  Every running node
+    ///pinned the image whether or not it ever restored from one, so without this list they would
+    ///each keep carrying several GB with no way to release it.  Safe to delete once enough time has
+    ///passed that no node is still on a build old enough to have pinned them.
+    const vector<string> oldBootstrapCIDs = {
+            "QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM",
+            "QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU",
+            "QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z" //last official image, height 21505152
+    };
 
-    ///When updating bootstrap image change both values.   Reviewers make sure this value is only ever changed by trusted party
-    const vector<string> oldBootstrapCIDs = {"QmVYaAEq5Whh1951RtRrBx1aFXiLuPoho4apRRa9tX6BDM","QmaAHM9ZPGDWjW2Y5HhVzRVKAyrWofjzkN7pCW1juKgizU"};
-    const bootStrap officialBootstrap[2]{
-            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 21505152},   //v7
-            {"QmUUpXkcajwApumJ9KGz9nX7x1QmTQ4kTW4YzPc4HXqu4Z", 21505152}    //v8
+    ///Files that every node keeps a copy of so they stay findable.  The storage pool only keeps asset
+    ///metadata alive, so anything else on ipfs survives purely on whoever happens to still have it -
+    ///and when that was one machine, the test fixtures below dropped to zero providers the moment it
+    ///went offline.  Spreading them over every node costs each one a copy but means the test suite is
+    ///never blocked on a single operator.
+    ///Reviewers: only ever changed by a trusted party
+    const vector<string> officialPinnedCIDs = {
+            "QmNPyr5tkm48cUu5iMbReiM8GN8AW6PRpzUztPFadaxC8j", //tests/testFiles/assetTest.csv
+            "QmUXQ2SMCvNAL4THgMm2g5vM4t6dBzj78ArnW9YBFmk81m"  //tests/testFiles/assetTest.db
+    };
+
+    ///Superseded entries from the list above, unpinned on start the same way oldBootstrapCIDs are.
+    ///Without this a node that pinned one keeps carrying it forever with no way to let go
+    const vector<string> retiredPinnedCIDs = {
+            "QmVoawgnYej8TNwpBB7DtJ75KbrAB99k7f9VAWzqSLJBeX" //assetTest.db before it was vacuumed(243MB)
     };
 
     /*
@@ -174,13 +187,7 @@ int main(int argc, char* argv[]) {
         cout << "Unpruned mode requires 100GB of storage.  Pruned mode requires 2 GB of storage.  Unless running a service like an explorer or wallet back end Pruned Mode is recommended.\n";
         cout << "Would you like to run in pruning mode(Y/N)? ";
         bool pruneMode = utils::getAnswerBool();
-        bool bootstrap = false;
-        if (pruneMode) {
-            cout << "Would you like to bootstrap the database from IPFS(Y) or sync from the begining(N)? ";
-            bootstrap = utils::getAnswerBool();
-        }
         config.setInteger("pruneage", pruneMode ? 5760 : -1);
-        config.setBool("bootstrapchainstate", bootstrap);
 
         //get list of allowed rpc calls
         cout << "Do you wish to allow all RPC commands(Y/N)? ";
@@ -240,9 +247,6 @@ int main(int argc, char* argv[]) {
      * Print starting message
      */
     log->addMessage("Starting " + getProductVersionString());
-    if (bootGenMode) {
-        log->addMessage("Bootstrap generation mode.  Will shut down once fully synced");
-    }
 
     /*
      * Get database filename from config (default "chain.db")
@@ -320,63 +324,12 @@ int main(int argc, char* argv[]) {
      * Get wallet version
      */
     DigiByteCore::WalletVersion walletVersion = dgb.coreVersion();
-
-    /*
-     * Predownload database files if config files allow and database missing.
-     * Runs after the core connection so we know the wallet version and can pick
-     * the matching bootstrap image (v7 vs v8).
-     */
-    unsigned int pauseHeight = 0;
-    if (                                                   //download bootstrap if all of the above are true
-            config.getBool("bootstrapchainstate", true) && //if bootstrap is allowed by config(default true)
-            !config.getBool("storenonassetutxo", false) && //if we are not storing the non asset utxo
-            !utils::fileExists(dbFilename)) {              //if the chain database does not yet exist
-        log->addMessage("Bootstraping Database.  This may take a while depending on how faster your internet is.");
-        IPFS ipfs("config.cfg", false);
-        const auto bootstrap = (walletVersion == DigiByteCore::WalletVersion::v8) ? officialBootstrap[1] : officialBootstrap[0];
-        //The bootstrap download depends on IPFS being up and the CID being
-        //reachable.  Rather than let a timeout abort the whole node, retry a few
-        //times (IPFS may still be starting) and, if it still won't come, carry on
-        //WITHOUT the bootstrap - the chain simply syncs from scratch instead.
-        bool bootstrapped = false;
-        for (unsigned int attempt = 1; attempt <= 5 && !bootstrapped; attempt++) {
-            try {
-                ipfs.downloadFile(bootstrap.cid, dbFilename, true);
-                bootstrapped = true;
-            } catch (const std::exception& e) {
-                std::remove(dbFilename.c_str()); //discard any partial download before retrying
-                log->addMessage(
-                        "Bootstrap download failed (is IPFS running/reachable?): " + string(e.what()) +
-                        " - attempt " + to_string(attempt) + " of 5, waiting 30s...");
-                if (attempt < 5) this_thread::sleep_for(chrono::seconds(30));
-            }
-        }
-        if (bootstrapped) {
-            pauseHeight = bootstrap.height + 2;
-        } else {
-            std::remove(dbFilename.c_str()); //ensure no partial file is left for the DB to open
-            log->addMessage("Bootstrap unavailable - continuing without it; the chain will sync from scratch (slower, but the node won't crash).");
-        }
-    }
-
-    //make sure if we predownloaded data from ipfs that the wallet is synced past
-    //the point the image was synced to.  A FRESH wallet can take a WEEK to get
-    //there, so this loop must (a) tolerate transient RPC errors instead of
-    //crashing, and (b) stay responsive to a shutdown request.
-    if (pauseHeight > 0) {
-        while (g_shutdown == 0) {
-            unsigned int height = 0;
-            try {
-                height = dgb.getBlockCount();
-            } catch (const std::exception& e) {
-                log->addMessage("DigiByte Core not ready while waiting to reach bootstrap height (" + string(e.what()) + ")");
-                height = 0;
-            }
-            if (height >= pauseHeight) break;
-            log->addMessage("DigiByte Core Syncing (" + to_string(height) + "/" + to_string(pauseHeight) + ") - checking again in 2 minutes");
-            for (int i = 0; i < 120 && g_shutdown == 0; i++) this_thread::sleep_for(chrono::seconds(1)); //sleep ~2 min, but wake on shutdown
-        }
-        if (g_shutdown != 0) return 0;
+    if (walletVersion < DigiByteCore::WalletVersion::v9) {
+        log->addMessage("DigiByte Core wallet " + DigiByteCore::walletVersionName(walletVersion) +
+                                " is no longer supported.  DigiAsset Core requires a v9 wallet or "
+                                "newer - upgrade DigiByte Core and restart.",
+                        Log::CRITICAL);
+        return -1;
     }
 
     /**
@@ -395,8 +348,8 @@ int main(int argc, char* argv[]) {
                     "██ ██  ██ ██ ██      ██    ██ ██  ██  ██ ██      ██   ██    ██    ██ ██   ██ ██      ██      \n"
                     "██ ██   ████  ██████  ██████  ██      ██ ██      ██   ██    ██    ██ ██████  ███████ ███████ \n"
                     "                                                                                             \n"
-                    " DigiByte Core Wallet " << (walletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << " detected. \n"
-                    " Database compatible with " << (compatibleWalletVersion==DigiByteCore::WalletVersion::v7?"7.17.3 or older":"8.22.0 or newer") << "\n"
+                    " DigiByte Core Wallet " << DigiByteCore::walletVersionName(walletVersion) << " detected. \n"
+                    " Database compatible with " << DigiByteCore::walletVersionName(compatibleWalletVersion) << "\n"
                     " Change core version or delete chain.db and restart\n";
             return -1;
         }
@@ -434,10 +387,13 @@ int main(int argc, char* argv[]) {
     log->addMessage("Starting IPFS handler");
     IPFS ipfs("config.cfg");
     main->setIPFS(&ipfs);
-    for (const auto& bootstrap: officialBootstrap) {
-        ipfs.pin(bootstrap.cid);
+    for (const auto& cid: officialPinnedCIDs) {
+        ipfs.pin(cid);
     }
     for (const auto& cid: oldBootstrapCIDs) {
+        ipfs.unpin(cid);
+    }
+    for (const auto& cid: retiredPinnedCIDs) {
         ipfs.unpin(cid);
     }
 
@@ -484,11 +440,7 @@ int main(int argc, char* argv[]) {
      * (stop() joins its accept thread before we tear the process down).
      */
     std::shared_ptr<RPC::Server> rpcServer;
-    if (bootGenMode) {
-        //bootgen builds an image to hand to other people - keep every external
-        //writer off chain.db while we do it (upstream 1ddf933 does the same).
-        log->addMessage("Skipping RPC server (bootgen mode)");
-    } else {
+    {
         try {
             log->addMessage("Starting RPC Server");
             rpcServer = std::make_shared<RPC::Server>();
@@ -509,9 +461,7 @@ int main(int argc, char* argv[]) {
      * a shared_ptr, so it is gated at its own site instead.)
      */
     WebServer webServer("config.cfg");
-    if (bootGenMode) {
-        log->addMessage("Skipping event stream and web server (bootgen mode)");
-    } else {
+    {
         EventBroadcaster::GetInstance()->start(config.getInteger("eventport", 14025),
                                                config.getString("eventbind", "127.0.0.1"));
 
@@ -532,27 +482,15 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         log->addMessage(std::string("Chain Analyzer start failed: ") + e.what(), Log::CRITICAL);
     }
-    // Upstream's wait loop is NOT taken here: we already have our own below that
-    // also honours the dashboard's [Q] quit and our g_shutdown signal handler
+    // Upstream's wait loop is NOT taken here: we already have our own that also
+    // honours the dashboard's [Q] quit and our g_shutdown signal handler
     // (registered earlier, per INTEGRATION-mctrivia.md §5). The bootgen
-    // stop-when-synced condition is grafted into that loop instead.
-    bool bootGenComplete = false;
+    // stop-when-synced condition that used to live in this loop went with the
+    // IPFS bootstrap image (upstream f37d61d).
 
     // Wait for shutdown signal (Ctrl+C or Q key)
     while (!g_shutdown && !dashboard.quitRequested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        //bootgen stops on its own the moment the analyzer reaches the chain tip.
-        //Blocks keep arriving so there is no point chasing the tip - the image
-        //being a block or two behind costs a new node nothing. (upstream 1ddf933)
-        if (bootGenMode && (analyzer.getSync() == ChainAnalyzer::SYNCED)) {
-            bootGenComplete = true;
-            break;
-        }
-    }
-    unsigned int bootGenHeight = bootGenComplete ? analyzer.getSyncHeight() : 0;
-    if (bootGenMode) {
-        log->addMessage(bootGenComplete ? "Sync complete.  Stopping to generate bootstrap image"
-                                        : "Shutdown signal received.  Stopping");
     }
 
     // Graceful shutdown. Order matters: stop EVERYTHING that could still touch the
@@ -578,12 +516,7 @@ int main(int argc, char* argv[]) {
     // worker touching statics that are being destroyed at exit (use-after-free).
     if (auto* pspList = main->getPermanentStoragePoolListIfSet()) { try { pspList->stopAll(); } catch (...) {} }
     try { ipfs.stop(); } catch (...) {}                                                 // joins the IPFS worker thread
-    if (bootGenComplete) {
-        //make the db file self contained and as small as possible so it can be shared as is
-        db->compactForDistribution();
-    } else {
-        db->walCheckpoint();                                                            // flush WAL into chain.db (now no other thread writes)
-    }
+    db->walCheckpoint();                                                                // flush WAL into chain.db (now no other thread writes)
     log->addMessage("Shutdown complete");
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
@@ -591,20 +524,6 @@ int main(int argc, char* argv[]) {
     dashboard.stop();
     std::cout << "\033[?25h" << std::flush;
 
-    if (bootGenComplete) {
-        //MUST delete before std::exit: exit() does not unwind, so ~Database()
-        //would never run and it is the destructor that closes sqlite and removes
-        //the leftover -shm (_deleteSidecarsOnClose). Skipping it would leave the
-        //sidecar beside chain.db and defeat the whole point of bootgen. Only done
-        //on this path - the normal shutdown deliberately exits without unwinding.
-        delete db;
-        db = nullptr;
-        main->setDatabase(nullptr);
-        std::cout << "\nBootstrap image ready: " << dbFilename << " (synced to block " << bootGenHeight << ")\n"
-                  << "There should be no " << dbFilename << "-wal or " << dbFilename << "-shm file beside it.\n"
-                  << "Add it to IPFS, then update officialBootstrap in src/main.cpp with the new CID and\n"
-                  << "height " << bootGenHeight << ", and move the CID it replaces into oldBootstrapCIDs.\n";
-    }
     std::exit(0);
 
 

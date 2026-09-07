@@ -10,6 +10,7 @@
 //
 
 #include "DigiByteTransaction.h"
+#include "Log.h"
 #include "AppMain.h"
 #include "BitIO.h"
 #include "DigiAsset.h"
@@ -353,7 +354,18 @@ bool DigiByteTransaction::decodeAssetTX(const getrawtransaction_t& txData, int d
         try {
             decodeAssetTransfer(dataStream, _inputs, burn ? DIGIASSET_BURN : DIGIASSET_TRANSFER);
         } catch (const DigiAsset::exceptionRuleFailed& e) {
-            //clear asset outputs
+            //Every asset output is cleared, the change output included.  That is deliberate: if
+            //change survived a violation a sender could declare everything as change and sidestep
+            //the royalty entirely.  There is also no alternative - the transaction is already on
+            //chain and its inputs are spent, so assets that may not move to the outputs have
+            //nowhere left to exist.  See docs/asset-rules-and-burns.md.
+            //
+            //It used to happen with nothing written anywhere, which is why it went unnoticed.
+            Log* log = Log::GetInstance();
+            log->addMessage("Transaction " + _txid + " in block " + std::to_string(_height) +
+                                    " broke an asset rule(" + e.what() +
+                                    ").  Every asset output it carries is being destroyed, including any change.",
+                            Log::WARNING);
             _unintentionalBurn = true;
             for (AssetUTXO& output: _outputs) {
                 output.assets.clear();

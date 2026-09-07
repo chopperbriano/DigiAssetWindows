@@ -26,11 +26,18 @@
 class Threaded {
     std::thread _thread;
     // atomic (not volatile - volatile is not a threading primitive) so the flags
-    // are safely visible across the worker thread and the owner thread.
+    // are safely visible across the worker thread and the owner thread. Upstream
+    // still uses volatile here; that is not kept.
     std::atomic<bool> _running{false};
     std::atomic<bool> _stopRequest{false};
     void _threadFunction();                 // thread entry point: runs the startup/main-loop/shutdown lifecycle
     bool _runStartupWithRetry();            // startupFunction() with backoff; false if stop() came first
+    // Consumes a finished sub-task future via get() (upstream 8ce5589). The lambda in
+    // _threadFunction() already catches and names anything mainFunction() throws, so this
+    // rarely has an exception to report - but get() also RETIRES the future properly, which
+    // the previous wait()/erase did not, and it still catches anything that ever escapes
+    // that inner handler.
+    static void _reportResult(std::future<void>& result);
     size_t _parallels = 1;//if task is asynchronous allows running sub threads within thread.
 
 protected:
@@ -48,7 +55,7 @@ protected:
     void setMaxParallels(size_t max = 1);   // set how many mainFunction() sub-tasks may run concurrently per loop
 
 public:
-    bool stopRequested();                   // true once stop() has requested shutdown; poll from mainFunction() to exit early
+    bool stopRequested() const;             // true once stop() has requested shutdown; poll from mainFunction() to exit early
     bool isRunning() const;                 // true while the worker thread is alive; lets a watchdog spot a dead worker
     void start();                           // spawn the worker thread (no-op if already running)
     virtual void stop();                    // request shutdown and block until the worker thread has fully exited

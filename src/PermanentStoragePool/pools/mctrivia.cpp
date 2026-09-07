@@ -38,6 +38,17 @@ namespace {
     // default in src/main.cpp.
     const std::string DEFAULT_POOL_BASE = "https://pool.digistamp.co";
 
+    ///The bad list refresh happens on the chain analyzer's thread(isAssetBad is called while
+    ///processing an issuance), so an unresponsive pool server used to stop the whole node on
+    ///whichever block the next issuance was in.  Bounded here: a stale bad list is harmless
+    const unsigned int PSP_SERVER_TIMEOUT_MS = 30000;
+
+    ///max wait for the metadata of the issuance being costed.  Same reasoning: getCost runs on an
+    ///rpc thread and used to wait for a cid the node may never be able to fetch.  Generous rather
+    ///than snappy - the file is normally one this node just published, but if it has to come from
+    ///the network it is up to 2MB over whatever link the operator has
+    const unsigned int PSP_METADATA_WAIT_MS = 300000;
+
     // Serializes read-modify-write updates to config.cfg. Config::write() rewrites
     // the whole file, so two pool instances (or the startup path + a fetcher
     // thread) persisting concurrently could clobber each other's change. Shared by
@@ -117,8 +128,9 @@ uint64_t mctrivia::getCost(const DigiByteTransaction& tx) {
         return 0; // Can't determine size — assume free or skip
     }
 
-    //download the metadata and decode it
-    string metadataStr = ipfs->callOnDownloadSync(cid);
+    //download the metadata and decode it.  Bounded: an issuance whose metadata the node can not
+    //produce should fail the rpc call with an error, not leave the caller waiting forever
+    string metadataStr = ipfs->callOnDownloadSync(cid, "", PSP_METADATA_WAIT_MS);
     Json::CharReaderBuilder rbuilder;
     Json::Value metadata;
     istringstream s(metadataStr);
@@ -623,7 +635,8 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
         response = CurlHandler::post(url, {{"address", address},
                                 {"peerId", peerId},
                                 {"visible", (_visible ? "v" : "h")},
-                                {"secret", _secretCode}});
+                                {"secret", _secretCode}},
+                                PSP_SERVER_TIMEOUT_MS);   //upstream 20f498d: never wait forever on a pool server
     } catch (const std::exception& e) {
         if (command == KEEP_ALIVE) {
             log->addMessage("PSP keepalive FAILED: " + std::string(e.what()), Log::WARNING);
@@ -698,10 +711,18 @@ void mctrivia::_reportAssetBad(const std::string& assetId) {
  */
 void mctrivia::updateBadList() {
     std::lock_guard<std::mutex> lock(_badListMutex);
+
+    //stamp the attempt, not the success.  This runs on the chain analyzer's thread, and
+    //leaving it unstamped on failure meant an unreachable pool server was retried on every
+    //single issuance - each one paying the full timeout before the block could finish
+    _badTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
     try {
         //make curl request
         const string url = _baseUrl + "/bad.json";
-        string readBuffer = CurlHandler::get(url);
+        //Bounded (upstream 20f498d): this runs on the chain analyzer's thread via isAssetBad,
+        //so an unresponsive pool server used to stall the whole node on the next issuance.
+        string readBuffer = CurlHandler::get(url, PSP_SERVER_TIMEOUT_MS);
 
         //convert to json object
         Json::Value root;
@@ -728,11 +749,11 @@ void mctrivia::updateBadList() {
             }
         }
 
-        //update bad list time
-        _badTime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     } catch (const exception& e) {
         Log* log = Log::GetInstance();
-        log->addMessage("Failed to load bad list for mctrivia bad list", Log::DEBUG);
+        log->addMessage("Could not refresh the bad asset list from ipfs.digiassetx.com.  "
+                        "Retrying in 20 minutes",
+                        Log::DEBUG);
     }
 }
 /**
