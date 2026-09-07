@@ -62,7 +62,7 @@ jobs:
 
       - name: Build libjson-rpc-cpp (vendored submodule)
         run: |
-          cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install"
+          cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install" -DHTTP_CLIENT=NO -DHTTP_SERVER=NO -DCOMPILE_TESTS=NO -DCOMPILE_EXAMPLES=NO
           cmake --build libjson-rpc-cpp/build --config Release --target install
 
       - name: Configure (node + CLI + pool + tests)

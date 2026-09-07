@@ -20,7 +20,38 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.137 (current) — second upstream sync; IPFS bootstrap dropped; asset rules enforced
+## 0.3.3-win.138 (current) — the documented build works from a clean checkout again
+
+win.137 removed a CI step on the reasoning that the local build did not need it. That
+reasoning was wrong, and CI caught it: `libjson-rpc-cpp` genuinely does require CURL as
+shipped. The local build only appeared not to need it because this machine still had
+`libjson-rpc-cpp/install/*.lib` sitting there from **March** — five-month-old artifacts.
+A fresh clone could not have built this project.
+
+Two separate blockers, both now fixed in `patches/libjson-rpc-cpp-cmp0042.patch`, which is
+applied by `config-libjson-rpc.bat` and by CI:
+
+- `cmake_minimum_required(VERSION 3.0)` — CMake 4.x dropped compatibility below 3.5 and
+  refuses to parse the file at all. This is why the failure looked different locally
+  (CMake 4.2) than on the runner (CMake 3.31), which still accepts 3.0 with a warning.
+- `cmake_policy(SET CMP0042 OLD)` — rejected outright by CMake 4.x. Already patched in
+  win.133; the patch now covers both lines.
+
+The CURL requirement itself is removed rather than satisfied: the submodule is configured
+with `-DHTTP_CLIENT=NO -DHTTP_SERVER=NO`. Those are the only parts of it that link libcurl,
+and this fork does not use them — it compiles its own connector,
+`src/jsonrpccpp/client/connectors/httpclient.cpp`, backed by WinHTTP. Installing curl to
+build a component we then replace was never the right answer, which is also why the old
+`vcpkg install curl openssl` step was slow and fragile.
+
+Verified end to end rather than assumed: `libjson-rpc-cpp/build` and `install` were deleted,
+the dependency reconfigured and rebuilt from nothing with no curl anywhere, and the whole
+project rebuilt with `--clean-first` against it. All 10 targets build, **103/103 unit tests
+pass**, and CFG plus zero absolute paths still hold on all three binaries.
+
+---
+
+## 0.3.3-win.137 — second upstream sync; IPFS bootstrap dropped; asset rules enforced
 
 Two upstream syncs' worth of work, plus the fallout from testing it. Entries for
 win.130–136 follow below; this one covers the September sync.

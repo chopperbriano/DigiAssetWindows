@@ -25,5 +25,11 @@ if not errorlevel 1 (
     echo CMP0042 patch already applied - skipping.
 )
 
-cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_PREFIX_PATH=..\jsoncpp\install
+REM HTTP_CLIENT/HTTP_SERVER=NO: those are the only parts of libjson-rpc-cpp that need
+REM libcurl, and this fork does not use them - it compiles its own copy of the connector
+REM (src/jsonrpccpp/client/connectors/httpclient.cpp) backed by WinHTTP instead. Without
+REM this the configure fails with "Could NOT find CURL" on any machine that does not
+REM happen to have a discoverable libcurl, which is every clean checkout.
+cmake -B build -DCMAKE_INSTALL_PREFIX=install -DCMAKE_PREFIX_PATH=..\jsoncpp\install ^
+      -DHTTP_CLIENT=NO -DHTTP_SERVER=NO -DCOMPILE_TESTS=NO -DCOMPILE_EXAMPLES=NO
 cd "%ORIG%"

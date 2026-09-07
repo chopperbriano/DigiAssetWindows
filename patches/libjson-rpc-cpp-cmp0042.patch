@@ -1,7 +1,13 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 271c5d8..edafd17 100644
+index 271c5d8..5479594 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 3.0)
++cmake_minimum_required(VERSION 3.5)
+ 
+ # setup directory where we should look for cmake files
+ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 @@ -17,8 +17,8 @@ cmake_policy(SET CMP0007 NEW)
  cmake_policy(SET CMP0012 NEW)
  
