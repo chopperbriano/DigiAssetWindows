@@ -31,10 +31,12 @@ jobs:
       - name: Restore Boost 1.82.0 headers (NuGet) -> packages/boost.1.82.0
         run: nuget install boost -Version 1.82.0 -OutputDirectory packages -NonInteractive
 
-      # The final DigiAsset link uses vendored stubs (WinHTTP curl, sqlite3.c,
-      # openssl stubs), but the libjson-rpc-cpp dependency build wants curl+openssl.
-      - name: Install curl + openssl (vcpkg, for the libjson-rpc-cpp build)
-        run: vcpkg install curl:x64-windows openssl:x64-windows
+      # NOTE: there is deliberately no `vcpkg install curl openssl` step. It was here on
+      # the assumption that libjson-rpc-cpp needs them, it failed on every single run this
+      # workflow has ever had, and it is not actually required: config-libjson-rpc.bat -
+      # the documented local build, which does work - configures that submodule with no
+      # vcpkg toolchain and no curl or openssl at all. The final link uses this fork's
+      # vendored stubs (WinHTTP curl, sqlite3.c, openssl stubs) regardless.
 
       - name: Build jsoncpp (vendored submodule)
         run: |
@@ -60,7 +62,7 @@ jobs:
 
       - name: Build libjson-rpc-cpp (vendored submodule)
         run: |
-          cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install" "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake -S libjson-rpc-cpp -B libjson-rpc-cpp/build "-DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/libjson-rpc-cpp/install" "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/jsoncpp/install"
           cmake --build libjson-rpc-cpp/build --config Release --target install
 
       - name: Configure (node + CLI + pool + tests)
