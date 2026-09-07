@@ -20,6 +20,7 @@
 #include "DigiByteCore_Types.h"
 #include "Threaded.h"
 #include <atomic>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -90,7 +91,20 @@ private:
     unsigned int _timeoutPin = 1200;
     unsigned int _timeoutDownload = 3600;
     unsigned int _timeoutRetry = 3600;
+    ///applies to the requests that only ask the local node a question - pin/ls, id, and reading
+    ///content the node has already pinned.  Anything that may have to fetch from the network
+    ///asks for _timeoutDownload or _timeoutPin instead.  Without a limit here a wedged daemon
+    ///held on to whichever thread called it, and some of those calls are made while an rpc
+    ///request is being answered
+    unsigned int _timeoutCommand = 30;
     unsigned int _maxParallel = 10;
+
+    ///a node with a dead or wedged ipfs daemon hits these paths once per asset, so the
+    ///warnings are throttled - the point is to make the reason visible, not to bury the log
+    static const unsigned int WARNING_REPEAT_SECONDS = 60;
+    mutable std::atomic<long long> _lastTimeoutWarning{0};
+    mutable std::atomic<long long> _lastOfflineWarning{0};
+    static bool _shouldWarn(std::atomic<long long>& lastWarning);
 
     // Worker-thread body: pops one queued IPFS job (download/pin/unpin) from the
     // Database, executes it against the local node, then removes the job and

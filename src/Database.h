@@ -212,7 +212,12 @@ private:
     // upstream here - we already declare it further down and use it throughout
     // Database.cpp, so a second copy would be a duplicate member.
     std::string _fileName;
-    bool _deleteSidecarsOnClose = false; //set by compactForDistribution() so close leaves a single file behind
+    // _deleteSidecarsOnClose dropped with the IPFS bootstrap (upstream f37d61d) - it only
+    // existed so compactForDistribution() could leave a single shareable file behind.
+    // This fork's fast-sync ships chain.db WITH its -wal/-shm after a clean shutdown
+    // (snapshots/make-snapshot.ps1), so it never depended on that.
+    // _transactionDepth is NOT taken from upstream here: it is already declared further
+    // down and used throughout Database.cpp, and a second copy would not compile.
     Statement _stmtCheckFlag;
     Statement _stmtSetFlag;
     Statement _stmtGetBlockHeight;
@@ -517,7 +522,6 @@ public:
     void endTransaction();
     void abortTransaction();  // rollback + reset depth; call on the recovery path after a mid-transaction throw
     void walCheckpoint();       //flushes WAL back to main db and truncates the WAL file
-    void compactForDistribution(); //folds the WAL in, leaves WAL mode and vacuums so the db is a single shareable file
     void
     disableWriteVerification(); //on power failure not all commands may be written.  If using need to check at startup
     // Restores durable, shareable write settings (synchronous=FULL, on-disk

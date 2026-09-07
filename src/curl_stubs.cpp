@@ -139,6 +139,10 @@ struct CurlHandle {
     curl_write_callback    writeFunc     = nullptr;
     void*                  writeData     = nullptr;
     long                   timeoutMs     = 30000;
+    // Connect-phase timeout in ms (CURLOPT_CONNECTTIMEOUT, given in seconds). Applied to
+    // WinHttpSetTimeouts resolve+connect so an unreachable host fails fast instead of
+    // holding the calling thread for the whole request timeout.
+    long                   connectTimeoutMs = 10000;
     bool                   isPost        = false;
     long                   responseCode  = 0;
 
@@ -210,8 +214,12 @@ static CURLcode ensureSession(CurlHandle* h, DWORD timeout) {
         WinHttpSetOption(h->hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
                          &secureProtocols, sizeof(secureProtocols));
     }
-    // Always refresh timeouts in case they changed via CURLOPT_TIMEOUT
-    WinHttpSetTimeouts(h->hSession, 5000, 5000, timeout, timeout);
+    // Always refresh timeouts in case they changed via CURLOPT_TIMEOUT.
+    // Args are (resolve, connect, send, receive). The first two now come from
+    // CURLOPT_CONNECTTIMEOUT so an unreachable host fails in ~10s instead of holding the
+    // calling thread for the whole request timeout - which for a pin is 20 minutes.
+    DWORD connectTimeout = (h->connectTimeoutMs > 0) ? (DWORD) h->connectTimeoutMs : 10000;
+    WinHttpSetTimeouts(h->hSession, connectTimeout, connectTimeout, timeout, timeout);
     return CURLE_OK;
 }
 
@@ -250,6 +258,7 @@ void curl_easy_reset(CURL* handle) {
     h->writeFunc     = nullptr;
     h->writeData     = nullptr;
     h->timeoutMs     = 30000;
+    h->connectTimeoutMs = 10000;
     h->isPost        = false;
     h->responseCode  = 0;
     // Clear multipart state too — otherwise a handle reused after a postFile()
@@ -298,6 +307,9 @@ CURLcode curl_easy_setopt(CURL* handle, CURLoption option, ...) {
             break;
         case CURLOPT_TIMEOUT_MS:
             h->timeoutMs = va_arg(args, long);
+            break;
+        case CURLOPT_CONNECTTIMEOUT:
+            h->connectTimeoutMs = va_arg(args, long) * 1000L;   //libcurl takes seconds
             break;
         case CURLOPT_TIMEOUT:
             h->timeoutMs = va_arg(args, long) * 1000L;

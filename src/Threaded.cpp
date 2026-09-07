@@ -66,6 +66,7 @@ void Threaded::_threadFunction() {
             auto it = subThreads.begin();
             while (it != subThreads.end()) {
                 if (it->wait_for(chrono::seconds(0)) == future_status::ready) {
+                    _reportResult(*it);
                     it = subThreads.erase(it);
                 }
                 else {
@@ -78,11 +79,17 @@ void Threaded::_threadFunction() {
 
     //wait for all sub threads to be done
     for (auto& future: subThreads) {
-        future.wait();
+        _reportResult(future);
     }
 
     //shutdown
-    shutdownFunction();
+    try {
+        shutdownFunction();
+    } catch (const std::exception& e) {
+        Log::GetInstance()->addMessage(string("Background task did not shut down cleanly: ") + e.what(), Log::ERROR);
+    } catch (...) {
+        Log::GetInstance()->addMessage("Background task did not shut down cleanly(non standard error)", Log::ERROR);
+    }
     _stopRequest = false;
     _running = false;
 }
@@ -176,6 +183,10 @@ void Threaded::shutdownFunction() {
 void Threaded::start() {
     //don't allow loop to run twice
     if (_running) return;
+
+    //a thread that ended on its own(a startup that failed) is still joinable, and assigning
+    //over a joinable std::thread ends the process
+    if (_thread.joinable()) _thread.join();
     _running = true;
 
     //load loop in thread
@@ -192,9 +203,12 @@ void Threaded::stop() {
             chrono::milliseconds dura(100);
             this_thread::sleep_for(dura);
         }
-        _thread.join();
-        _stopRequest = false;
     }
+
+    //join outside the _running check: a thread whose startupFunction failed has already cleared
+    //_running but is still joinable, and destroying it unjoined ends the process
+    if (_thread.joinable()) _thread.join();
+    _stopRequest = false;
 }
 
 /**
@@ -217,7 +231,7 @@ void Threaded::setMaxParallels(size_t max) {
  * Allows main function to check if it should allow shutdown
  * @return
  */
-bool Threaded::stopRequested() {
+bool Threaded::stopRequested() const {
     return _stopRequest;
 }
 
@@ -227,6 +241,23 @@ bool Threaded::stopRequested() {
  * "this service died and nothing noticed" without inspecting subclass state.
  * @return whether the worker thread is currently running
  */
+/**
+ * Collects a finished sub thread and says something if it ended badly.
+ * std::async stores the exception in the future and destroying the future throws it away, so
+ * without this an error escaping a mainFunction() would vanish with no trace at all - a node
+ * whose IPFS or analyzer work was failing would look exactly like one that was simply idle.
+ * (from mctrivia 8ce5589)
+ */
+void Threaded::_reportResult(std::future<void>& result) {
+    try {
+        result.get();
+    } catch (const std::exception& e) {
+        Log::GetInstance()->addMessage(std::string("Uncaught error in background task: ") + e.what(), Log::ERROR);
+    } catch (...) {
+        Log::GetInstance()->addMessage("Uncaught non standard error in background task", Log::ERROR);
+    }
+}
+
 bool Threaded::isRunning() const {
     return _running;
 }
