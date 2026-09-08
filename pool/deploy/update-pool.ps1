@@ -78,6 +78,41 @@ Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1'
 Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
 Get-Raw 'pool/deploy/backup-digistamp.ps1'  (Join-Path $deploy 'backup-digistamp.ps1')
 
+# Caddyfile DRIFT CHECK.
+#
+# The line above refreshes the TEMPLATE in the deploy folder, but Caddy does not read that -
+# setup-caddy.ps1 resolves the template (substituting domain, ports, site root) into
+# $CaddyDir\Caddyfile, and that resolved copy is what runs. Nothing here regenerates it, so a
+# template that gains a new proxied route never reaches the live proxy.
+#
+# That is not hypothetical: /peer/* was added to the template's @api matcher for pool-to-pool
+# federation, the live Caddyfile predated it, and every /peer/ request 404'd while
+# /pool/stats.json, /nodes.json, /map.json and /bad.json all answered fine. Pools could not
+# have discovered each other no matter what the pool binary did.
+#
+# Detect it rather than silently regenerate: rewriting the resolved file means restarting the
+# proxy, which is not something a binary update should do behind the operator's back.
+$liveCaddyfile = Join-Path $CaddyDir 'Caddyfile'
+$tmplCaddyfile = Join-Path $deploy 'Caddyfile'
+if ((Test-Path $liveCaddyfile) -and (Test-Path $tmplCaddyfile)) {
+    try {
+        $tmplRoutes = @()
+        foreach ($m in [regex]::Matches((Get-Content $tmplCaddyfile -Raw), '/[A-Za-z0-9._*/-]+')) { $tmplRoutes += $m.Value }
+        $tmplRoutes = $tmplRoutes | Where-Object { $_ -match '^/' } | Sort-Object -Unique
+        $liveRaw = Get-Content $liveCaddyfile -Raw
+        $missing = @($tmplRoutes | Where-Object { $liveRaw -notmatch [regex]::Escape($_) })
+        if ($missing.Count -gt 0) {
+            Say "  WARNING: the live Caddyfile is missing route(s) the template now proxies:" 'Red'
+            $missing | ForEach-Object { Say "    $_" 'Red' }
+            Say "  Requests to those paths will 404 even though the pool serves them." 'Yellow'
+            Say "  Fix (regenerates + validates + reloads):" 'Yellow'
+            Say "    powershell -ExecutionPolicy Bypass -File `"$deploy\setup-caddy.ps1`"" 'Gray'
+        } else {
+            Say "  live Caddyfile proxies every route the template expects." 'Green'
+        }
+    } catch { Say "  (could not compare Caddyfile routes: $($_.Exception.Message))" 'Yellow' }
+}
+
 # Refresh the LIVE website page (Caddy serves it straight from disk, so the new
 # page is live on the next request - no restart needed).
 $liveSite = Join-Path $CaddyDir 'site'

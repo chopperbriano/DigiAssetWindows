@@ -20,7 +20,81 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.139 (current) — a normal reorg no longer reports itself as a sync error
+## Unreleased — pool federation: tooling, and the reverse-proxy bug blocking it
+
+No binary change. Investigating whether two pools can find each other on-chain turned up a
+deployment bug that made it impossible, plus a script to prove the path end to end.
+
+### /peer/* was 404 on the live pool — federation could never have worked
+
+Pool-to-pool discovery is fully implemented: a pool announces itself in a `DGSP1<url>`
+OP_RETURN (weekly-gated), scans the chain for other pools, keeps discovered ones in an
+untrusted display-only `directory[]`, and merges explicitly-configured `poolpeers` into
+`peers[]`. `/pool/stats.json` publishes both.
+
+None of it could run. Every `/peer/*` request to the live pool returned **404**, while
+`/pool/stats.json`, `/nodes.json`, `/map.json` and `/bad.json` all answered 200. The routes
+are registered unconditionally in `PoolServer.cpp`, and the repo's Caddyfile template lists
+`/peer/*` in its `@api` matcher — but the **resolved** Caddyfile that Caddy actually runs
+predated that line.
+
+`update-pool.ps1` downloads the Caddyfile *template* into the deploy folder. Caddy does not
+read that file. `setup-caddy.ps1` resolves it — substituting domain, ports, site root — into
+`C:\DigiStampPool\Caddyfile`, and nothing re-runs that step. So a template that gains a route
+never reaches the running proxy, silently, forever.
+
+`update-pool.ps1` now compares the routes in the template against the live resolved file and
+reports any that are missing, with the command to fix it. It deliberately does **not**
+regenerate automatically: that restarts the proxy, which a binary update should not do behind
+the operator's back.
+
+**Existing pool boxes need `setup-caddy.ps1` re-run once** before federation will work.
+
+### pool/deploy/verify-federation.ps1
+
+`verify-peers.ps1` already checks that two pools which know about each other can talk. This
+checks the layer beneath: that they can find each other with **no shared config**, which is
+what "nobody depends on one operator" actually rests on.
+
+Six phases — preflight (both pools up, `poolpublicurl` set and not loopback, `DGSP1`+url fits
+an OP_RETURN's 78 bytes, wallet funded), optional forced announcement, on-chain verification,
+confirmation wait, discovery polling, and a trust-boundary report.
+
+Phase 3 is the point of it. A pool reporting "announced" proves nothing; the script pulls the
+transaction back out of DigiByte Core, finds the OP_RETURN, decodes `DGSP1` and asserts the URL
+matches the pool's own `poolpublicurl` — catching an announcement that encoded wrongly or
+points somewhere unreachable.
+
+Read-only unless `-Announce` is passed, which spends one small fee. Works with a single pool
+(phases 1-4) so the announcement side can be proven before a second box exists.
+
+The decoder has unit tests covering a real announcement, a script with no marker, an empty
+script, `DGSP1` with nothing after it, a payload interrupted by non-printable bytes, an
+odd-length trailing nibble, and uppercase hex.
+
+Reading `digibyte.conf` now degrades instead of throwing: the installer ACLs it to
+SYSTEM + Administrators, so a non-elevated run got an unhandled `UnauthorizedAccessException`.
+It now says to re-run as Administrator and skips only the on-chain phases.
+
+### Known gap: nodes are not part of federation
+
+Worth recording, because it is the difference between what exists and the goal. Pools discover
+each other; **nodes do not**. A node's pool is one config line (`psp<N>server`), there is no
+peer or directory awareness on the node side and no failover, so if a pool disappears its nodes
+are stranded until a human edits `config.cfg`.
+
+Closing that means a node reading `network.peers[]`/`directory[]` from the stats it already
+fetches, caching them locally so they survive the pool being down, and failing over on the
+keepalive path. The pool side needs no changes — it already publishes everything required.
+
+The trust rule matters more than the code: `autoremovebad` defaults to **true**, so a pool's
+`bad.json` can make nodes **unpin** content. A pool a node failed over to must be pin-only
+until an operator promotes it, or chain discovery becomes a way to delete assets across the
+network for the price of one transaction.
+
+---
+
+## 0.3.3-win.139 — a normal reorg no longer reports itself as a sync error
 
 Found by reading the sync path rather than by a failing test, while auditing before deployment.
 
