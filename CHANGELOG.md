@@ -20,7 +20,66 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## 0.3.3-win.138 (current) — the documented build works from a clean checkout again
+## 0.3.3-win.139 (current) — a normal reorg no longer reports itself as a sync error
+
+Found by reading the sync path rather than by a failing test, while auditing before deployment.
+
+`mainFunction`'s recovery preamble was gated on `_hasRunOnce` — "has mainFunction been called
+before" — which is true forever after the first pass. But `phaseSync()` also **returns cleanly**
+when it detects a fork (`_state = REWINDING`), which is a legitimate reorg and not an error. So
+every normal reorg re-entered the recovery path and logged:
+
+```
+Auto-recovered from a sync error at block <stale> (attempt 1). Cause: unknown error
+```
+
+It also rolled back a block that had never been partially written, and incremented the error
+count toward the give-up threshold — all on a completely healthy node. The block number was
+whatever the last real error had been, and the cause was literally "unknown error", because
+`_lastError` had been cleared by the successful pass.
+
+The gate is now `_lastPassFailed`, set only in the two catch blocks and cleared on a pass that
+does not throw. The recovery preamble runs for an actual failure and nothing else.
+
+This is pre-existing — the same structure was there before this run of work — but it directly
+undermines the thing the last several releases were about. win.130 through win.132 were spent
+making the analyzer's log trustworthy after a node sat dead for 4.6 hours while reporting itself
+healthy; a log that cries "sync error" on every reorg is the same disease.
+
+### Scripts and docs brought in line with the win.137 bootstrap removal
+
+`bootstrapchainstate` no longer exists in the code, but four places still referenced it — and
+one of them was **writing it into every config.cfg the installer generated**:
+
+- `setup-digiasset.ps1` — emitted `bootstrapchainstate=1` and documented it in the generated
+  config header. Both removed; the key would have sat there inert and misleading on every new
+  install.
+- `node/test-asset-lifecycle.ps1`, `node/test-pr26-smoke.ps1` — set `bootstrapchainstate=0`.
+- `ARCHITECTURE.md` — listed it among the analyzer's config keys; now names `trackdigidollar`.
+- `readme.md` — a whole "Generating a Bootstrap Image" section describing `--bootgen`, the
+  vacuum-to-single-file behaviour, and how to publish a new CID. Replaced with a section on how
+  this fork actually fast-syncs (the R2 snapshot, and why `make-snapshot.ps1` ships `chain.db`
+  **with** its `-wal`/`-shm` after a clean stop), plus a short note recording what was removed
+  and why.
+
+### Known limitation worth checking on first deploy
+
+The DigiDollar marker fix adopted in win.137 records `ddSyncHeight` when the sync path passes
+**exactly through** the activation block (23,869,440). A node restored from the fast-sync
+snapshot starts *above* that height, so it never passes through it — for those nodes the marker
+has to already be present in the shipped `chain.db`, which it is only if the machine that built
+the snapshot had itself run the backfill.
+
+Nothing here can verify the published snapshot's contents. On the first restore, watch for
+`DigiDollar indexing has not been run. Rewinding from ... to 23869439`. If it appears, the
+snapshot needs rebuilding from a node whose marker is set; the node is not broken either way,
+it just replays ~212,000 blocks once.
+
+103/103 unit tests pass. CFG and zero absolute paths hold on all three binaries.
+
+---
+
+## 0.3.3-win.138 — the documented build works from a clean checkout again
 
 win.137 removed a CI step on the reasoning that the local build did not need it. That
 reasoning was wrong, and CI caught it: `libjson-rpc-cpp` genuinely does require CURL as

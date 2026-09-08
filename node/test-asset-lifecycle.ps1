@@ -73,7 +73,7 @@ Copy-Item $node (Join-Path $TestDir 'DigiAssetWindows.exe'); Copy-Item $cli (Joi
 $lines = @(
   "rpcuser=$CoreUser","rpcpassword=$CorePass","rpcbind=$CoreRpcHost","rpcport=$CoreRpcPort",
   "rpcassetport=$AssetPort","webport=$WebPort","eventport=$EventPort","rpcallow*=1",
-  "bootstrapchainstate=0","pruneage=-1","verifydatabasewrite=0",
+  "pruneage=-1","verifydatabasewrite=0",
   # match production (win.124+). Safe here: this builds a fresh chain.db from
   # height 0 and the run is seconds long, so it never reaches DigiDollar
   # activation (23,869,440) and no backfill is triggered.

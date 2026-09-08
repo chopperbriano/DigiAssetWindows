@@ -468,30 +468,26 @@ This fork adds only:
 - Embedded web server (no separate exe)
 - Sync performance optimizations (prefetch pipeline, UTXO caching)
 
-## Generating a Bootstrap Image
+## Fast-syncing a new node
 
-New installs can download a prebuilt database from IPFS instead of syncing the whole chain
-themselves (`bootstrapchainstate` in the config).  `--bootgen` builds that image:
+New installs do not sync the whole chain from genesis. `setup-digiasset.ps1` restores a
+pre-synced **snapshot** — the DigiByte blockchain and this node's `chain.db` — from the
+R2 feed named by `-SnapshotUrl`, which cuts a multi-day sync to a download.
 
-```
-./digiasset_core --bootgen
-```
+Snapshots are produced by `snapshots/make-snapshot.ps1`. It stops the node **cleanly**
+(and aborts rather than snapshot a node that will not stop, since a hard kill can leave
+`chain.db` torn), then archives `chain.db` together with its `-wal` and `-shm` sidecars.
+Shipping the sidecars is what makes the copy consistent; do not copy `chain.db` alone out
+from under a running daemon.
 
-It syncs normally and shuts itself down as soon as it reaches the chain tip.  New blocks
-keep arriving, so the image may end up a block or two behind by the time it is published —
-that is fine, a new node just syncs the remainder itself.  The RPC server and event stream
-stay off for the whole run so nothing outside the process can write to the database while
-the image is being made.
-
-On shutdown the database is folded out of WAL mode and vacuumed, so what is left on disk is
-a single self contained file with no `chain.db-wal` or `chain.db-shm` beside it — safe to
-add to IPFS as is.  Because a normal run keeps the database in WAL mode, copying `chain.db`
-out from under a running daemon does *not* give you a usable image; use this flag.
-
-Vacuuming temporarily needs about as much free disk space as the database itself.  The
-synced block height is printed at the end; put it, along with the CID you get from
-`ipfs add`, into `officialBootstrap` in `src/main.cpp`, and move the CID it replaces into
-`oldBootstrapCIDs` so existing nodes unpin it.
+> **Removed in win.137:** the IPFS bootstrap image and its `--bootgen` flag,
+> `bootstrapchainstate` config key, and `Database::compactForDistribution()`. Upstream
+> dropped them because `main.cpp` pinned the image on **every** node at **every** start,
+> whether or not that node ever restored from one — so every node permanently carried
+> several GB it never used. The retired CIDs are now unpinned on start, so existing nodes
+> release that space on their next run. This fork never needed the mechanism: the snapshot
+> above is its fast-sync path, and it ships the WAL sidecars rather than a vacuumed
+> single-file image.
 
 ## Other Notes
 

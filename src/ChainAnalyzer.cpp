@@ -449,7 +449,7 @@ void ChainAnalyzer::mainFunction() {
     try {
         // On the first call after startupFunction(), state is already correct.
         // On subsequent calls (after an exception), re-read from DB to recover.
-        if (_hasRunOnce) {
+        if (_lastPassFailed) {
             // _errorCount exists to catch ONE block that keeps failing. But it only
             // resets after phaseSync() RETURNS, and phaseSync() does not return until
             // it reaches the chain tip - so during a long catch-up (a DigiDollar
@@ -507,7 +507,7 @@ void ChainAnalyzer::mainFunction() {
             _nextHash = dgb->getBlockHash(_height);
             db->clearBlocksAboveHeight(_height);     // discard the partially-written failed block
         }
-        _hasRunOnce = true;
+        _lastPassFailed = false;   //a pass that reaches here did not throw
 
         phaseRewind();
         phaseSync();
@@ -519,6 +519,7 @@ void ChainAnalyzer::mainFunction() {
         // data loss). Safe even if none is open.
         try { AppMain::GetInstance()->getDatabase()->abortTransaction(); } catch (...) {}
         // Capture the real cause + block for the recovery line logged on re-entry.
+        _lastPassFailed = true;
         _lastError = e.what();
         if (_lastError.empty()) _lastError = std::string("unlabeled exception (") + typeid(e).name() + ")";
         _lastErrorHeight = _height + 1;   // the block we were processing when it threw
@@ -538,6 +539,7 @@ void ChainAnalyzer::mainFunction() {
     } catch (...) {
         try { AppMain::GetInstance()->getDatabase()->abortTransaction(); } catch (...) {}
         // Non-std::exception failure - still record something useful, never "unknown".
+        _lastPassFailed = true;
         _lastError = "non-standard (non-std::exception) failure";
         _lastErrorHeight = _height + 1;
         //same reasoning as above: recovery happens on re-entry, not via the throw

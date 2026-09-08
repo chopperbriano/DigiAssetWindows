@@ -146,7 +146,14 @@ private:
     // catch-up regardless of _verifyDatabaseWrite; if the operator wants durable
     // writes they're restored once at the tip. Tracks that one-time restore.
     bool _writeVerificationRestored = false;
-    bool _hasRunOnce = false;   //tracks if mainFunction has been called before (for error recovery)
+    // True only when the PREVIOUS pass ended in an exception, so the recovery preamble in
+    // mainFunction runs for an actual failure and nothing else. This used to be _hasRunOnce
+    // ("has mainFunction been called before"), which is true forever after the first pass -
+    // and phaseSync() also returns cleanly on a legitimate reorg (_state = REWINDING), so a
+    // normal fork made the node log "Auto-recovered from a sync error at block <stale>.
+    // Cause: unknown error", roll back a block that was never partially written, and bump the
+    // error count toward the give-up threshold. All on a perfectly healthy node.
+    bool _lastPassFailed = false;
     int _errorCount = 0;        //consecutive error count for backoff/stop
     unsigned int _errorStreakHeight = 0; //block of the previous failure; advancing past it clears the streak
     std::string _lastError;     //text of the last sync exception (for an informative recovery log)

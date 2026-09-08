@@ -232,7 +232,7 @@ Two top-level directories, kept deliberately separate:
 - `config.cfg` — the node's settings (see `example.cfg` for the fully documented
   reference). Simple `key=value` lines. Key groups: DigiByte Core RPC creds; this
   node's own RPC/API server (`rpcassetport=14024`, `rpcallow*` policy); chain
-  analyzer (`pruneage`, `storenonassetutxo`, `bootstrapchainstate`); the PSP
+  analyzer (`pruneage`, `storenonassetutxo`, `trackdigidollar`); the PSP
   settings; IPFS (`ipfspath`); web (`webport`).
 - `chain.db` — the SQLite chain index (Database). `local.db` — the local pool's
   opt-in/bad tables.
