@@ -40,11 +40,19 @@ param(
     # (a plain wallet) so we can't read it - look at DigiByte-Qt's status bar.
     [int]   $Height       = 0,
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
-    [string]$BaseUrl      = ''
+    [string]$BaseUrl      = '',
+    # How long to wait (seconds) for DigiByte / the DigiAsset node to come up and
+    # answer RPC after a (re)start - DigiByte-Qt loads its block index for minutes,
+    # and the node reconnects to it after that. These are UPPER bounds: every wait
+    # polls and moves on as soon as the thing is ready.
+    [int]   $StartWaitSec = 600,
+    # How long to wait for the DigiAsset node to exit cleanly after it accepts the
+    # shutdown request (it finishes its block and flushes chain.db first).
+    [int]   $StopWaitSec  = 600
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.3.0'
+$ScriptVersion = '2.4.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -93,7 +101,7 @@ function Invoke-TarWithProgress($archive, $srcDir, $items, $label, $sayEverySec 
 # --- Elevate --------------------------------------------------------------
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`""; return }
+    if ($PSCommandPath) { Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -BaseUrl `"$BaseUrl`" -StartWaitSec $StartWaitSec -StopWaitSec $StopWaitSec"; return }
     else { throw 'Run this in an elevated (Administrator) PowerShell.' }
 }
 
@@ -193,10 +201,47 @@ function New-DigiByteArchive {
     $part=[ordered]@{ file=(Split-Path $archive -Leaf); sha256=$sha; height=$h; version=$ver; sizeBytes=(Get-Item $archive).Length }
     Write-Utf8NoBom (Join-Path $OutDir 'digibyte-part.json') ($part|ConvertTo-Json)
     Say "  + digibyte-part.json" 'Green'
-    if ($running -and $qtPath) { Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`"" }
+    if ($running -and $qtPath) {
+        Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`""
+        # Wait (up to -StartWaitSec) for DigiByte to finish loading and answer RPC
+        # before moving on: the chain.db step that follows needs the DigiAsset node
+        # to be answering, and the node can't until DigiByte is back. RPC returns
+        # error -28 ("Loading block index...") while warming up, which lands in the
+        # catch below, so we only stop waiting on a real getblockchaininfo result.
+        if ($authPair) {
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($authPair))
+            $body = '{"jsonrpc":"1.0","id":"s","method":"getblockchaininfo","params":[]}'
+            $t0 = Get-Date; $ready = $false
+            while (-not $ready -and ((Get-Date) - $t0).TotalSeconds -lt $StartWaitSec) {
+                Start-Sleep -Seconds 5
+                try { $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{Authorization="Basic $b64"} -TimeoutSec 10 -Body $body; if ($r.result.blocks -gt 0) { $ready = $true } } catch {}
+                Write-Progress -Activity 'Waiting for DigiByte to finish loading' -Status ("elapsed {0:mm\:ss} of up to {1}s" -f ((Get-Date) - $t0), $StartWaitSec)
+            }
+            Write-Progress -Activity 'Waiting for DigiByte to finish loading' -Completed
+            if ($ready) { Say ("  DigiByte answering RPC after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green' }
+            else        { Say "  DigiByte still not answering RPC after ${StartWaitSec}s - carrying on; the chain.db step waits for the node separately." 'Yellow' }
+        } else {
+            # No RPC access to poll - give it a fixed head start instead.
+            Say "  (no DigiByte RPC access to check readiness - waiting 60s)" 'Gray'; Start-Sleep -Seconds 60
+        }
+    }
 }
 
 # --- chain.db component ---------------------------------------------------
+# Ask the node for syncstate. Returns @{ Out = <CLI text>; Height = <int or 0> }.
+# The CLI reports every failure (RPC down, command forbidden by rpcallow, auth)
+# on STDOUT with exit code 0, so the text is kept: it is the only explanation we
+# get when syncstate/shutdown don't work.
+function Get-NodeSyncState {
+    $out = ''; $h = 0
+    if (-not (Test-Path $CliExe)) { return @{ Out = "$CliExe not found"; Height = 0 } }
+    try { Push-Location $DigiAssetDir; $out = (& $CliExe syncstate 2>&1 | Out-String).Trim() }
+    catch { $out = $_.Exception.Message }
+    finally { try { Pop-Location } catch {} }
+    $mm = [regex]::Match($out, '"height"\s*:\s*(\d+)'); if ($mm.Success) { $h = [int]$mm.Groups[1].Value }
+    return @{ Out = $out; Height = $h }
+}
+
 function New-ChainDbArchive {
     $chainDb = Join-Path $DigiAssetDir 'chain.db'
     if (-not (Test-Path $chainDb)) { throw "chain.db not found at $chainDb" }
@@ -205,23 +250,67 @@ function New-ChainDbArchive {
     # clobber the caller's -Height to 0 (that bug made chain.db always publish as
     # height 0 even when -Height was passed).
     $cdbHeight = 0
-    if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $s = (& $CliExe syncstate 2>$null | Out-String); Pop-Location; $mm=[regex]::Match($s,'"height"\s*:\s*(\d+)'); if($mm.Success){ $cdbHeight=[int]$mm.Groups[1].Value } } catch { try{Pop-Location}catch{} } }
+    $nodeUp = [bool](Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)
+    # When the DigiByte archive ran first, DigiByte was down for 20-60 min and was
+    # only just reopened: the node can't answer RPC until DigiByte-Qt has loaded and
+    # the node has reconnected. Asking it to shut down in that window is what made
+    # the shutdown request silently miss. So wait (up to -StartWaitSec) until the
+    # node answers syncstate before going any further.
+    $ss = @{ Out = ''; Height = 0 }
+    if ($nodeUp) {
+        $t0 = Get-Date
+        while ($true) {
+            $ss = Get-NodeSyncState
+            if ($ss.Height -gt 0 -or ((Get-Date) - $t0).TotalSeconds -ge $StartWaitSec) { break }
+            if (-not (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) { break }
+            Write-Progress -Activity 'Waiting for the DigiAsset node to answer RPC' -Status ("elapsed {0:mm\:ss} of up to {1}s (it reconnects to DigiByte after a restart)" -f ((Get-Date) - $t0), $StartWaitSec)
+            Start-Sleep -Seconds 5
+        }
+        Write-Progress -Activity 'Waiting for the DigiAsset node to answer RPC' -Completed
+        if ($ss.Height -gt 0 -and ((Get-Date) - $t0).TotalSeconds -ge 5) { Say ("  node answering RPC after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green' }
+    }
+    $syncOut = $ss.Out; $cdbHeight = $ss.Height
     if ($cdbHeight -le 0 -and $Height -gt 0) { $cdbHeight = $Height }   # allow a manual stamp
     if ($cdbHeight -le 0) {
-        Say "  NOTE: chain.db height unknown (no running node here to read syncstate) - labelling it 0." 'Yellow'
+        if ($nodeUp) {
+            Say "  NOTE: the node is running but syncstate gave no height after ${StartWaitSec}s - labelling it 0. The CLI said:" 'Yellow'
+            Say "    $(if ($syncOut) { $syncOut } else { '(no output)' })" 'Yellow'
+        } else {
+            Say "  NOTE: chain.db height unknown (no running node here to read syncstate) - labelling it 0." 'Yellow'
+        }
         Say "  Cosmetic only; fast-sync still works. Pass -Height <N> to record the real height." 'Yellow'
     }
     Say "`nStopping the DigiAsset node (clean shutdown)..." 'Cyan'
     if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
-        if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; & $CliExe shutdown 2>$null | Out-Null; Pop-Location } catch { try{Pop-Location}catch{} } }
-        # Wait up to 60s for a CLEAN exit. We must NOT force-kill into the archive:
-        # the node runs SQLite with journal_mode=MEMORY, so a hard kill mid-write can
-        # leave chain.db torn (no -wal to replay) and that torn DB would be served to
-        # every new node. If it won't stop cleanly, abort rather than snapshot it.
-        for($i=0;$i -lt 120 -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue);$i++){ Start-Sleep -Milliseconds 500 }
-        if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
-            throw "The DigiAsset node did not shut down cleanly within 60s. Aborting so we don't snapshot a possibly-inconsistent chain.db. Close the node window and re-run."
+        $shutOut = ''
+        if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $shutOut = (& $CliExe shutdown 2>&1 | Out-String).Trim(); Pop-Location } catch { try{Pop-Location}catch{}; $shutOut = $_.Exception.Message } }
+        else { $shutOut = "$CliExe not found" }
+        # A successful shutdown RPC prints "true". Anything else almost always means
+        # the node never got the request (RPC down, shutdown forbidden by rpcallow),
+        # so don't sit out the full wait - give it 20s in case the reply was merely
+        # lost as the node closed its sockets, then say why and stop.
+        if ($shutOut -notmatch '^\s*true\s*$') {
+            for ($i = 0; $i -lt 40 -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
         }
+        if ($shutOut -notmatch '^\s*true\s*$' -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) {
+            throw "The DigiAsset node did not accept the shutdown request, so it is still running. The CLI said: $(if ($shutOut) { $shutOut } else { '(no output)' })`nFix that (or close the node window yourself and wait for it to exit), then re-run. The DigiByte archive, if already built, is in $OutDir - re-run with -Component chaindb, then publish-snapshot.ps1 -SkipBuild."
+        }
+        # Wait up to -StopWaitSec for a CLEAN exit: after "Safe to shut down" the node
+        # still finishes its current block, stops the RPC server and flushes chain.db,
+        # which on a large DB can take well over a minute. We must NOT force-kill into the
+        # archive: the node runs SQLite with journal_mode=MEMORY, so a hard kill
+        # mid-write can leave chain.db torn (no -wal to replay) and that torn DB would
+        # be served to every new node. If it won't stop cleanly, abort.
+        $t0 = Get-Date
+        while ((Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) -and ((Get-Date) - $t0).TotalSeconds -lt $StopWaitSec) {
+            Write-Progress -Activity 'Waiting for the DigiAsset node to exit' -Status ("elapsed {0:mm\:ss} of up to {1}s (flushing chain.db)" -f ((Get-Date) - $t0), $StopWaitSec)
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Progress -Activity 'Waiting for the DigiAsset node to exit' -Completed
+        if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
+            throw "The DigiAsset node accepted shutdown but was still running after ${StopWaitSec}s. Aborting so we don't snapshot a possibly-inconsistent chain.db. Check the node window/log, let it exit, then re-run with -Component chaindb (and publish-snapshot.ps1 -SkipBuild), or raise -StopWaitSec."
+        }
+        Say ("  node exited cleanly after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green'
     }
     Start-Sleep -Seconds 2
     $chainFiles = @('chain.db','chain.db-wal','chain.db-shm') | Where-Object { Test-Path (Join-Path $DigiAssetDir $_) }

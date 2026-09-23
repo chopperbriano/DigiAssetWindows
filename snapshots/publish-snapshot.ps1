@@ -43,6 +43,8 @@ param(
     [int]   $Height       = 0,        # stamp both archives with this height (for a data-copy box with nothing running)
     [string]$OutDir       = 'C:\DigiAssetSnapshots',
     [int]   $KeepLocal    = 1,        # keep newest N local .tar.gz of each kind
+    [int]   $StartWaitSec = 600,      # max wait for DigiByte / the node to answer RPC after a restart (polls; moves on when ready)
+    [int]   $StopWaitSec  = 600,      # max wait for the node to exit cleanly after accepting shutdown
     [switch]$PruneRemote,             # delete superseded archives from R2 too
     [switch]$NoManifest,              # upload the archive(s) only; do NOT rebuild/replace snapshot.json
     # Skip step 1 and publish the archives ALREADY sitting in -OutDir. For when a
@@ -60,7 +62,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$SCRIPT_VERSION = '1.4.0'
+$SCRIPT_VERSION = '1.5.0'
 function Say($m,$c='Gray'){ Write-Host $m -ForegroundColor $c }
 function Step($n,$m){ Write-Host ''; Write-Host "[$n] $m" -ForegroundColor Cyan }
 $here     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -86,7 +88,7 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not $admin) {
     if ($PSCommandPath) {
         Say 'Snapshot publish needs Administrator - approve the UAC prompt...' 'Yellow'
-        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal"
+        $fwd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -DataDir `"$DataDir`" -Height $Height -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal -StartWaitSec $StartWaitSec -StopWaitSec $StopWaitSec"
         if ($PruneRemote) { $fwd += ' -PruneRemote' }
         if ($NoManifest)  { $fwd += ' -NoManifest' }
         if ($SkipBuild)   { $fwd += ' -SkipBuild' }
@@ -108,7 +110,7 @@ if ($Schedule) {
     # open it to watch a run live; -Hidden restores the old invisible behavior.
     # Either way every run is logged to $LogDir, so activity is reviewable.
     $winStyle = if ($Hidden) { 'Hidden' } else { 'Minimized' }
-    $selfArg = "-NoProfile -WindowStyle $winStyle -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal"
+    $selfArg = "-NoProfile -WindowStyle $winStyle -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BaseUrl `"$BaseUrl`" -RcloneRemote `"$RcloneRemote`" -Bucket `"$Bucket`" -Component $Component -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`" -OutDir `"$OutDir`" -LogDir `"$LogDir`" -KeepLocal $KeepLocal -StartWaitSec $StartWaitSec -StopWaitSec $StopWaitSec"
     if ($PruneRemote) { $selfArg += ' -PruneRemote' }
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $selfArg
     # Daily or weekly trigger. Each run snapshots the SAME height-consistent pair
@@ -211,7 +213,8 @@ Step 1 'Building snapshot archives (stops + restarts DigiByte / the node)'
 # saw "-DataDir" with no value and failed ("Missing an argument for parameter").
 $snapArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$makeSnap,
               '-Component',$step1Component,'-NonInteractive',
-              '-DigiByteDir',$DigiByteDir,'-DigiAssetDir',$DigiAssetDir,'-OutDir',$OutDir)
+              '-DigiByteDir',$DigiByteDir,'-DigiAssetDir',$DigiAssetDir,'-OutDir',$OutDir,
+              '-StartWaitSec',"$StartWaitSec",'-StopWaitSec',"$StopWaitSec")
 if ($DataDir) { $snapArgs += @('-DataDir',$DataDir) }
 if ($Height -gt 0) { $snapArgs += @('-Height', "$Height") }
 & powershell.exe @snapArgs
