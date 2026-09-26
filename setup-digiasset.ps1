@@ -104,7 +104,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.27.0'
+$SCRIPT_VERSION = '2.28.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -818,7 +818,7 @@ function Get-Digibyted {
 }
 
 function Resolve-DigiByteAsset($tag) {
-    # DigiByte ships a win64 NSIS installer (…-win64-setup.exe), not a zip.
+    # DigiByte ships a win64 NSIS installer (â€¦-win64-setup.exe), not a zip.
     # tag like "v9.26.5"; returns @{ url; name; ver }
     $rel = $null
     try { $rel = Invoke-GitHubApi "https://api.github.com/repos/DigiByte-Core/digibyte/releases/tags/$tag" } catch {}
@@ -1111,6 +1111,61 @@ function Test-ReleaseChecksum($sums, $name, $path) {
     return $true
 }
 
+# Stop the node the way ctrl-c does: `cli shutdown` finishes the current block and
+# flushes chain.db. The node runs SQLite with journal_mode=MEMORY, so the old
+# hard kill here could leave chain.db torn on every auto-update. Needs
+# rpcallowshutdown (Update-NodeToolRpc adds it); falls back to a kill, loudly.
+function Stop-NodeGracefully([int]$waitSec = 120) {
+    if (-not (Test-ProcRunning 'DigiAssetWindows')) { return }
+    $cli = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
+    $said = ''
+    if (Test-Path $cli) {
+        try { Push-Location $DigiAssetDir; $said = (& $cli shutdown 2>&1 | Out-String).Trim() } catch { $said = $_.Exception.Message } finally { try { Pop-Location } catch {} }
+    }
+    for ($i = 0; $i -lt $waitSec -and (Test-ProcRunning 'DigiAssetWindows'); $i++) { Start-Sleep -Seconds 1 }
+    if (Test-ProcRunning 'DigiAssetWindows') {
+        Log "  node did not stop cleanly within ${waitSec}s (cli said: $(if ($said) { $said } else { 'nothing' })) - forcing it." 'WARN'
+        Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    } else { Log '  node stopped cleanly.' 'OK' }
+}
+
+# Top up the rpcallow lines the bundled tools need ($NodeToolRpc) in an EXISTING
+# config.cfg - per key, only when absent, so an explicit =0 stands. Runs from the
+# maintenance task, so nodes installed before these defaults get them too. The
+# node reads config.cfg at start, so they apply from its next (re)start.
+function Update-NodeToolRpc {
+    if (-not (Test-Path $NodeConfig)) { return }
+    $existing = @(Get-Content $NodeConfig)
+    $add = @($NodeToolRpc | Where-Object { -not ($existing -match "^\s*rpcallow$_\s*=") } | ForEach-Object { "rpcallow$_=1" })
+    if ($add.Count -eq 0) { return }
+    $out = $existing
+    if ($out.Count -gt 0 -and "$($out[-1])".Trim() -ne '') { $out += '' }
+    $out += '# Added by the maintenance task: RPCs the bundled tools need (monitor-node, clean shutdown).'
+    $out += $add
+    Set-Content -Path $NodeConfig -Value $out -Encoding ASCII
+    Log "  config.cfg: added $($add -join ', ') - applies when the node next restarts." 'OK'
+}
+
+# Companion tools, staged FLAT into $DigiAssetDir from node/ on master. Refreshed on
+# every maintenance run so existing nodes get fixes (e.g. new monitor-node checks)
+# without a reinstall. A download must parse and differ before it replaces the copy.
+$NodeTools = @('monitor-node.ps1','stop-node.ps1','update-node.ps1','memwatch.ps1')
+function Update-NodeTools {
+    foreach ($tool in $NodeTools) {
+        try {
+            $dest = Join-Path $DigiAssetDir $tool
+            $tmp = Join-Path $Tmp $tool
+            if (-not (Get-File "https://raw.githubusercontent.com/$Repo/master/node/$tool" $tmp 2)) { continue }
+            $perr = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$perr)
+            if ($perr -and $perr.Count -gt 0) { Log "  ($tool download did not parse - keeping the current copy)" 'WARN'; continue }
+            if ((Test-Path $dest) -and ((Get-Sha512Hex $tmp) -eq (Get-Sha512Hex $dest))) { continue }
+            Copy-Item $tmp $dest -Force
+            Log "  + $tool updated" 'OK'
+        } catch { Log "  ($tool refresh skipped: $($_.Exception.Message))" 'WARN' }
+    }
+}
+
 function Install-DigiAsset {
     $sums = Get-ReleaseChecksums
     if (-not $sums) { Log '  (this release publishes no SHA256SUMS - falling back to a format check only)' 'WARN' }
@@ -1135,7 +1190,7 @@ function Install-DigiAsset {
             Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             throw "$f failed its SHA256 check - refusing to install it. The existing binary is untouched. Re-run to download again; if it keeps failing, report it."
         }
-        if ($wasRunning) { Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep 2 }
+        if ($wasRunning) { Stop-NodeGracefully; Start-Sleep 2 }
         if (Test-Path $out) { Copy-Item $out "$out.bak" -Force -ErrorAction SilentlyContinue }  # roll-back copy
         try { Move-Item $tmp $out -Force }
         catch { Start-Sleep 2; Move-Item $tmp $out -Force }   # exe may still be releasing its lock
@@ -1628,7 +1683,7 @@ function Restore-Snapshot {
         $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
         $txt = $resp.Content
         if ($txt -is [byte[]]) { $txt = [System.Text.Encoding]::UTF8.GetString($txt) }
-        # Strip a UTF-8 BOM whether it decoded as U+FEFF or as mojibake bytes (ï»¿).
+        # Strip a UTF-8 BOM whether it decoded as U+FEFF or as mojibake bytes (Ã¯Â»Â¿).
         $txt = $txt.TrimStart([char]0xFEFF, [char]0xEF, [char]0xBB, [char]0xBF)
         $m = $txt | ConvertFrom-Json
     } catch { Log '  snapshot manifest unreachable/invalid - syncing normally.' 'WARN'; return }
@@ -1884,9 +1939,7 @@ function Invoke-Install {
 
     # Drop the companion tools next to the node so they are always handy. They
     # live in node/ in the repo but are staged FLAT into C:\DigiAssetWindows.
-    foreach ($tool in 'monitor-node.ps1','stop-node.ps1','update-node.ps1','memwatch.ps1') {
-        try { Get-File "https://raw.githubusercontent.com/$Repo/master/node/$tool" (Join-Path $DigiAssetDir $tool) 2 | Out-Null } catch {}
-    }
+    Update-NodeTools
     # Node logon task. If the script is staged, use the dependency-aware launcher
     # (waits for IPFS + DigiByte). If not, fall back to launching the node exe
     # directly so it still starts at logon (never point the task at a missing file).
@@ -2135,6 +2188,10 @@ function Invoke-Service {
     # --- 2. Prerequisites (independent of the user session) ----------------
     try { Ensure-VCRuntime } catch { $problems += "VC++ runtime: $($_.Exception.Message)"; Log $problems[-1] 'WARN' }
     Ensure-Firewall
+    # Defaults newer than this node's install: RPC allow-list and the companion
+    # tools. Config first, so a node restarted by the update below picks it up.
+    try { Update-NodeToolRpc } catch { Log "config.cfg top-up skipped: $($_.Exception.Message)" 'WARN' }
+    Update-NodeTools
 
     # --- 3. Binary updates. Applied now; the GUI apps pick them up at the
     #        next login/reboot (with Autologon that's automatic). ------------

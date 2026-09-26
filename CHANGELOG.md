@@ -20,6 +20,26 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — existing nodes get the new defaults too (setup-digiasset.ps1 2.28.0)
+
+No binary change; reaches nodes through the maintenance task's self-update from master.
+
+win.140's installer only wrote the tool RPC allow-list into configs it created or was re-run
+over, and only installs dropped the companion tools. The maintenance task (SYSTEM, every 6h)
+now does both on every run:
+
+- **`rpcallow<method>=1`** for `version`, `syncstate`, `getnodestats`, `getipfscount` and
+  `shutdown` is added to `config.cfg` when missing — per key, so an explicit `=0` stands.
+  Done before the binary update, so a node restarted by that update comes up with it.
+- **`monitor-node.ps1`, `stop-node.ps1`, `update-node.ps1`, `memwatch.ps1`** are refreshed
+  from master when they differ; a download that does not parse never replaces a working copy.
+
+And the auto-updater no longer hard-kills the node to swap its exe. It asks `cli shutdown`
+first and waits up to 2 minutes, killing only as a last resort (logged). With SQLite in
+`journal_mode=MEMORY`, the old kill could leave `chain.db` torn on any update.
+
+---
+
 ## 0.3.3-win.140 — logs that say what went wrong, and health checks that catch it
 
 Prompted by the 2026-09-26 pool outage. `DigiAssetPoolServer.exe` went down while Caddy in
