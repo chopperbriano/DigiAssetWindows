@@ -70,6 +70,12 @@ param(
     # tracks the latest releases and updates past these. If a pinned version
     # isn't published yet, the installer falls back to the current latest.
     [string]$DigiByteVersion = '9.26.5',
+    # Minimum IPFS Desktop version. A fresh install gets exactly this release; an
+    # existing install OLDER than this is upgraded in place (by the installer and by
+    # the node's logon task, which runs as the user - IPFS Desktop is a per-user
+    # install, so the SYSTEM maintenance task can't). A newer copy (IPFS Desktop
+    # auto-updates itself) is left alone - this is a floor, never a downgrade.
+    [string]$IpfsDesktopVersion = '0.50.1',
     # Fast-sync snapshot manifest (snapshot.json) URL. If set, a FRESH install
     # downloads + verifies + extracts a pre-synced DigiByte blockchain + chain.db
     # so it skips the ~week-long sync. Overrides $DefaultSnapshotUrl below.
@@ -98,7 +104,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.25.0'
+$SCRIPT_VERSION = '2.26.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -936,21 +942,84 @@ function Start-DigiByteWallet {
 # DigiStampIPFS task and clearing a stale machine-level IPFS_PATH.
 
 # --- IPFS Desktop (GUI, tray icon) - the run model used by the installer -----
+# The pinned -IpfsDesktopVersion release. Falls back to the predictable
+# electron-builder asset URL if the GitHub API is unreachable/rate-limited.
 function Get-IpfsDesktopAsset {
+    $tag = "v$($IpfsDesktopVersion.TrimStart('v'))"
     try {
-        $rel = Invoke-GitHubApi "https://api.github.com/repos/$IpfsDesktopRepo/releases/latest"
+        $rel = Invoke-GitHubApi "https://api.github.com/repos/$IpfsDesktopRepo/releases/tags/$tag"
         $a = $rel.assets | Where-Object { $_.name -match 'setup.*win-x64\.exe$' } | Select-Object -First 1
         if (-not $a) { $a = $rel.assets | Where-Object { $_.name -match 'win-x64\.exe$' } | Select-Object -First 1 }
         if ($a) { return @{ url = $a.browser_download_url; name = $a.name; ver = $rel.tag_name.TrimStart('v') } }
     } catch {}
-    return $null
+    $v = $tag.TrimStart('v')
+    return @{ url = "https://github.com/$IpfsDesktopRepo/releases/download/$tag/ipfs-desktop-setup-$v-win-x64.exe"; name = "ipfs-desktop-setup-$v-win-x64.exe"; ver = $v }
 }
+# Version of the installed IPFS Desktop ('' if unknown): the exe's file version
+# (electron-builder stamps the app version there), else its per-user uninstall entry.
+function Get-IpfsDesktopInstalledVersion {
+    $exe = Get-IpfsDesktopExe
+    if ($exe) {
+        try {
+            $vi = (Get-Item -LiteralPath $exe).VersionInfo
+            foreach ($s in @($vi.ProductVersion, $vi.FileVersion)) {
+                $m = [regex]::Match("$s", '^\d+\.\d+\.\d+')
+                if ($m.Success) { return $m.Value }
+            }
+        } catch {}
+    }
+    try {
+        $u = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+             Where-Object { $_.DisplayName -match '^IPFS Desktop' } | Select-Object -First 1
+        if ($u -and $u.DisplayVersion) { return [string]$u.DisplayVersion }
+    } catch {}
+    return ''
+}
+# electron-builder publishes latest.yml next to the installer with its base64
+# SHA-512. Verify against it; a MISMATCH aborts, an unavailable latest.yml is a
+# quiet note (we still downloaded over HTTPS from GitHub).
+function Test-IpfsDesktopInstaller($asset, $inst) {
+    $want = $null
+    try {
+        $yml = (Invoke-WebRequest -Uri ($asset.url -replace '/[^/]+$', '/latest.yml') -UseBasicParsing -TimeoutSec 20).Content
+        if ($yml -is [byte[]]) { $yml = [Text.Encoding]::UTF8.GetString($yml) }
+        $m = [regex]::Match($yml, '(?m)url:\s*' + [regex]::Escape($asset.name) + '\s*[\r\n]+\s*sha512:\s*(\S+)')
+        if ($m.Success) { $want = $m.Groups[1].Value }
+    } catch {}
+    if (-not $want) { Log '  (no published IPFS Desktop checksum; verified via HTTPS instead)'; return }
+    $sha = [Security.Cryptography.SHA512]::Create()
+    $fs = [IO.File]::OpenRead($inst)
+    try { $got = [Convert]::ToBase64String($sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
+    if ($got -ne $want) { Remove-Item $inst -Force -ErrorAction SilentlyContinue; throw 'IPFS Desktop checksum mismatch - aborting.' }
+    Log '  IPFS Desktop checksum verified (SHA-512).' 'OK'
+}
+# Installs IPFS Desktop, or upgrades an install older than -IpfsDesktopVersion.
+# Returns the version now installed.
 function Install-IpfsDesktop {
-    if (Test-Path $IpfsDesktopExe) { Log '  IPFS Desktop already installed.' 'OK'; return 'installed' }
+    $want = $IpfsDesktopVersion.TrimStart('v')
+    $have = ''
+    if (Test-IpfsDesktopInstalled) {
+        $have = Get-IpfsDesktopInstalledVersion
+        if (-not $have) { Log '  IPFS Desktop already installed (version unknown - leaving it).' 'OK'; return 'installed' }
+        if (-not (Test-Newer $want $have)) { Log "  IPFS Desktop $have already installed." 'OK'; return $have }
+        Log "  IPFS Desktop $have is older than $want - upgrading..."
+    }
     $asset = Get-IpfsDesktopAsset
-    if (-not $asset) { throw 'could not find the IPFS Desktop installer on GitHub.' }
     $inst = Join-Path $Tmp $asset.name
-    if (-not (Get-File $asset.url $inst)) { throw "could not download IPFS Desktop from $($asset.url)" }
+    if (-not (Get-File $asset.url $inst)) {
+        if ($have) { Log "  could not download IPFS Desktop $want - keeping $have for now." 'WARN'; return $have }
+        throw "could not download IPFS Desktop from $($asset.url)"
+    }
+    Test-IpfsDesktopInstaller $asset $inst
+    if ($have) {
+        # Close the running app so the installer can replace its files; the caller
+        # starts it again afterwards. Ask kubo to shut down cleanly first (flushes
+        # its datastore), then close IPFS Desktop and anything left over.
+        try { Invoke-RestMethod -Uri 'http://127.0.0.1:5001/api/v0/shutdown' -Method Post -TimeoutSec 15 | Out-Null } catch {}
+        for ($i = 0; $i -lt 30 -and (Get-Process 'ipfs' -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
+        Get-Process 'IPFS Desktop','ipfs' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+    }
     Log "  installing IPFS Desktop $($asset.ver) silently (this can take a minute)..."
     # electron-builder NSIS: /S = silent. It installs per-user, registers its own
     # login auto-start, launches the app, and runs kubo internally on :5001.
@@ -1983,12 +2052,11 @@ function Invoke-LaunchNode {
     if (-not (Test-Path $NodeExe)) { Log "launch-node: node exe NOT FOUND at $NodeExe - cannot start (re-run the installer or update-binaries.ps1)." 'ERROR'; return }
 
     # This task runs AS THE USER, so per-user paths + installs land in the right
-    # profile. Ensure IPFS Desktop is actually installed (repairs the rare genuine
-    # loss correctly, unlike the SYSTEM maintenance task) and started.
-    if (-not (Test-IpfsDesktopInstalled)) {
-        Log 'launch-node: IPFS Desktop not installed - installing now...' 'WARN'
-        try { Install-IpfsDesktop | Out-Null } catch { Log "launch-node: IPFS Desktop install failed: $($_.Exception.Message)" 'WARN' }
-    }
+    # profile. Ensure IPFS Desktop is installed and at least -IpfsDesktopVersion
+    # (repairs a genuine loss and upgrades an old copy correctly, unlike the SYSTEM
+    # maintenance task), then start it. A current install is a no-op here.
+    if (-not (Test-IpfsDesktopInstalled)) { Log 'launch-node: IPFS Desktop not installed - installing now...' 'WARN' }
+    try { Install-IpfsDesktop | Out-Null } catch { Log "launch-node: IPFS Desktop install/upgrade failed: $($_.Exception.Message)" 'WARN' }
     # Again before launching, to catch a rule lost to an IPFS Desktop auto-update.
     # This task runs as the USER, not elevated, so New-NetFirewallRule may be denied -
     # it is best-effort here and the elevated installer/maintenance run is what
