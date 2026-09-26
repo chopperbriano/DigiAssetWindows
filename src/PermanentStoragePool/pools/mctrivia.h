@@ -92,6 +92,15 @@ private:
     Health _registrationHealth = Health::Unknown;   // /list/<floor>.json POST
     Health _permanentFetchHealth = Health::Unknown; // /permanent/<page>.json GET
     std::string _daily;                             // "daily" field from /permanent response
+    // Outage bookkeeping for the log: failures in a row and when the run began, so
+    // the first failure says "pool unusable", repeats say for how long, and the
+    // recovery line brackets the outage. Each is touched by one thread only.
+    unsigned int _permanentFailStreak = 0;
+    std::chrono::steady_clock::time_point _permanentFailSince{};
+    unsigned int _keepaliveFailStreak = 0;
+    std::chrono::steady_clock::time_point _keepaliveFailSince{};
+    void notePermanentFailure(const std::string& what);
+    void noteKeepaliveResult(bool ok, const std::string& what);
     std::chrono::steady_clock::time_point _lastRegistrationProbe{};
     // Whether the pool server's last /list response said it is actively
     // distributing payouts. A pool can be reachable and accept our

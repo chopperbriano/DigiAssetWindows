@@ -53,6 +53,13 @@ namespace CurlHandler {
     // exceptionTimeout on timeout, std::runtime_error on other errors.
     void postDownload(const std::string& url, const std::string& fileName, const std::map<std::string, std::string>& data = {}, unsigned int timeout = 0);
 
+    // HTTP status of the most recent get()/post() made ON THIS THREAD (0 if it
+    // failed before a response arrived). get()/post() return the body for ANY
+    // status, so a 502 from a reverse proxy looks like an empty body to the
+    // caller; read this right after the call to tell "server said 502" apart
+    // from "server sent something unparseable".
+    long lastHttpStatus();
+
     // Thrown by the above functions when a request exceeds its timeout.
     // NOTE: what() MUST match std::exception's signature (const + noexcept) to
     // actually override it - otherwise catching as std::exception& and calling

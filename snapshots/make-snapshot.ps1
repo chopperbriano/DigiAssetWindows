@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.4.0'
+$ScriptVersion = '2.4.1'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -232,14 +232,29 @@ function New-DigiByteArchive {
 # The CLI reports every failure (RPC down, command forbidden by rpcallow, auth)
 # on STDOUT with exit code 0, so the text is kept: it is the only explanation we
 # get when syncstate/shutdown don't work.
-function Get-NodeSyncState {
-    $out = ''; $h = 0
-    if (-not (Test-Path $CliExe)) { return @{ Out = "$CliExe not found"; Height = 0 } }
-    try { Push-Location $DigiAssetDir; $out = (& $CliExe syncstate 2>&1 | Out-String).Trim() }
-    catch { $out = $_.Exception.Message }
+# Answered = the node replied to syncstate at all (RPC is up), which is what the
+# shutdown needs. syncstate has no height field - it returns {count, sync}, where
+# count is DigiByte's height and sync is 0 when fully synced (negative = blocks
+# behind, positive = a non-running state) - so the chain.db height comes from
+# getnodestats' syncHeight, falling back to count when sync is 0.
+function Invoke-NodeCli($cmd) {
+    try { Push-Location $DigiAssetDir; return (& $CliExe $cmd 2>&1 | Out-String).Trim() }
+    catch { return $_.Exception.Message }
     finally { try { Pop-Location } catch {} }
-    $mm = [regex]::Match($out, '"height"\s*:\s*(\d+)'); if ($mm.Success) { $h = [int]$mm.Groups[1].Value }
-    return @{ Out = $out; Height = $h }
+}
+function Get-NodeSyncState {
+    if (-not (Test-Path $CliExe)) { return @{ Out = "$CliExe not found"; Height = 0; Answered = $false } }
+    $out = Invoke-NodeCli 'syncstate'
+    $count = [regex]::Match($out, '"count"\s*:\s*(\d+)')
+    $sync  = [regex]::Match($out, '"sync"\s*:\s*(-?\d+)')
+    $answered = $count.Success -and $sync.Success
+    $h = 0
+    if ($answered) {
+        $mm = [regex]::Match((Invoke-NodeCli 'getnodestats'), '"syncHeight"\s*:\s*(\d+)')
+        if ($mm.Success) { $h = [int]$mm.Groups[1].Value }
+        elseif ([int]$sync.Groups[1].Value -eq 0) { $h = [int]$count.Groups[1].Value }
+    }
+    return @{ Out = $out; Height = $h; Answered = $answered }
 }
 
 function New-ChainDbArchive {
@@ -256,24 +271,25 @@ function New-ChainDbArchive {
     # the node has reconnected. Asking it to shut down in that window is what made
     # the shutdown request silently miss. So wait (up to -StartWaitSec) until the
     # node answers syncstate before going any further.
-    $ss = @{ Out = ''; Height = 0 }
+    $ss = @{ Out = ''; Height = 0; Answered = $false }
     if ($nodeUp) {
         $t0 = Get-Date
         while ($true) {
             $ss = Get-NodeSyncState
-            if ($ss.Height -gt 0 -or ((Get-Date) - $t0).TotalSeconds -ge $StartWaitSec) { break }
+            if ($ss.Answered -or ((Get-Date) - $t0).TotalSeconds -ge $StartWaitSec) { break }
             if (-not (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) { break }
             Write-Progress -Activity 'Waiting for the DigiAsset node to answer RPC' -Status ("elapsed {0:mm\:ss} of up to {1}s (it reconnects to DigiByte after a restart)" -f ((Get-Date) - $t0), $StartWaitSec)
             Start-Sleep -Seconds 5
         }
         Write-Progress -Activity 'Waiting for the DigiAsset node to answer RPC' -Completed
-        if ($ss.Height -gt 0 -and ((Get-Date) - $t0).TotalSeconds -ge 5) { Say ("  node answering RPC after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green' }
+        if ($ss.Answered -and ((Get-Date) - $t0).TotalSeconds -ge 5) { Say ("  node answering RPC after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green' }
     }
     $syncOut = $ss.Out; $cdbHeight = $ss.Height
     if ($cdbHeight -le 0 -and $Height -gt 0) { $cdbHeight = $Height }   # allow a manual stamp
     if ($cdbHeight -le 0) {
         if ($nodeUp) {
-            Say "  NOTE: the node is running but syncstate gave no height after ${StartWaitSec}s - labelling it 0. The CLI said:" 'Yellow'
+            $why = if ($ss.Answered) { 'answered but reported no chain.db height' } else { "did not answer syncstate within ${StartWaitSec}s" }
+            Say "  NOTE: the node is running but $why - labelling it 0. The CLI said:" 'Yellow'
             Say "    $(if ($syncOut) { $syncOut } else { '(no output)' })" 'Yellow'
         } else {
             Say "  NOTE: chain.db height unknown (no running node here to read syncstate) - labelling it 0." 'Yellow'

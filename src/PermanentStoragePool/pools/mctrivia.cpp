@@ -43,6 +43,36 @@ namespace {
     ///whichever block the next issuance was in.  Bounded here: a stale bad list is harmless
     const unsigned int PSP_SERVER_TIMEOUT_MS = 30000;
 
+    /**
+     * Describe a pool reply the client couldn't use, in terms an operator can act
+     * on. CurlHandler hands back the body for ANY status, so without this a 502
+     * from Caddy (pool app down behind a live front end - the 2026-09-26 outage)
+     * logged as "returned non-JSON (len=0)", which reads like a parsing bug.
+     */
+    std::string describePoolReply(long status, const std::string& body) {
+        std::string what = status ? "HTTP " + std::to_string(status) : std::string("no HTTP status");
+        if (status == 502 || status == 503 || status == 504) {
+            what += " - the pool's web front end answered but the pool server behind it did not (DigiAssetPoolServer down or restarting); nothing new can be pinned until it is back";
+        } else if (status == 401 || status == 403) {
+            what += " - the pool refused the request";
+        } else if (status == 404) {
+            what += " - not found on the pool";
+        } else if (status >= 500) {
+            what += " - pool server error";
+        } else if (status >= 200 && status < 300 && body.empty()) {
+            what += " with nothing in it - on the pool box itself this is the router not looping back to its own public IP (use psp server http://127.0.0.1:14028 there); elsewhere check for a proxy or filter in the way";
+        }
+        if (body.empty()) return what + ", empty body";
+        std::string snip = body.substr(0, 160);
+        for (char& c: snip) if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+        return what + ", body: \"" + snip + (body.size() > 160 ? "...\"" : "\"");
+    }
+
+    std::string minutesSince(std::chrono::steady_clock::time_point t) {
+        auto mins = std::chrono::duration_cast<std::chrono::minutes>(std::chrono::steady_clock::now() - t).count();
+        return std::to_string(mins) + " min";
+    }
+
     ///max wait for the metadata of the issuance being costed.  Same reasoning: getCost runs on an
     ///rpc thread and used to wait for a cid the node may never be able to fetch.  Generous rather
     ///than snappy - the file is normally one this node just published, but if it has to come from
@@ -379,6 +409,46 @@ void mctrivia::permanentFetcherTask() {
 }
 
 /**
+ * Log a failed /permanent fetch and mark the fetcher Broken. The first failure of
+ * a run says the pool is unusable; later ones carry the streak length and how long
+ * it has lasted, so a log excerpt alone shows an outage's start and duration.
+ */
+void mctrivia::notePermanentFailure(const std::string& what) {
+    if (_permanentFailStreak++ == 0) _permanentFailSince = std::chrono::steady_clock::now();
+    std::string streak = (_permanentFailStreak == 1)
+            ? std::string(" - nothing new will be pinned until this clears")
+            : " (failure " + std::to_string(_permanentFailStreak) + " in a row, for " +
+                      minutesSince(_permanentFailSince) + ")";
+    Log::GetInstance()->addMessage("PSP permanent " + what + streak, Log::WARNING);
+    std::lock_guard<std::mutex> lk(_healthMutex);
+    _permanentFetchHealth = Health::Broken;
+}
+
+/**
+ * Log a keepalive outcome. Failures get the streak/duration treatment above; the
+ * first success after failures logs the recovery so the gap is bracketed.
+ */
+void mctrivia::noteKeepaliveResult(bool ok, const std::string& what) {
+    Log* log = Log::GetInstance();
+    if (ok) {
+        if (_keepaliveFailStreak > 0) {
+            log->addMessage("PSP keepalive accepted again after " + std::to_string(_keepaliveFailStreak) +
+                            " failed attempt(s) over " + minutesSince(_keepaliveFailSince) +
+                            " - the pool may not have counted this node online for that time.",
+                            Log::INFO);
+            _keepaliveFailStreak = 0;
+        }
+        return;
+    }
+    if (_keepaliveFailStreak++ == 0) _keepaliveFailSince = std::chrono::steady_clock::now();
+    std::string streak = (_keepaliveFailStreak == 1)
+            ? std::string()
+            : " (failure " + std::to_string(_keepaliveFailStreak) + " in a row, for " +
+                      minutesSince(_keepaliveFailSince) + ")";
+    log->addMessage("PSP keepalive " + what + streak, Log::WARNING);
+}
+
+/**
  * Returns true if the page came back with `done: true`, meaning the caller
  * should advance to the next page. False otherwise (page still growing, or
  * fetch failed — either way, don't advance).
@@ -388,25 +458,32 @@ bool mctrivia::fetchAndPinPermanentPage(unsigned int page) {
     const std::string url = _baseUrl + "/permanent/" + std::to_string(page) + ".json";
 
     std::string body;
+    long status = 0;
     try {
         body = CurlHandler::get(url, 30000);
+        status = CurlHandler::lastHttpStatus();
     } catch (const std::exception& e) {
-        log->addMessage("PSP permanent GET failed (" + url + "): " + e.what(),
-                        Log::WARNING);
-        std::lock_guard<std::mutex> lk(_healthMutex);
-        _permanentFetchHealth = Health::Broken;
+        notePermanentFailure("could not reach " + url + ": " + e.what());
         return false;
     }
 
+    // A 5xx is an outage even when the proxy wraps it in JSON, so judge the status
+    // before the body. (A 404 carries the pool's {"error":...} envelope and is
+    // handled below as "page not ready".)
     Json::Value root;
     Json::Reader reader;
-    if (!reader.parse(body, root)) {
-        log->addMessage("PSP permanent page " + std::to_string(page) +
-                        " returned non-JSON (len=" + std::to_string(body.size()) + ")",
-                        Log::WARNING);
-        std::lock_guard<std::mutex> lk(_healthMutex);
-        _permanentFetchHealth = Health::Broken;
+    if (status >= 500 || !reader.parse(body, root)) {
+        notePermanentFailure("page " + std::to_string(page) + " (" + url + ") unusable: " +
+                             describePoolReply(status, body));
         return false;
+    }
+    if (_permanentFailStreak > 0) {
+        log->addMessage("PSP pool reachable again: permanent page " + std::to_string(page) +
+                        " fetched after " + std::to_string(_permanentFailStreak) +
+                        " failed attempt(s) over " + minutesSince(_permanentFailSince) +
+                        ". Assets minted during the gap may need a pool back-fill.",
+                        Log::INFO);
+        _permanentFailStreak = 0;
     }
 
     // Server error envelope: {"error":"..."}. Means the page doesn't exist yet
@@ -631,15 +708,17 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
     }
 
     std::string response;
+    long status = 0;
     try {
         response = CurlHandler::post(url, {{"address", address},
                                 {"peerId", peerId},
                                 {"visible", (_visible ? "v" : "h")},
                                 {"secret", _secretCode}},
                                 PSP_SERVER_TIMEOUT_MS);   //upstream 20f498d: never wait forever on a pool server
+        status = CurlHandler::lastHttpStatus();
     } catch (const std::exception& e) {
         if (command == KEEP_ALIVE) {
-            log->addMessage("PSP keepalive FAILED: " + std::string(e.what()), Log::WARNING);
+            noteKeepaliveResult(false, "FAILED - could not reach " + url + ": " + std::string(e.what()));
         }
         throw;
     }
@@ -654,16 +733,14 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
         const std::string expectedOk = "unsubscribe failed will time out anyways";
         bool responseOk = (response.find(expectedOk) != std::string::npos);
 
-        log->addMessage("PSP keepalive RESPONSE: " + response, Log::DEBUG);
+        log->addMessage("PSP keepalive RESPONSE: HTTP " + std::to_string(status) + " " + response, Log::DEBUG);
         if (responseOk) {
             // Use _baseUrl, not the hardcoded ipfs.digiassetx.com, so users
             // running their own DigiAssetPoolServer see it reflected here.
             log->addMessage("Reported online to " + _baseUrl + " (server id: " +
                             peerId + ")", Log::DEBUG);
-        } else {
-            log->addMessage("PSP keepalive returned UNEXPECTED response: " + response,
-                            Log::WARNING);
         }
+        noteKeepaliveResult(responseOk, "returned UNEXPECTED response: " + describePoolReply(status, response));
     }
 
     //update the bad list

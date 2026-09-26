@@ -104,7 +104,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.26.0'
+$SCRIPT_VERSION = '2.27.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1369,6 +1369,13 @@ addnode=64.182.71.56:12024
     return @{ user = $rpcUser; pass = (Read-Conf $DgbConf)['rpcpassword'] }
 }
 
+# Node RPC methods the operator tools rely on. With no rpcallow lines at all the
+# node forbids EVERY method, so monitor-node.ps1 couldn't read sync state and
+# make-snapshot.ps1's `cli shutdown` was refused - the node then "did not shut down
+# cleanly" and the snapshot aborted. Read-only health calls plus shutdown only; the
+# RPC listens on 127.0.0.1 and still needs rpcuser/rpcpassword.
+$NodeToolRpc = @('version','syncstate','getnodestats','getipfscount','shutdown')
+
 function Write-NodeConfig($rpc) {
     Ensure-Dir $DigiAssetDir
     if (Test-Path $NodeConfig) {
@@ -1409,6 +1416,8 @@ function Write-NodeConfig($rpc) {
         # re-run. The node itself also persists this key on first start; writing it
         # here makes the intent explicit and documented in the file.
         if (-not ($existing -match '^\s*trackdigidollar\s*=')) { $add += 'trackdigidollar=1' }
+        # Per key and only when absent, so an explicit rpcallow<method>=0 is respected.
+        foreach ($m in $NodeToolRpc) { if (-not ($existing -match "^\s*rpcallow$m\s*=")) { $add += "rpcallow$m=1" } }
         if ($changed -or $add.Count -gt 0) {
             $out = @($existing)
             if ($add.Count -gt 0) {
@@ -1418,7 +1427,7 @@ function Write-NodeConfig($rpc) {
             }
             Set-Content -Path $NodeConfig -Value $out -Encoding ASCII
             if ($changed)        { Log "  config.cfg: payout address updated to $PayoutAddress (node will re-register with the pool)." 'OK' }
-            if ($add.Count -gt 0) { Log '  config.cfg: added missing psp payout / fast-path settings.' 'OK' }
+            if ($add.Count -gt 0) { Log "  config.cfg: added missing settings: $(($add | Where-Object { $_ -notmatch 'payout=' }) -join ', ')" 'OK' }
         } else {
             Log '  config.cfg already up to date - leaving it untouched.'
         }
@@ -1495,8 +1504,14 @@ function Write-NodeConfig($rpc) {
         '#     which takes a while - that is expected, not a fault.',
         '#   Set to 0 to skip all of it. Turning it off and back on forces a fresh',
         '#     rewind: a gap in DigiDollar history cannot be filled in by later blocks.',
-        'trackdigidollar=1'
-    )
+        'trackdigidollar=1',
+        '',
+        '# --- This node''s own RPC (port 14024, local only) -----------------------------',
+        '#   With no rpcallow lines the node refuses every method. These let the bundled',
+        '#   tools work: monitor-node.ps1 (sync state, IPFS backlog) and a clean',
+        '#   `DigiAssetWindows-cli shutdown` (used by the snapshot scripts).',
+        '#   rpcallow*=1 would allow everything, including wallet sends - not recommended.'
+    ) + ($NodeToolRpc | ForEach-Object { "rpcallow$_=1" })
     Set-Content -Path $NodeConfig -Value $lines -Encoding ASCII
     Log "  + config.cfg (documented; pool=$PoolServer, payout=$PayoutAddress)" 'OK'
 }

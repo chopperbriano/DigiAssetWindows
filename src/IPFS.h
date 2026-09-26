@@ -105,6 +105,9 @@ private:
     mutable std::atomic<long long> _lastTimeoutWarning{0};
     mutable std::atomic<long long> _lastOfflineWarning{0};
     static bool _shouldWarn(std::atomic<long long>& lastWarning);
+    ///peer count + queue depth appended to a timeout warning, so the log says whether the
+    ///daemon is cut off or the content just has no provider
+    std::string _timeoutContext() const;
 
     // Worker-thread body: pops one queued IPFS job (download/pin/unpin) from the
     // Database, executes it against the local node, then removes the job and

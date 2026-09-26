@@ -36,6 +36,9 @@ namespace CurlHandler {
         };
         thread_local CurlHandleHolder tl_holder;
 
+        // Status of this thread's last get()/post(); see lastHttpStatus().
+        thread_local long tl_lastStatus = 0;
+
         // Returns this thread's reusable CURL easy handle, creating it on first
         // use and otherwise resetting all previously-set options (so a prior
         // request's settings don't leak into the next) while keeping the live
@@ -119,6 +122,10 @@ namespace CurlHandler {
         _abortAll = abort;
     }
 
+    long lastHttpStatus() {
+        return tl_lastStatus;
+    }
+
     // Blocking HTTP GET. Accumulates the response body into a string and
     // returns it. timeout in ms (0 disables). Throws exceptionTimeout on
     // timeout, runtime_error on handle-init failure or other curl errors.
@@ -133,7 +140,9 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
         applyCommonOptions(curl, timeout);
+        tl_lastStatus = 0;
         CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &tl_lastStatus);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
             discardHandle();
             throw exceptionTimeout();
@@ -171,7 +180,9 @@ namespace CurlHandler {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
         applyCommonOptions(curl, timeout);
+        tl_lastStatus = 0;
         CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &tl_lastStatus);
         if ((res == CURLE_OPERATION_TIMEDOUT) || (res == CURLE_ABORTED_BY_CALLBACK)) {
             discardHandle();
             throw exceptionTimeout();

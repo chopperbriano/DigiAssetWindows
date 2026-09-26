@@ -20,12 +20,75 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — pool federation: tooling, and the reverse-proxy bug blocking it
+## 0.3.3-win.140 — logs that say what went wrong, and health checks that catch it
+
+Prompted by the 2026-09-26 pool outage. `DigiAssetPoolServer.exe` went down while Caddy in
+front of it stayed up, so every `/permanent/*.json` request got a 502 with an empty body. The
+nodes logged `PSP permanent page 23 returned non-JSON (len=0)` and an empty
+`PSP keepalive returned UNEXPECTED response:` — which reads like a parsing bug, not "the pool
+is down and nothing is being pinned anywhere".
+
+### Pool (PSP) warnings name the HTTP status and what it means
+
+`CurlHandler::get()`/`post()` return the body for any status, so callers never saw the 502.
+Each thread now records its last status (`CurlHandler::lastHttpStatus()`), and the pool client
+reports it with a plain-English reading and the first 160 characters of the reply:
+
+- **502/503/504** — front end up, pool server behind it down; nothing new can be pinned.
+- **401/403** refused, **404** not found, other **5xx** a server error.
+- **200 with an empty body** — names the pool-box loopback setting (`psp server
+  http://127.0.0.1:14028`), the known cause when it happens on the pool box itself.
+
+A 5xx wrapped in JSON now counts as a failure; it used to be read as "page not ready yet".
+
+Failures are tracked as an outage: the first says nothing new will be pinned, repeats carry
+`(failure 4 in a row, for 32 min)`, and recovery logs one line — `PSP pool reachable again ...
+after 4 failed attempt(s) over 32 min. Assets minted during the gap may need a pool
+back-fill.` Keepalive gets the same treatment, with a recovery line noting the pool may not
+have counted the node online for the gap.
+
+### IPFS timeouts say whether the daemon is cut off or the content has no provider
+
+`IPFS node did not answer "pin/add/..."` now appends the daemon's peer count with a reading
+(0 = not connected to the network; under 10 = check port 4001; otherwise the content most
+likely has no reachable provider) and the IPFS job queue depth. Only computed when the
+rate-limited warning actually fires.
+
+### Installer: the operator tools' RPC calls are allowed
+
+With no `rpcallow` lines the node refuses every RPC method, and the installer wrote none. So
+on an installer-built node `DigiAssetWindows-cli syncstate` and `shutdown` were refused — which
+is how `make-snapshot.ps1` failed with "did not shut down cleanly within 60s". The installer
+(`setup-digiasset.ps1` 2.27.0) now adds `rpcallow<method>=1` for
+`version`, `syncstate`, `getnodestats`, `getipfscount` and `shutdown`, to new configs and to
+existing ones that lack them. An explicit `=0` is left alone. RPC stays loopback-only and
+authenticated. **Existing nodes need the installer re-run (or those lines added) and a node
+restart.**
+
+### monitor-node.ps1 1.3.0
+
+New checks: DigiByte height **and block hash** against digiexplorer.info / chainz (a node on a
+stale fork shows as FAIL even while reporting "synced 100%"); DigiByte version (older than
+9.26.4 stalls on the post-split Groestl blocks) and peer count; the DigiAsset node's height
+behind DigiByte and its state, with a **stuck** flag in `-Watch` mode when the height stops
+moving for 10 minutes; IPFS peers, Desktop version, bitswap blocks served; the IPFS job queue;
+the pool's permanent list itself (a 502 there is the outage above); and a 10-CID sample of that
+list checked with `pin/ls` to show whether pinning is keeping up.
+
+### Snapshot scripts
+
+`make-snapshot.ps1` 2.4.1 / `publish-snapshot.ps1` 1.5.0: wait for DigiByte and the node to
+answer RPC after restarts (`-StartWaitSec`, default 600) and up to `-StopWaitSec` (default 600,
+was 60) for a clean node exit; keep the CLI's output and put it in the error when shutdown is
+refused. `syncstate` has no `height` field (it returns `count`/`sync`), so the chain.db height
+never parsed and was always published as 0 — it now comes from `getnodestats.syncHeight`.
+
+### Also in this release — pool federation: tooling, and the reverse-proxy bug blocking it
 
 No binary change. Investigating whether two pools can find each other on-chain turned up a
 deployment bug that made it impossible, plus a script to prove the path end to end.
 
-### /peer/* was 404 on the live pool — federation could never have worked
+#### /peer/* was 404 on the live pool — federation could never have worked
 
 Pool-to-pool discovery is fully implemented: a pool announces itself in a `DGSP1<url>`
 OP_RETURN (weekly-gated), scans the chain for other pools, keeps discovered ones in an
@@ -50,7 +113,7 @@ the operator's back.
 
 **Existing pool boxes need `setup-caddy.ps1` re-run once** before federation will work.
 
-### pool/deploy/verify-federation.ps1
+#### pool/deploy/verify-federation.ps1
 
 `verify-peers.ps1` already checks that two pools which know about each other can talk. This
 checks the layer beneath: that they can find each other with **no shared config**, which is
@@ -76,7 +139,7 @@ Reading `digibyte.conf` now degrades instead of throwing: the installer ACLs it 
 SYSTEM + Administrators, so a non-elevated run got an unhandled `UnauthorizedAccessException`.
 It now says to re-run as Administrator and skips only the on-chain phases.
 
-### Known gap: nodes are not part of federation
+#### Known gap: nodes are not part of federation
 
 Worth recording, because it is the difference between what exists and the goal. Pools discover
 each other; **nodes do not**. A node's pool is one config line (`psp<N>server`), there is no

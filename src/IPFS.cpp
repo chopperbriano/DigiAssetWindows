@@ -337,6 +337,35 @@ void IPFS::_heartbeatIfIdle() const {
     }
 }
 
+/**
+ * What a bare "did not answer" can't say: whether the daemon is cut off from the
+ * network or the content simply has no provider, and how far the queue has backed
+ * up behind it. The two look identical from a single timeout but need opposite
+ * fixes (check 4001 / connectivity vs. wait for the content's owner to come back).
+ * Only called when a timeout warning is actually emitted (rate-limited), and every
+ * probe here is short and failure-tolerant so it can never make things worse.
+ */
+string IPFS::_timeoutContext() const {
+    string peers = "peers: unknown";
+    try {
+        string reply = CurlHandler::post(_nodePrefix + "swarm/peers", {}, 5000);
+        size_t count = 0;
+        for (size_t pos = reply.find("\"Peer\""); pos != string::npos; pos = reply.find("\"Peer\"", pos + 6)) count++;
+        peers = "peers: " + to_string(count);
+        if (count == 0) peers += " - the daemon is not connected to the IPFS network, so nothing can be fetched";
+        else if (count < 10) peers += " - very few, check that port 4001 is reachable";
+        else peers += " - connected, so the content most likely has no reachable provider";
+    } catch (...) {
+        peers = "peers: daemon did not answer swarm/peers either";
+    }
+    string queue;
+    try {
+        Database* db = AppMain::GetInstance()->getDatabaseIfSet();
+        if (db) queue = ", IPFS jobs queued: " + to_string(db->getIPFSJobCount());
+    } catch (...) {}
+    return peers + queue;
+}
+
 string IPFS::_command(const string& command, const map<string, string>& data, unsigned int timeout, const string& outputPath) const {
     string url = _nodePrefix + command;
     if (timeout == 0) timeout = _timeoutCommand * 1000; //never wait forever - see _timeoutCommand
@@ -353,7 +382,7 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
         if (!stopRequested() && _shouldWarn(_lastTimeoutWarning)) {
             Log::GetInstance()->addMessage(
                     "IPFS node did not answer \"" + command + "\" within " + to_string(timeout / 1000) +
-                            " seconds.  Raise ipfstimeoutcommand if this is normal for your node",
+                            " seconds (" + _timeoutContext() + ").  Raise ipfstimeoutcommand if this is normal for your node",
                     Log::WARNING);
         }
         //A timeout is NOT proof the daemon is down - a legitimate pin is allowed
