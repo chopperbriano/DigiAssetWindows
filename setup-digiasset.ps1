@@ -95,7 +95,11 @@ param(
     # -EncryptWallet: skip the yes/no and go straight to asking for a passphrase.
     # An interactive install already offers encryption up front (see
     # Get-InstallAnswers), so this only pre-answers that question.
-    [switch]$EncryptWallet
+    [switch]$EncryptWallet,
+    # -SkipAutologon: do not require Windows auto-login. Without it the apps only
+    # start when someone logs in, so a reboot (Windows Update!) leaves the node
+    # down until then. Only for machines where policy forbids auto-login.
+    [switch]$SkipAutologon
 )
 
 $ErrorActionPreference = 'Stop'
@@ -104,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.28.0'
+$SCRIPT_VERSION = '2.29.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -252,14 +256,14 @@ function Test-Newer($latest, $current) {
 }
 
 function Read-State {
-    # Always return an object with all four fields present, so Service mode can
+    # Always return an object with all fields present, so Service mode can
     # assign to them even if an older/partial state file is on disk (assigning
     # to a missing property of a PSCustomObject throws in PowerShell 5.1).
-    $d = @{ digibyte = ''; kubo = ''; digiasset = ''; script = '' }
+    $d = @{ digibyte = ''; kubo = ''; digiasset = ''; script = ''; user = ''; startOnLogon = '' }
     if (Test-Path $StateFile) {
         try {
             $j = Get-Content $StateFile -Raw | ConvertFrom-Json
-            foreach ($k in @('digibyte','kubo','digiasset','script')) {
+            foreach ($k in @('digibyte','kubo','digiasset','script','user','startOnLogon')) {
                 if (($j.PSObject.Properties.Name -contains $k) -and $j.$k) { $d[$k] = [string]$j.$k }
             }
         } catch {}
@@ -341,13 +345,13 @@ function Get-LocalIPv4 {
 
 # Visible logon task that only starts the node if it isn't already running
 # (so a manual start + the logon task can't produce two windows).
-function Register-GuardedLogonTask($name, $exe, $workdir, $procName, $arguments = '') {
+function Register-GuardedLogonTask($name, $exe, $workdir, $procName, $arguments = '', $user = '') {
     $argPart = ''
     if ($arguments) { $argPart = " -ArgumentList '$arguments'" }   # arg must be space-free (no quotes)
     $guard = "if (-not (Get-Process '$procName' -ErrorAction SilentlyContinue)) { Start-Process -FilePath '$exe' -WorkingDirectory '$workdir'$argPart }"
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$guard`""
     $t = New-ScheduledTaskTrigger -AtLogOn
-    $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $u = if ($user) { $user } else { [Security.Principal.WindowsIdentity]::GetCurrent().Name }
     $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
@@ -356,11 +360,11 @@ function Register-GuardedLogonTask($name, $exe, $workdir, $procName, $arguments 
 # The node's logon task runs THIS script in -Mode LaunchNode, which waits for
 # IPFS + DigiByte to be ready and then (re)starts the node - so the node never
 # races its dependencies at login.
-function Register-NodeLaunchTask {
+function Register-NodeLaunchTask($user = '') {
     $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$InstalledScript`" -Mode LaunchNode -DigiByteDir `"$DigiByteDir`" -DigiAssetDir `"$DigiAssetDir`""
     $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
     $t = New-ScheduledTaskTrigger -AtLogOn
-    $u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $u = if ($user) { $user } else { [Security.Principal.WindowsIdentity]::GetCurrent().Name }
     $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $TaskNode -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
@@ -379,6 +383,126 @@ function Register-MaintenanceTask {
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Hours 2)
     Register-ScheduledTask -TaskName $TaskMaint -Action $a -Trigger $tStart,$tEvery -Principal $p -Settings $s -Force | Out-Null
+}
+
+# --- Auto-login (Autologon) ---------------------------------------------------
+# DigiByte-Qt, IPFS Desktop and the node are desktop apps started by LOGON tasks,
+# so after a reboot (Windows Update does this unattended) nothing runs until
+# someone logs in. Windows auto-login closes that gap. Sysinternals Autologon is
+# the supported way to turn it on: it stores the password as an encrypted LSA
+# secret, where setting DefaultPassword by hand would leave it in plain text in
+# the registry - so this script only CHECKS the registry and never writes it.
+$WinlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+$AutologonUrl = 'https://live.sysinternals.com/Autologon64.exe'
+
+# Returns @{ Enabled; User; Problem }. Enabled only when it will actually log the
+# node's user in: AutoAdminLogon=1, a user name, no AutoLogonCount about to run
+# out, and (if known) the same account the logon tasks belong to.
+function Get-AutologonStatus($expectedUser = '') {
+    $w = $null
+    try { $w = Get-ItemProperty -Path $WinlogonKey -ErrorAction Stop } catch {}
+    $on = $w -and ("$($w.AutoAdminLogon)" -eq '1')
+    $user = if ($w -and $w.DefaultUserName) {
+        if ($w.DefaultDomainName -and "$($w.DefaultUserName)" -notmatch '[\\@]') { "$($w.DefaultDomainName)\$($w.DefaultUserName)" } else { "$($w.DefaultUserName)" }
+    } else { '' }
+    $problem = ''
+    if (-not $on) {
+        $problem = 'Windows auto-login is OFF - after a reboot nothing starts until someone logs in.'
+        # Windows 11 "only allow Windows Hello sign-in" hides/blocks password auto-login.
+        try {
+            $pl = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device' -ErrorAction Stop
+            if ("$($pl.DevicePasswordLessBuildVersion)" -eq '2') {
+                $problem += ' Turn OFF "For improved security, only allow Windows Hello sign-in" (Settings > Accounts > Sign-in options) first, or auto-login cannot work.'
+            }
+        } catch {}
+    } elseif (-not $user) {
+        $problem = 'auto-login is on but no user name is set (DefaultUserName) - it will not log anyone in.'
+    } elseif ($w.PSObject.Properties.Name -contains 'AutoLogonCount') {
+        $problem = "auto-login is limited to $($w.AutoLogonCount) more logon(s) (AutoLogonCount) and then turns itself off. Re-run Autologon to make it permanent."
+    } elseif ($expectedUser) {
+        # Compare the bare account names - DOMAIN\user vs user vs MicrosoftAccount\email.
+        $bare = { param($s) ("$s" -split '\\')[-1].ToLower() }
+        if ((& $bare $user) -ne (& $bare $expectedUser)) {
+            $problem = "auto-login signs in '$user', but the node's start-up tasks belong to '$expectedUser' - nothing would start. Set Autologon to '$expectedUser'."
+        }
+    }
+    return @{ Enabled = ($on -and $user -and -not $problem); User = $user; Problem = $problem }
+}
+
+# Download Sysinternals Autologon, refuse it unless it carries a valid Microsoft
+# signature, then open it for the user (they type their own password into it).
+# Returns $true if Autologon was launched and closed.
+function Start-AutologonTool {
+    $exe = Join-Path $Tmp 'Autologon64.exe'
+    if (-not (Get-File $AutologonUrl $exe 2)) { Write-Host "   Could not download Autologon from $AutologonUrl" -ForegroundColor Yellow; return $false }
+    $sig = Get-AuthenticodeSignature -FilePath $exe
+    if ($sig.Status -ne 'Valid' -or "$($sig.SignerCertificate.Subject)" -notmatch 'O=Microsoft Corporation') {
+        Remove-Item $exe -Force -ErrorAction SilentlyContinue
+        Write-Host "   The downloaded Autologon is not validly signed by Microsoft ($($sig.Status)) - not running it." -ForegroundColor Red
+        return $false
+    }
+    Write-Host '   Opening Autologon. Check the Username + Domain it shows are YOUR account,' -ForegroundColor White
+    Write-Host '   type your Windows password, click ENABLE, then close it.' -ForegroundColor White
+    Start-Process -FilePath $exe -ArgumentList '-accepteula' -Wait
+    return $true
+}
+
+# Up-front install question: auto-login is required for an always-on node. Loops
+# until it is on, the user explicitly types SKIP, or -SkipAutologon was passed.
+function Request-Autologon {
+    if ($SkipAutologon) { return }
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $st = Get-AutologonStatus $me
+    if ($st.Enabled) { Write-Host "2) Auto-login: already on for $($st.User) - good." -ForegroundColor Green; return }
+    Write-Host ''
+    Write-Host '2) Windows auto-login (REQUIRED for an always-on node)' -ForegroundColor White
+    Write-Host '   The wallet, IPFS and the node start when you LOG IN. Windows Update reboots on its' -ForegroundColor Gray
+    Write-Host '   own, and without auto-login the node then stays DOWN until someone signs in -' -ForegroundColor Gray
+    Write-Host '   no hosting, no pool payouts. Microsoft''s free Autologon tool fixes that; your' -ForegroundColor Gray
+    Write-Host '   password is stored encrypted by Windows, not by this script.' -ForegroundColor Gray
+    Write-Host "   Now: $($st.Problem)" -ForegroundColor Yellow
+    for ($i = 0; $i -lt 3; $i++) {
+        $a = "$(Read-Host '   Press ENTER to open Autologon now (or type SKIP)')".Trim()
+        if ($a -match '^skip$') {
+            Write-Host '   Skipped. The node will NOT come back after a reboot until someone logs in.' -ForegroundColor Yellow
+            Write-Host '   The maintenance task will keep warning about this. Re-run the installer to set it up.' -ForegroundColor Yellow
+            Log 'install: operator skipped Windows auto-login.' 'WARN'
+            return
+        }
+        if (-not (Start-AutologonTool)) { break }
+        $st = Get-AutologonStatus $me
+        if ($st.Enabled) { Write-Host "   Auto-login is ON for $($st.User)." -ForegroundColor Green; Log "install: auto-login enabled for $($st.User)." 'OK'; return }
+        Write-Host "   Still not set: $($st.Problem)" -ForegroundColor Yellow
+    }
+    Write-Host '   Auto-login is still not on. Set it up any time with Autologon:' -ForegroundColor Yellow
+    Write-Host '     https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Green
+    Log "install: auto-login not configured ($($st.Problem))" 'WARN'
+}
+
+# Maintenance: make sure everything that starts the stack at boot/logon exists
+# and is enabled. Disabled tasks are re-enabled; missing logon tasks are recreated
+# for the user recorded at install (a SYSTEM task has no other way to know who
+# that is). Returns a list of problems it could not fix.
+function Repair-StartupTasks($state) {
+    $left = @()
+    $want = @($TaskMaint)
+    if ("$($state.startOnLogon)" -ne 'False') { $want += @($TaskWallet, $TaskNode) }
+    foreach ($name in $want) {
+        $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        if ($task -and $task.State -eq 'Disabled') {
+            try { Enable-ScheduledTask -TaskName $name | Out-Null; Log "start-up task '$name' was disabled - re-enabled." 'WARN' } catch { $left += "could not re-enable start-up task '$name': $($_.Exception.Message)" }
+            continue
+        }
+        if ($task) { continue }
+        if ($name -eq $TaskMaint) { continue }   # we are running from it; nothing to repair
+        if (-not $state.user) { $left += "start-up task '$name' is missing - re-run the installer to recreate it."; continue }
+        try {
+            if ($name -eq $TaskNode) { Register-NodeLaunchTask $state.user }
+            else { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData -conf=$DgbConf" $state.user }
+            Log "start-up task '$name' was missing - recreated for $($state.user)." 'WARN'
+        } catch { $left += "could not recreate start-up task '$name': $($_.Exception.Message)" }
+    }
+    return $left
 }
 
 function Open-Port($name, $proto, $port) {
@@ -655,10 +779,12 @@ function Ensure-DigiByteWallet {
 # genuinely the user's is collected here, in one block, and nothing after this point
 # stops to ask anything.
 #
-# Only two things qualify. The payout address, because it is their money and they may
-# already have a wallet - though ENTER accepts one created on this PC, which is right
-# for most people. And wallet encryption, because a passphrase they forget destroys
-# the earnings with no recovery, so it cannot be defaulted either way.
+# Only three things qualify. The payout address, because it is their money and they
+# may already have a wallet - though ENTER accepts one created on this PC, which is
+# right for most people. Windows auto-login, because it needs their Windows password
+# (typed into Microsoft's Autologon, never into this script) and without it the node
+# stays down after every reboot. And wallet encryption, because a passphrase they
+# forget destroys the earnings with no recovery, so it cannot be defaulted either way.
 #
 # Everything else stays automatic: the pool URL default is right for anyone not
 # running their own pool, and full-vs-lean is decided by measuring free disk, which
@@ -696,10 +822,13 @@ function Get-InstallAnswers {
         Log "  payout address supplied on the command line: $script:PayoutAddress"
     }
 
-    # --- 2. Wallet encryption -----------------------------------------------
+    # --- 2. Auto-login (so the node survives a reboot) ------------------------
+    Request-Autologon
+
+    # --- 3. Wallet encryption ----------------------------------------------
     if ($NoEncryptPrompt) { return }
     Write-Host ''
-    Write-Host '2) Encrypt the DigiByte wallet on this PC?' -ForegroundColor White
+    Write-Host '3) Encrypt the DigiByte wallet on this PC?' -ForegroundColor White
     Write-Host '   A passphrase is then needed to SPEND earnings, so someone with access to this PC' -ForegroundColor Gray
     Write-Host '   cannot drain it. RECEIVING payouts still works normally either way.' -ForegroundColor Gray
     Write-Host '   WRITE THE PASSPHRASE DOWN. If you lose it the coins are GONE - there is no reset,' -ForegroundColor Yellow
@@ -1958,6 +2087,16 @@ function Invoke-Install {
     $state.kubo      = "$ipfsVer"   # IPFS Desktop version (field name kept for compatibility)
     $state.digiasset = (Get-DigiAssetLatestTag)
     $state.script    = $SCRIPT_VERSION
+    # An always-on node must not sleep: asleep, it is as down as after a reboot with
+    # no auto-login. Plugged-in (AC) sleep + hibernate only; battery is left alone.
+    try {
+        powercfg /change standby-timeout-ac 0 | Out-Null
+        powercfg /change hibernate-timeout-ac 0 | Out-Null
+        Log '  power: set to never sleep while plugged in (always-on node).' 'OK'
+    } catch { Log "  (could not change sleep settings: $($_.Exception.Message))" 'WARN' }
+    # Who the logon tasks run as, so the SYSTEM maintenance task can recreate them.
+    $state.user         = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $state.startOnLogon = "$(-not $NoStartOnLogon)"
     Write-State $state
     Register-MaintenanceTask
     Log "  maintenance task '$TaskMaint' registered (boot + every 6h)." 'OK'
@@ -2022,13 +2161,18 @@ function Invoke-Install {
         Write-Host '  * They start automatically every time you LOG IN.' -ForegroundColor White
     }
     Write-Host ''
-    Write-Host 'RUN IT UNATTENDED (recommended for an always-on node):' -ForegroundColor Cyan
-    Write-Host '  These are desktop apps, so they run while you are LOGGED IN. To have an always-on' -ForegroundColor White
-    Write-Host '  node come back up after a reboot with nobody at the keyboard, set the PC to auto-' -ForegroundColor White
-    Write-Host '  login using Microsoft Sysinternals Autologon (free, official):' -ForegroundColor White
-    Write-Host '     https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Green
-    Write-Host '  Run it once, enter your Windows username + password, and every boot auto-logs-in and' -ForegroundColor White
-    Write-Host '  launches the apps for you.' -ForegroundColor White
+    $al = Get-AutologonStatus ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+    if ($al.Enabled) {
+        Write-Host 'AFTER A REBOOT:' -ForegroundColor Cyan
+        Write-Host "  * Windows auto-logs in as $($al.User) and everything starts on its own." -ForegroundColor White
+    } else {
+        Write-Host 'ACTION NEEDED - THE NODE WILL NOT SURVIVE A REBOOT:' -ForegroundColor Red
+        Write-Host "  $($al.Problem)" -ForegroundColor Yellow
+        Write-Host '  These are desktop apps, so they run while you are LOGGED IN. Windows Update reboots' -ForegroundColor White
+        Write-Host '  on its own; set up auto-login with Microsoft Sysinternals Autologon (free, official):' -ForegroundColor White
+        Write-Host '     https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Green
+        Write-Host '  Run it once, enter your Windows password, click Enable. (Or re-run this installer.)' -ForegroundColor White
+    }
     Write-Host ''
     Write-Host 'WHAT HAPPENS NOW:' -ForegroundColor Cyan
     Write-Host '  * DigiByte is syncing the blockchain (hours the first time) - watch it in the wallet.' -ForegroundColor White
@@ -2192,6 +2336,16 @@ function Invoke-Service {
     # tools. Config first, so a node restarted by the update below picks it up.
     try { Update-NodeToolRpc } catch { Log "config.cfg top-up skipped: $($_.Exception.Message)" 'WARN' }
     Update-NodeTools
+
+    # Start-up after reboot: logon tasks present + enabled, and auto-login on for
+    # the user they belong to. A missing task is a real fault (alert); auto-login
+    # off is the operator's call, so it is a warning in every run's log.
+    $problems += @(Repair-StartupTasks $state)
+    if ("$($state.startOnLogon)" -ne 'False') {
+        $al = Get-AutologonStatus $state.user
+        if ($al.Enabled) { Log "auto-login: on ($($al.User))." 'OK' }
+        else { Log "auto-login: $($al.Problem) Set it up with Sysinternals Autologon or re-run the installer." 'WARN' }
+    }
 
     # --- 3. Binary updates. Applied now; the GUI apps pick them up at the
     #        next login/reboot (with Autologon that's automatic). ------------

@@ -22,7 +22,7 @@ param(
     [int]$Every = 15
 )
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.3.0'
+$ScriptVersion = '1.4.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -302,6 +302,34 @@ function Show-Status {
     $payoutSet = [bool]$payout
     if ($payoutSet) { Line "Payout address" "OK" $payout }
     else { Line "Payout address" "WARN" "not set in config.cfg"; $issues += "No payout address set - you won't be paid. Set psp2payout in config.cfg." }
+
+    # --- Survives a reboot? Start-up tasks + Windows auto-login + sleep ---
+    # The apps start from LOGON tasks, so an unattended reboot (Windows Update)
+    # only brings the node back if Windows logs in by itself.
+    $tasks = @('DigiStampWallet','DigiStampNode','DigiStampMaintenance')
+    $bad = @($tasks | Where-Object { $t = Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue; -not $t -or $t.State -eq 'Disabled' })
+    $wl = $null; try { $wl = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction Stop } catch {}
+    $autoOn = $wl -and "$($wl.AutoAdminLogon)" -eq '1' -and $wl.DefaultUserName
+    if ($bad.Count -gt 0) {
+        Line "Auto-start" "FAIL" ("start-up task(s) missing or disabled: {0}" -f ($bad -join ', '))
+        $issues += "Start-up task(s) $($bad -join ', ') missing/disabled - the maintenance task repairs this, or re-run setup-digiasset.ps1."
+    } elseif (-not $autoOn) {
+        Line "Auto-start" "WARN" "tasks OK, but Windows auto-login is OFF - after a reboot nothing starts until someone logs in"
+        $issues += "Turn on Windows auto-login with Sysinternals Autologon (https://learn.microsoft.com/sysinternals/downloads/autologon) so the node comes back after Windows Update reboots."
+    } elseif ($wl.PSObject.Properties.Name -contains 'AutoLogonCount') {
+        Line "Auto-start" "WARN" "auto-login is limited to $($wl.AutoLogonCount) more logon(s) - re-run Autologon to make it permanent"
+    } else {
+        Line "Auto-start" "OK" "start-up tasks OK, auto-login as $($wl.DefaultUserName)"
+    }
+    # Sleep on AC power stops everything just as surely as a reboot without auto-login.
+    try {
+        $sleep = powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>$null | Select-String 'Current AC Power Setting Index:\s*0x([0-9a-f]+)'
+        if ($sleep) {
+            $mins = [Convert]::ToInt32($sleep.Matches[0].Groups[1].Value, 16) / 60
+            if ($mins -gt 0) { Line "Sleep (plugged in)" "WARN" "PC sleeps after $mins min idle - the node stops while asleep"; $issues += "Set 'When plugged in, put the device to sleep after' to Never (Settings > System > Power), or run: powercfg /change standby-timeout-ac 0" }
+            else { Line "Sleep (plugged in)" "OK" "never" }
+        }
+    } catch {}
 
     Write-Host ""
     if ($issues.Count -eq 0) { Write-Host "Everything looks healthy. Leave it running." -ForegroundColor Green }

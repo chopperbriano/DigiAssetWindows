@@ -20,9 +20,33 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — existing nodes get the new defaults too (setup-digiasset.ps1 2.28.0)
+## Unreleased — the node survives a reboot, and existing nodes get the new defaults (setup-digiasset.ps1 2.29.0)
 
 No binary change; reaches nodes through the maintenance task's self-update from master.
+
+### Windows auto-login is required, checked, and kept working
+
+The wallet, IPFS Desktop and the node are desktop apps started by **logon** tasks, so after an
+unattended reboot (Windows Update) nothing ran until someone signed in. The installer only
+mentioned Sysinternals Autologon in its closing text and never checked it.
+
+- **Install asks for it up front** (question 2 of 3). If `Winlogon\AutoAdminLogon` is not on for
+  the installing user, it downloads Sysinternals Autologon, refuses to run it unless it carries a
+  valid Microsoft signature, opens it for the user to type their own password, and re-checks. The
+  password never passes through this script; Autologon stores it as an encrypted LSA secret.
+  Typing `SKIP` or passing `-SkipAutologon` continues without it, for machines where policy
+  forbids auto-login — logged, and the closing summary then says in red that the node will not
+  survive a reboot.
+- **The check catches the quiet failures:** auto-login on for a *different* account than the
+  start-up tasks belong to, an `AutoLogonCount` that will switch it off after N logons, and
+  Windows 11's "only allow Windows Hello sign-in", which blocks password auto-login.
+- **The installer sets plugged-in sleep and hibernate to Never** — asleep, a node is as down as
+  after a reboot. Battery settings are untouched.
+- **Maintenance repairs start-up every run:** disabled start-up tasks are re-enabled, and missing
+  logon tasks are recreated for the user now recorded in `state.json` at install. Auto-login
+  being off is logged as a warning on every run.
+- **`monitor-node.ps1` 1.4.0** adds *Auto-start* (tasks present and enabled, auto-login on and
+  permanent) and *Sleep (plugged in)*.
 
 win.140's installer only wrote the tool RPC allow-list into configs it created or was re-run
 over, and only installs dropped the companion tools. The maintenance task (SYSTEM, every 6h)
