@@ -96,9 +96,9 @@ param(
     # An interactive install already offers encryption up front (see
     # Get-InstallAnswers), so this only pre-answers that question.
     [switch]$EncryptWallet,
-    # -SkipAutologon: do not require Windows auto-login. Without it the apps only
-    # start when someone logs in, so a reboot (Windows Update!) leaves the node
-    # down until then. Only for machines where policy forbids auto-login.
+    # -SkipAutologon: don't offer Windows auto-login during install (it is only ever
+    # recommended, never forced). Without it the apps start only when someone logs
+    # in, so a reboot (Windows Update!) leaves the node down until then.
     [switch]$SkipAutologon
 )
 
@@ -108,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.29.0'
+$SCRIPT_VERSION = '2.30.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -447,35 +447,33 @@ function Start-AutologonTool {
     return $true
 }
 
-# Up-front install question: auto-login is required for an always-on node. Loops
-# until it is on, the user explicitly types SKIP, or -SkipAutologon was passed.
+# Up-front install question: RECOMMEND auto-login and offer to open Autologon.
+# Never blocks - ENTER opens it, anything else carries on. The closing summary,
+# monitor-node.ps1 and every maintenance run keep reminding until it is on.
 function Request-Autologon {
     if ($SkipAutologon) { return }
     $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $st = Get-AutologonStatus $me
     if ($st.Enabled) { Write-Host "2) Auto-login: already on for $($st.User) - good." -ForegroundColor Green; return }
     Write-Host ''
-    Write-Host '2) Windows auto-login (REQUIRED for an always-on node)' -ForegroundColor White
+    Write-Host '2) Windows auto-login (recommended for an always-on node)' -ForegroundColor White
     Write-Host '   The wallet, IPFS and the node start when you LOG IN. Windows Update reboots on its' -ForegroundColor Gray
     Write-Host '   own, and without auto-login the node then stays DOWN until someone signs in -' -ForegroundColor Gray
-    Write-Host '   no hosting, no pool payouts. Microsoft''s free Autologon tool fixes that; your' -ForegroundColor Gray
-    Write-Host '   password is stored encrypted by Windows, not by this script.' -ForegroundColor Gray
+    Write-Host '   no hosting, no pool payouts. Microsoft''s free Sysinternals Autologon fixes that;' -ForegroundColor Gray
+    Write-Host '   your password is stored encrypted by Windows, not by this script.' -ForegroundColor Gray
     Write-Host "   Now: $($st.Problem)" -ForegroundColor Yellow
-    for ($i = 0; $i -lt 3; $i++) {
-        $a = "$(Read-Host '   Press ENTER to open Autologon now (or type SKIP)')".Trim()
-        if ($a -match '^skip$') {
-            Write-Host '   Skipped. The node will NOT come back after a reboot until someone logs in.' -ForegroundColor Yellow
-            Write-Host '   The maintenance task will keep warning about this. Re-run the installer to set it up.' -ForegroundColor Yellow
-            Log 'install: operator skipped Windows auto-login.' 'WARN'
-            return
-        }
-        if (-not (Start-AutologonTool)) { break }
+    $a = "$(Read-Host '   Press ENTER to open Autologon now, or type N to do it later')".Trim()
+    if ($a -match '^[Nn]') {
+        Write-Host '   OK - you can set it up any time: https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Gray
+        Log 'install: auto-login not set up (operator chose later).' 'WARN'
+        return
+    }
+    if (Start-AutologonTool) {
         $st = Get-AutologonStatus $me
         if ($st.Enabled) { Write-Host "   Auto-login is ON for $($st.User)." -ForegroundColor Green; Log "install: auto-login enabled for $($st.User)." 'OK'; return }
-        Write-Host "   Still not set: $($st.Problem)" -ForegroundColor Yellow
+        Write-Host "   Not on yet: $($st.Problem)" -ForegroundColor Yellow
     }
-    Write-Host '   Auto-login is still not on. Set it up any time with Autologon:' -ForegroundColor Yellow
-    Write-Host '     https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Green
+    Write-Host '   Set it up any time with Autologon: https://learn.microsoft.com/sysinternals/downloads/autologon' -ForegroundColor Gray
     Log "install: auto-login not configured ($($st.Problem))" 'WARN'
 }
 
@@ -1052,11 +1050,9 @@ function Start-DigiByteWallet {
     if (-not (Test-ProcRunning 'digibyte-qt')) {
         # If the Service-mode updater left the headless daemon running, stop it
         # first so the GUI can take the datadir without a lock conflict (they share
-        # one datadir; only one may hold it).
-        if (Test-ProcRunning 'digibyted') {
-            Get-Process digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            for ($w = 0; $w -lt 15 -and (Test-ProcRunning 'digibyted'); $w++) { Start-Sleep -Seconds 1 }
-        }
+        # one datadir; only one may hold it). Via RPC `stop` - a hard kill can
+        # corrupt chainstate and force a multi-hour reindex; kill is the fallback.
+        if (Test-ProcRunning 'digibyted') { Stop-DigiByteGracefully }
         Start-Process $qt -ArgumentList "-datadir=$DgbData -conf=$DgbConf"   # neither path has spaces
     }
     return $true
@@ -2012,7 +2008,10 @@ function Invoke-Install {
 
     # 3. DigiAsset node ------------------------------------------------------
     Step 3 'Installing DigiAsset for Windows (latest release)...'
-    Install-DigiAsset
+    # A re-run on a live box: pause the login supervisor so it cannot relaunch the
+    # old node exe while it is being replaced.
+    Set-SupervisorPause 'installer: replacing the node binaries'
+    try { Install-DigiAsset } finally { Clear-SupervisorPause }
     # The node depends on IPFS + DigiByte RPC - wait for them before launching so
     # it doesn't FATAL on an IPFS timeout. (The logon task, registered in step 5,
     # does the same wait every login.) Registered/launched after step 5 copies
@@ -2166,7 +2165,7 @@ function Invoke-Install {
         Write-Host 'AFTER A REBOOT:' -ForegroundColor Cyan
         Write-Host "  * Windows auto-logs in as $($al.User) and everything starts on its own." -ForegroundColor White
     } else {
-        Write-Host 'ACTION NEEDED - THE NODE WILL NOT SURVIVE A REBOOT:' -ForegroundColor Red
+        Write-Host 'RECOMMENDED - SO THE NODE COMES BACK AFTER A REBOOT:' -ForegroundColor Yellow
         Write-Host "  $($al.Problem)" -ForegroundColor Yellow
         Write-Host '  These are desktop apps, so they run while you are LOGGED IN. Windows Update reboots' -ForegroundColor White
         Write-Host '  on its own; set up auto-login with Microsoft Sysinternals Autologon (free, official):' -ForegroundColor White
@@ -2257,6 +2256,48 @@ function Invoke-Install {
 # ---------------------------------------------------------------------------
 #  LAUNCH-NODE MODE  (run by the node's logon task: wait for deps, supervise)
 # ---------------------------------------------------------------------------
+# Pause file for the login supervisor below. Anything that stops DigiByte or the
+# node ON PURPOSE (the maintenance updater swapping binaries, make-snapshot.ps1
+# archiving chain.db) creates it first and deletes it after, so the supervisor does
+# not restart what was just stopped - a relaunched node mid-archive snapshots a
+# live chain.db, and a relaunched exe mid-update locks the file being replaced.
+# Older than 6h = left behind by a crashed run; ignored so it can't pause forever.
+$SupervisorPause = Join-Path $DigiAssetDir 'supervisor.pause'
+function Test-SupervisorPaused {
+    if (-not (Test-Path $SupervisorPause)) { return $false }
+    if (((Get-Date) - (Get-Item $SupervisorPause).LastWriteTime).TotalHours -lt 6) { return $true }
+    Remove-Item $SupervisorPause -Force -ErrorAction SilentlyContinue
+    Log 'launch-node: removed a stale supervisor.pause (older than 6h).' 'WARN'
+    return $false
+}
+function Set-SupervisorPause([string]$why) {
+    try { Set-Content -Path $SupervisorPause -Value "$(Get-Date -Format s) $why" -Encoding ASCII } catch {}
+}
+function Clear-SupervisorPause {
+    Remove-Item $SupervisorPause -Force -ErrorAction SilentlyContinue
+}
+
+# The two apps the node depends on. Started at login and restarted if they exit
+# (crash, or closed by accident) - stop-node.ps1 is the way to stop the stack.
+# DigiByte counts as running as either the GUI wallet or the headless daemon the
+# updater may have left; Start-DigiByteWallet swaps the latter for the GUI.
+function Confirm-DependencyApps {
+    if (-not (Test-ProcRunning 'digibyte-qt') -and -not (Test-ProcRunning 'digibyted')) {
+        Log 'launch-node: DigiByte wallet is not running - starting it.' 'WARN'
+        Start-DigiByteWallet | Out-Null
+    } elseif ((Test-ProcRunning 'digibyted') -and -not (Test-ProcRunning 'digibyte-qt')) {
+        # The SYSTEM updater restarts DigiByte headless (it can't open a window in
+        # this session). We ARE the session, so swap back to the visible wallet
+        # now rather than leaving it hidden until the next logon.
+        Log 'launch-node: DigiByte is running headless (after an update) - switching to the wallet window.'
+        Start-DigiByteWallet | Out-Null
+    }
+    if (-not (Test-ProcRunning 'IPFS Desktop')) {
+        Log 'launch-node: IPFS Desktop is not running - starting it.' 'WARN'
+        Start-IpfsDesktop | Out-Null
+    }
+}
+
 function Invoke-LaunchNode {
     Ensure-Dir $LogDir
     Log "----- launch-node (script v$SCRIPT_VERSION) -----"
@@ -2274,17 +2315,32 @@ function Invoke-LaunchNode {
     # it is best-effort here and the elevated installer/maintenance run is what
     # reliably repairs it. Never let a refused rule stop the node from starting.
     try { Add-IpfsFirewallRules } catch { Log "launch-node: firewall pre-authorization skipped: $($_.Exception.Message)" 'WARN' }
-    Start-IpfsDesktop | Out-Null
 
-    # Persistent supervisor: keep the node alive for the whole logon session. The
-    # node's task has no execution-time limit, so we never permanently give up
-    # (the old 8-try loop quit while a freshly-seeded wallet was still verifying
-    # the chain and its RPC wasn't answering, and nothing restarted it after).
-    # The node needs IPFS (:5001) + DigiByte RPC (:14022); a seeded wallet can take
-    # a long time to VERIFY before RPC answers, so we wait patiently the first time,
-    # then (re)start the node whenever it exits, logging PID + uptime each cycle.
+    # Bring the stack up in dependency order: the DigiByte wallet first (slowest -
+    # it loads its block index before RPC answers), then IPFS Desktop, then - once
+    # both answer - the node. The wallet's own logon task usually got there first;
+    # this is the backstop for when it didn't fire or the wallet was closed.
+    if (Test-SupervisorPaused) { Log "launch-node: supervisor paused ($((Get-Content $SupervisorPause -ErrorAction SilentlyContinue) -join ' ')) - waiting for it to clear before starting anything." 'WARN' }
+    while (Test-SupervisorPaused) { Start-Sleep -Seconds 30 }
+    Confirm-DependencyApps
+
+    # Persistent supervisor for the whole logon session: every ~minute make sure
+    # DigiByte, IPFS Desktop and the node are all running, and restart whichever is
+    # not. The node's task has no execution-time limit, so we never permanently
+    # give up (the old 8-try loop quit while a freshly-seeded wallet was still
+    # verifying the chain and its RPC wasn't answering, and nothing restarted it
+    # after). A seeded wallet can take a long time to VERIFY before RPC answers, so
+    # the first node start waits patiently for both dependencies.
     $firstTime = $true
+    $pauseLogged = $false
     while ($true) {
+        if (Test-SupervisorPaused) {
+            if (-not $pauseLogged) { Log "launch-node: supervisor paused ($((Get-Content $SupervisorPause -ErrorAction SilentlyContinue) -join ' ')) - not restarting anything." 'WARN'; $pauseLogged = $true }
+            Start-Sleep -Seconds 30; continue
+        }
+        if ($pauseLogged) { Log 'launch-node: pause cleared - supervising again.' 'OK'; $pauseLogged = $false }
+
+        Confirm-DependencyApps
         if (Test-ProcRunning 'DigiAssetWindows') { Start-Sleep -Seconds 60; continue }
 
         if ($firstTime) {
@@ -2295,6 +2351,7 @@ function Invoke-LaunchNode {
             Ensure-DigiByteWallet   # create/load a wallet so the node has a payout address
             $firstTime = $false
         }
+        if (Test-SupervisorPaused) { continue }   # paused while we waited on deps
 
         $t0 = Get-Date
         Log 'launch-node: starting node...'
@@ -2303,14 +2360,20 @@ function Invoke-LaunchNode {
         $proc = Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($proc) {
             Log "launch-node: node started (PID $($proc.Id))." 'OK'
-            while (Test-ProcRunning 'DigiAssetWindows') { Start-Sleep -Seconds 30 }
+            # While the node runs, keep its dependencies alive too.
+            while (Test-ProcRunning 'DigiAssetWindows') {
+                Start-Sleep -Seconds 30
+                if (-not (Test-SupervisorPaused)) { Confirm-DependencyApps }
+            }
             Log ("launch-node: node exited after {0}s - re-checking deps and restarting." -f [int]((Get-Date)-$t0).TotalSeconds) 'WARN'
         } else {
             Log ("launch-node: node did not stay up ({0}s after launch). Run it in a window to see the error: {1}" -f [int]((Get-Date)-$t0).TotalSeconds, $NodeExe) 'WARN'
         }
 
-        # Backoff + re-verify deps before restarting so a crashing node can't tight-loop.
+        # Backoff + re-verify deps before restarting so a crashing node can't
+        # tight-loop. Skipped while paused - the loop head handles that.
         Start-Sleep -Seconds 20
+        if (Test-SupervisorPaused) { continue }
         Wait-ForIpfs 120 | Out-Null
         Wait-ForDigiByteRpc 300 | Out-Null
     }
@@ -2354,16 +2417,20 @@ function Invoke-Service {
         $latest = Get-DigiByteLatestTag
         if ($latest -and (Test-Newer $latest $state.digibyte)) {
             Log "DigiByte update: $($state.digibyte) -> $latest" 'STEP'
-            Stop-DigiByteGracefully
-            Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
-            $state.digibyte = $latest.TrimStart('v'); Write-State $state
-            # Restart the headless daemon NOW so the node isn't left with no wallet/
-            # RPC until the next logon (a SYSTEM task can't relaunch the GUI into the
-            # user session). digibyted restores RPC immediately; the user-session
-            # task swaps to the GUI wallet at next logon (Start-DigiByteWallet stops
-            # this daemon first, so there's no datadir-lock conflict).
-            Start-DigiByte | Out-Null
-            Log "  DigiByte daemon restarted after update." 'OK'
+            # Pause the login supervisor so it doesn't relaunch the wallet onto the
+            # files being replaced; cleared as soon as DigiByte is back up.
+            Set-SupervisorPause "maintenance: updating DigiByte to $latest"
+            try {
+                Stop-DigiByteGracefully
+                Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
+                $state.digibyte = $latest.TrimStart('v'); Write-State $state
+                # Restart the headless daemon NOW so the node isn't left with no wallet/
+                # RPC (a SYSTEM task can't open a window in the user's session). The
+                # login supervisor swaps it for the GUI wallet once the pause clears
+                # (Start-DigiByteWallet stops this daemon first - no datadir-lock conflict).
+                Start-DigiByte | Out-Null
+                Log "  DigiByte daemon restarted after update." 'OK'
+            } finally { Clear-SupervisorPause }
         }
     } catch { $problems += "DigiByte update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 
@@ -2372,9 +2439,14 @@ function Invoke-Service {
         $latest = Get-DigiAssetLatestTag
         if ($latest -and (Test-Newer $latest $state.digiasset)) {
             Log "DigiAsset update: $($state.digiasset) -> $latest" 'STEP'
-            Install-DigiAsset
-            Update-PoolServer   # no-op unless DigiAssetPoolServer.exe is deployed
-            $state.digiasset = $latest; Write-State $state
+            # Without the pause the supervisor relaunched the OLD exe seconds after
+            # Stop-NodeGracefully, and the swap then failed on the locked file.
+            Set-SupervisorPause "maintenance: updating DigiAsset to $latest"
+            try {
+                Install-DigiAsset
+                Update-PoolServer   # no-op unless DigiAssetPoolServer.exe is deployed
+                $state.digiasset = $latest; Write-State $state
+            } finally { Clear-SupervisorPause }
         }
     } catch { $problems += "DigiAsset update failed: $($_.Exception.Message)"; Log $problems[-1] 'ERROR' }
 

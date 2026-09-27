@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.4.1'
+$ScriptVersion = '2.5.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -390,12 +390,25 @@ function New-Manifest {
 }
 
 # --- Dispatch -------------------------------------------------------------
-switch ($Component) {
-    'digibyte' { New-DigiByteArchive }
-    'chaindb'  { New-ChainDbArchive }
-    'manifest' { New-Manifest }
-    'archives' { New-DigiByteArchive; New-ChainDbArchive }   # both archives, NO manifest
-    default    { New-DigiByteArchive; New-ChainDbArchive; New-Manifest }
+# Pause the node's login supervisor (setup-digiasset.ps1 -Mode LaunchNode) for the
+# whole run. It restarts DigiByte and the node whenever they exit, which would
+# relaunch the node seconds after the clean shutdown below - while chain.db is being
+# archived. It honours this file (ignoring it once it is 6h old, so a crashed run
+# can't pause it forever), and resumes as soon as it is removed.
+$supervisorPause = Join-Path $DigiAssetDir 'supervisor.pause'
+if ($Component -ne 'manifest') {
+    try { Set-Content -Path $supervisorPause -Value "$(Get-Date -Format s) make-snapshot: archiving ($Component)" -Encoding ASCII } catch {}
+}
+try {
+    switch ($Component) {
+        'digibyte' { New-DigiByteArchive }
+        'chaindb'  { New-ChainDbArchive }
+        'manifest' { New-Manifest }
+        'archives' { New-DigiByteArchive; New-ChainDbArchive }   # both archives, NO manifest
+        default    { New-DigiByteArchive; New-ChainDbArchive; New-Manifest }
+    }
+} finally {
+    Remove-Item $supervisorPause -Force -ErrorAction SilentlyContinue
 }
 
 Say "`n===== Done ($Component) =====" 'Green'

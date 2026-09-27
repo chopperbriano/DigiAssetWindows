@@ -20,33 +20,62 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — the node survives a reboot, and existing nodes get the new defaults (setup-digiasset.ps1 2.29.0)
+## Unreleased — the node comes back after a reboot, and existing nodes get the new defaults (setup-digiasset.ps1 2.30.0)
 
 No binary change; reaches nodes through the maintenance task's self-update from master.
 
-### Windows auto-login is required, checked, and kept working
+### At login, all three apps are started, watched and restarted
 
-The wallet, IPFS Desktop and the node are desktop apps started by **logon** tasks, so after an
-unattended reboot (Windows Update) nothing ran until someone signed in. The installer only
-mentioned Sysinternals Autologon in its closing text and never checked it.
+The wallet, IPFS Desktop and the node are desktop apps started by **logon** tasks. The node's
+launcher only supervised the node: IPFS Desktop was started once and never again, and the
+DigiByte wallet was left to its own logon task, so if either exited nothing brought it back.
 
-- **Install asks for it up front** (question 2 of 3). If `Winlogon\AutoAdminLogon` is not on for
-  the installing user, it downloads Sysinternals Autologon, refuses to run it unless it carries a
-  valid Microsoft signature, opens it for the user to type their own password, and re-checks. The
-  password never passes through this script; Autologon stores it as an encrypted LSA secret.
-  Typing `SKIP` or passing `-SkipAutologon` continues without it, for machines where policy
-  forbids auto-login — logged, and the closing summary then says in red that the node will not
-  survive a reboot.
+- The launcher (`-Mode LaunchNode`) now brings the stack up in dependency order — DigiByte
+  wallet, IPFS Desktop, then the node once both answer — and every ~30-60 s restarts whichever
+  of the three is not running, for the whole session. `stop-node.ps1` is how to stop them.
+- If DigiByte is running headless (the SYSTEM updater restarts it that way, since it cannot open
+  a window in the user's session), the launcher swaps it back to the wallet window right away
+  instead of at the next logon. That swap now stops the daemon via RPC `stop`; it used to
+  hard-kill it, which risks a chainstate reindex.
+
+### supervisor.pause — so a restart can't land in the middle of deliberate work
+
+Restarting everything that exits needs an off switch for things that stop the stack on purpose,
+and two of those were already racing the node-only supervisor:
+
+- **make-snapshot.ps1** stops the node and archives `chain.db`; the supervisor relaunched the
+  node about 20 s later, mid-archive, so the published `chain.db` could be taken from a live
+  database. make-snapshot 2.5.0 holds the pause for its whole run.
+- **The maintenance updater** stops the node/DigiByte to swap exes; the supervisor could
+  relaunch the old exe onto the file being replaced, failing the update on a locked file. Both
+  updates, and the installer's node swap, now hold the pause.
+
+`C:\DigiAssetWindows\supervisor.pause` stops the launcher restarting anything; it resumes when
+the file goes. A file older than 6 h is treated as left behind by a crashed run and ignored.
+
+### Windows auto-login: recommended, checked, and reminded
+
+Without auto-login, an unattended reboot (Windows Update) leaves everything down until someone
+signs in. It stays the operator's choice — the installer never blocks on it.
+
+- **Install offers it up front** (question 2 of 3) when `Winlogon\AutoAdminLogon` is not on for
+  the installing user: ENTER downloads Sysinternals Autologon, refuses to run it unless it
+  carries a valid Microsoft signature, opens it for the user to type their own password, and
+  re-checks; `N` carries on. The password never passes through this script — Autologon stores
+  it as an encrypted LSA secret. `-SkipAutologon` suppresses the offer.
 - **The check catches the quiet failures:** auto-login on for a *different* account than the
   start-up tasks belong to, an `AutoLogonCount` that will switch it off after N logons, and
   Windows 11's "only allow Windows Hello sign-in", which blocks password auto-login.
+- **Reminders until it is on:** the closing summary, every maintenance run's log, and
+  monitor-node's *Auto-start* line.
 - **The installer sets plugged-in sleep and hibernate to Never** — asleep, a node is as down as
   after a reboot. Battery settings are untouched.
 - **Maintenance repairs start-up every run:** disabled start-up tasks are re-enabled, and missing
-  logon tasks are recreated for the user now recorded in `state.json` at install. Auto-login
-  being off is logged as a warning on every run.
+  logon tasks are recreated for the user now recorded in `state.json` at install.
 - **`monitor-node.ps1` 1.4.0** adds *Auto-start* (tasks present and enabled, auto-login on and
   permanent) and *Sleep (plugged in)*.
+
+### Existing nodes get the win.140 defaults
 
 win.140's installer only wrote the tool RPC allow-list into configs it created or was re-run
 over, and only installs dropped the companion tools. The maintenance task (SYSTEM, every 6h)
