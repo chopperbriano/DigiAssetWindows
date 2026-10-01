@@ -12,6 +12,7 @@
 #include "AppMain.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"
+#include "DigiDollar.h"
 #include <jsoncpp/json/value.h>
 
 namespace RPC {
@@ -37,7 +38,9 @@ namespace RPC {
             if (params.size() != 1) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
             if (!params[0].isString()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
 
-            string address=params[0].asString();
+            //a DigiDollar address(DD...) is the same output key as its dgb1p form, which is
+            //what holdings are indexed under
+            string address=DigiDollar::normalizeAddress(params[0].asString());
 
             //get desired exchange rates
             Database* db = AppMain::GetInstance()->getDatabase();

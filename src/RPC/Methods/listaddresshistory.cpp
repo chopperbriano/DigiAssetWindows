@@ -11,6 +11,7 @@
 #include "AppMain.h"
 #include "RPC/Response.h"
 #include "RPC/Server.h"
+#include "DigiDollar.h"
 #include <jsoncpp/json/value.h>
 
 namespace RPC {
@@ -29,7 +30,8 @@ namespace RPC {
             //get paramas
             if ( (params.size() < 1) || (params.size()>4) ) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
             if (!params[0].isString()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");
-            string address=params[0].asString();
+            //accept a DigiDollar address(DD...) - history is indexed under its dgb1p form
+            string address=DigiDollar::normalizeAddress(params[0].asString());
             unsigned int minHeight=1;
             if ( (params.size()>1) && (!params[1].isNull()) ) {
                 if (!params[1].isUInt()) throw DigiByteException(RPC_INVALID_PARAMS, "Invalid params");

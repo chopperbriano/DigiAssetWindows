@@ -20,14 +20,14 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — asset sends quote the fee they pay and stop splitting coins; the node comes back after a reboot
+## Unreleased — asset sends quote the fee they pay and stop splitting coins; DigiDollar DD… addresses; the node comes back after a reboot
 
 Two kinds of change here. The **asset wallet fixes** are in the node binary and reach nodes with
 the next release. Everything from *At login, all three apps…* down is in `setup-digiasset.ps1`
 2.30.0 / `make-snapshot.ps1` 2.5.0 / `monitor-node.ps1` 1.4.0 and already reaches nodes through
 the maintenance task's self-update from master.
 
-Both wallet fixes come from mainnet testing of upstream DigiAsset Core `asset_features` 92dae26
+The wallet fixes and DD addresses come from mainnet testing of upstream DigiAsset Core `asset_features` 92dae26
 (PR #26) — a phone wallet round trip of asset 5381 — and apply to this fork unchanged.
 
 ### Asset send dry runs quote the fee the send actually pays
@@ -63,11 +63,41 @@ match, since they would drag those assets into the transaction as change.
   this fork classifies those as DigiDollar oracle commitments and prints only with
   `DGBCORE_DEBUG_SCRIPTS` set.
 
-### Known, not fixed
+### DigiDollar addresses in their DD… form
 
-- DigiDollar outputs are reported under their taproot `dgb1p…` address, not the `DD…` form
-  wallets display. The node uses the address DigiByte Core returns and has no DD-address
-  encoder; adding one needs the DD address specification.
+The same testing found DigiDollar outputs reported only under their taproot `dgb1p…` address,
+while DigiByte wallets show them as `DD…`. The node takes addresses from DigiByte Core's
+`getrawtransaction`, which knows nothing of the DD form.
+
+**The spec**, from DigiByte Core v9.26.5 `src/base58.cpp` (`CDigiDollarAddress`):
+
+    DD address = Base58Check( version (2 bytes) || 32-byte taproot output key )
+    version: mainnet 0x52 0x85 -> "DD…"   testnet 0xb1 0x29 -> "TD…"   regtest 0xa3 0xa4 -> "RD…"
+
+The 32 bytes are the witness program of the P2TR output, the same bytes inside the `dgb1p…`
+address, so the two forms convert losslessly. Only taproot outputs have a DD form. DigiByte
+Core's DigiDollar wallet RPCs list DD balances under the DD form of each DD-holding output.
+
+**In the node** (`DigiDollar::toDigiDollarAddress` / `fromDigiDollarAddress` /
+`normalizeAddress`): a BIP350 bech32m codec plus Base58Check, network taken from the address
+itself (`dgb` ↔ DD, `dgbt` ↔ TD, `dgbrt` ↔ RD).
+
+- **Storage and indexing stay on the `dgb1p…` form** — what the chain and DigiByte Core use,
+  so balances, history and existing callers are unaffected.
+- **`getrawtransaction`** adds `ddAddress` to every output that carries DigiDollar, next to
+  `address`.
+- **`getaddressholdings` and `listaddresshistory`** accept a `DD…` address and look it up as
+  its `dgb1p…` form.
+- **DigiDollar events** (`digiDollarMint` / `digiDollarTransfer` / `digiDollarRedeem`) gain
+  `ddAddresses`: the DD form of each address that received DigiDollar. `addresses` is
+  unchanged.
+
+Tests use vectors computed by a separate implementation (PowerShell / .NET SHA-256) whose
+bech32m and bech32 encoders reproduce the BIP350 and BIP173 reference vectors, including a real
+mainnet DigiDollar output (`dgb1pwrwn938…` ↔ `DD26bf7gt…`), all three network prefixes at both
+ends of the key range, and rejection of non-taproot, mis-checksummed, whitespace-wrapped and
+truncated input. The CLI now links `Base58.cpp` and `crypto/SHA256.cpp`, which `DigiDollar.cpp`
+needs.
 
 ### At login, all three apps are started, watched and restarted
 

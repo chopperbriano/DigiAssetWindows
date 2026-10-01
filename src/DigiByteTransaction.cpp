@@ -933,6 +933,10 @@ Value DigiByteTransaction::toJSON(const Value& original) const {
         for (const auto& ddOutput: _ddOutputs) {
             if (ddOutput.first != output.vout) continue;
             outputObject["digidollar"] = static_cast<Json::UInt64>(ddOutput.second);
+            //the DD... form DigiByte wallets show for this output(address stays the dgb1p form
+            //DigiByte Core reports, which is what everything is indexed under)
+            string ddAddress = DigiDollar::toDigiDollarAddress(output.address);
+            if (!ddAddress.empty()) outputObject["ddAddress"] = ddAddress;
             break;
         }
 

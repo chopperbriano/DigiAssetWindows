@@ -410,3 +410,70 @@ TEST(DigiDollarDatabase, zeroValueOutputsDoNotAppearAsHoldings) {
     EXPECT_EQ(holdings[0].assetIndex, 1u);
     EXPECT_EQ(holdings[0].count, 38439561u);
 }
+
+/*
+ * DigiDollar addresses(DD...).  Spec: DigiByte Core v9.26.5 src/base58.cpp CDigiDollarAddress -
+ * Base58Check(2 byte version || 32 byte taproot key), versions 0x5285 "DD" / 0xb129 "TD" /
+ * 0xa3a4 "RD".  Expected values were computed by a separate implementation(PowerShell, .NET
+ * SHA256) whose bech32m encoder reproduces the BIP350 test vector
+ * bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0, not by the code under test.
+ */
+TEST(DigiDollarAddress, realMainnetOutput) {
+    //output script 5120 70dd32c4...43abfd of mainnet DigiDollar transfer 08daf452...1e3a
+    const std::string taproot = "dgb1pwrwn938vtcrk6nfrlk3u2ek2pyp3ncgd58z4ut7smp6xvtjr407s8hg4wg";
+    const std::string dd = "DD26bf7gtHLHtJmTJS3uMSH1Yu3JJSQYzY8Nh698oSYdRLiSFUhi";
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress(taproot), dd);
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(dd), taproot);
+}
+
+TEST(DigiDollarAddress, networkPrefixes) {
+    //same key on each network: hrp dgb/dgbt/dgbrt <-> DD/TD/RD
+    struct Vector {
+        const char* taproot;
+        const char* dd;
+    };
+    const Vector vectors[] = {
+            {"dgb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqlussds", "DD2AWUfr8ZtuzsbRFim3bSnf1WQGDSYr4dQd9XNF6isHhi5njNTf"},
+            {"dgbt1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq5yalvm", "TD2ELaa1pmnkjdNvuWvnJEGmQXzaTPXNyCnVQEVxGjBHmkoPxFdf"},
+            {"dgbrt1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq64ly68", "RD2Vu23dJSJ1wy6euxhd47PhB6DC6VLrPogNot5EfJE9XpWZcnyc"},
+            //extremes of the key range still land on the right prefixes
+            {"dgb1pqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqu2ymvy", "DD1EthPTbwiE2NCH9nTnB8QgQRePxmtgot67ChLFVSxFfn4dDf63"},
+            {"dgb1pllllllllllllllllllllllllllllllllllllllllllllllllllls75829n", "DD3Bdscudo8uFW1rrh3QB5jHBLm1gRbXgfjBJwUwPScG4GaPu15n"},
+            {"dgbrt1plllllllllllllllllllllllllllllllllllllllllllllllllllsmag7jy", "RD3X2QzgofY1CbX6WvyydkLKLvZwZUPY1qzvyJBvx1y7tNx6Wxef"},
+    };
+    for (const Vector& v: vectors) {
+        EXPECT_EQ(DigiDollar::toDigiDollarAddress(v.taproot), v.dd) << v.taproot;
+        EXPECT_EQ(DigiDollar::fromDigiDollarAddress(v.dd), v.taproot) << v.dd;
+    }
+}
+
+TEST(DigiDollarAddress, rejectsNonTaprootAndCorruptInput) {
+    const std::string good = "DD26bf7gtHLHtJmTJS3uMSH1Yu3JJSQYzY8Nh698oSYdRLiSFUhi";
+    //not taproot: P2WPKH(witness v0), legacy base58, bitcoin hrp, garbage
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress("dgb1qw508d6qejxtdg4y5r3zarvary0c5xw7kmudfnm"), ""); //valid P2WPKH(BIP173 key)
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress("DSXnZTQABeBrJEU5b2vpnysoGiiZwjKKDY"), "");
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress("bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"), "");
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress(""), "");
+    //bad bech32m checksum(last char changed)
+    EXPECT_EQ(DigiDollar::toDigiDollarAddress("dgb1pwrwn938vtcrk6nfrlk3u2ek2pyp3ncgd58z4ut7smp6xvtjr407s8hg4wh"), "");
+    //DD side: changed character(checksum), truncated, whitespace, non base58 char, empty
+    std::string flipped = good;
+    flipped[10] = (flipped[10] == 'a') ? 'b' : 'a';
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(flipped), "");
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(good.substr(0, good.size() - 1)), "");
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(" " + good), "");
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(good + "\n"), "");
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress("DD0OIl"), "");
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress(""), "");
+    //an ordinary DigiByte address is not a DigiDollar address
+    EXPECT_EQ(DigiDollar::fromDigiDollarAddress("DSXnZTQABeBrJEU5b2vpnysoGiiZwjKKDY"), "");
+}
+
+TEST(DigiDollarAddress, normalizeAddressForRpcInput) {
+    //DD input becomes the dgb1p form everything is indexed under; anything else is untouched
+    EXPECT_EQ(DigiDollar::normalizeAddress("DD26bf7gtHLHtJmTJS3uMSH1Yu3JJSQYzY8Nh698oSYdRLiSFUhi"),
+              "dgb1pwrwn938vtcrk6nfrlk3u2ek2pyp3ncgd58z4ut7smp6xvtjr407s8hg4wg");
+    EXPECT_EQ(DigiDollar::normalizeAddress("dgb1pwrwn938vtcrk6nfrlk3u2ek2pyp3ncgd58z4ut7smp6xvtjr407s8hg4wg"),
+              "dgb1pwrwn938vtcrk6nfrlk3u2ek2pyp3ncgd58z4ut7smp6xvtjr407s8hg4wg");
+    EXPECT_EQ(DigiDollar::normalizeAddress("DSXnZTQABeBrJEU5b2vpnysoGiiZwjKKDY"), "DSXnZTQABeBrJEU5b2vpnysoGiiZwjKKDY");
+}

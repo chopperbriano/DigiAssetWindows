@@ -1228,9 +1228,24 @@ void ChainAnalyzer::processTX(const string& txid, unsigned int height) {
             addressJson += "\"" + address + "\"";
         }
 
+        //DD... form of each address that received DigiDollar, as DigiByte wallets show it.
+        //"addresses" keeps the dgb1p form so existing subscribers see no change
+        string ddAddressJson;
+        for (const auto& ddOutput: tx.getDigiDollarOutputs()) {
+            string dd;
+            for (size_t i = 0; i < ddOutputCount; i++) {
+                if (tx.getOutput(i).vout != ddOutput.first) continue;
+                dd = DigiDollar::toDigiDollarAddress(tx.getOutput(i).address);
+                break;
+            }
+            if (dd.empty() || (ddAddressJson.find("\"" + dd + "\"") != string::npos)) continue;
+            if (!ddAddressJson.empty()) ddAddressJson += ",";
+            ddAddressJson += "\"" + dd + "\"";
+        }
+
         //cents is the protocol's own unit, so it is reported without conversion
         events->broadcast("{\"event\":\"" + type + "\",\"cents\":" + to_string(amount) +
-                          ",\"addresses\":[" + addressJson + "],\"txid\":\"" + txid +
+                          ",\"addresses\":[" + addressJson + "],\"ddAddresses\":[" + ddAddressJson + "],\"txid\":\"" + txid +
                           "\",\"height\":" + to_string(height) + "}");
     }
 }

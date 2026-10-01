@@ -31,6 +31,8 @@ set(SOURCE_FILES
         ../src/Config.cpp
         ../src/DigiByteCore.cpp
         ../src/DigiDollar.cpp
+        ../src/Base58.cpp          # DigiDollar address encoding(DD...)
+        ../src/crypto/SHA256.cpp   # its Base58Check checksum
         ../src/Blob.cpp
         ../src/utils.cpp
         ../src/Log.cpp

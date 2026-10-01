@@ -5,6 +5,11 @@
 #include "DigiDollar.h"
 #include "Blob.h"
 #include "DigiAssetConstants.h"
+#include "Base58.h"
+#include "crypto/SHA256.h"
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstring>
 
 using namespace std;
@@ -351,6 +356,162 @@ namespace DigiDollar {
         if (priceMicroUSD == 0) return 0;
         //1 DGB == price/1e6 USD, so 1 USD == 1e6/price DGB == 1e14/price sats
         return 1e14 / static_cast<double>(priceMicroUSD);
+    }
+
+    /*
+     * DigiDollar addresses - see DigiDollar.h for the spec.  Self contained: a minimal BIP350
+     * bech32m codec for the taproot side and Base58Check for the DD side.
+     */
+    namespace {
+        const char* BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+        const uint32_t BECH32M_CONST = 0x2bc830a3;
+
+        //network <-> bech32 hrp <-> DigiDollar version bytes(DigiByte Core CDigiDollarAddress)
+        struct DDNetwork {
+            const char* hrp;
+            uint8_t version[2];
+        };
+        const DDNetwork DD_NETWORKS[] = {
+                {"dgb", {0x52, 0x85}},   //mainnet -> "DD"
+                {"dgbt", {0xb1, 0x29}},  //testnet -> "TD"
+                {"dgbrt", {0xa3, 0xa4}}, //regtest -> "RD"
+        };
+
+        uint32_t bech32Polymod(const vector<uint8_t>& values) {
+            static const uint32_t GEN[5] = {0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3};
+            uint32_t chk = 1;
+            for (uint8_t v: values) {
+                uint8_t top = static_cast<uint8_t>(chk >> 25);
+                chk = ((chk & 0x1ffffff) << 5) ^ v;
+                for (int i = 0; i < 5; i++) {
+                    if ((top >> i) & 1) chk ^= GEN[i];
+                }
+            }
+            return chk;
+        }
+
+        vector<uint8_t> bech32HrpExpand(const string& hrp) {
+            vector<uint8_t> out;
+            for (char c: hrp) out.push_back(static_cast<uint8_t>(c) >> 5);
+            out.push_back(0);
+            for (char c: hrp) out.push_back(static_cast<uint8_t>(c) & 31);
+            return out;
+        }
+
+        //regroup bits(8->5 with padding to encode, 5->8 without padding to decode)
+        bool convertBits(const vector<uint8_t>& in, int fromBits, int toBits, bool pad, vector<uint8_t>& out) {
+            uint32_t acc = 0;
+            int bits = 0;
+            const uint32_t maxv = (1u << toBits) - 1;
+            for (uint8_t value: in) {
+                if ((value >> fromBits) != 0) return false;
+                acc = (acc << fromBits) | value;
+                bits += fromBits;
+                while (bits >= toBits) {
+                    bits -= toBits;
+                    out.push_back(static_cast<uint8_t>((acc >> bits) & maxv));
+                }
+            }
+            if (pad) {
+                if (bits > 0) out.push_back(static_cast<uint8_t>((acc << (toBits - bits)) & maxv));
+            } else if ((bits >= fromBits) || ((acc << (toBits - bits)) & maxv)) {
+                return false;
+            }
+            return true;
+        }
+
+        //decode a bech32m witness v1 address with a 32 byte program(taproot)
+        bool decodeTaproot(const string& addr, string& hrp, vector<uint8_t>& program) {
+            if ((addr.size() < 8) || (addr.size() > 90)) return false;
+            bool lower = false, upper = false;
+            for (char c: addr) {
+                if ((c < 33) || (c > 126)) return false;
+                if ((c >= 'a') && (c <= 'z')) lower = true;
+                if ((c >= 'A') && (c <= 'Z')) upper = true;
+            }
+            if (lower && upper) return false; //mixed case is invalid
+            string s;
+            for (char c: addr) s.push_back(static_cast<char>(tolower(static_cast<unsigned char>(c))));
+            size_t sep = s.rfind('1');
+            if ((sep == string::npos) || (sep == 0) || (sep + 7 > s.size())) return false;
+            hrp = s.substr(0, sep);
+            vector<uint8_t> data;
+            for (size_t i = sep + 1; i < s.size(); i++) {
+                const char* p = strchr(BECH32_CHARSET, s[i]);
+                if ((p == nullptr) || (*p == '\0')) return false;
+                data.push_back(static_cast<uint8_t>(p - BECH32_CHARSET));
+            }
+            vector<uint8_t> check = bech32HrpExpand(hrp);
+            check.insert(check.end(), data.begin(), data.end());
+            if (bech32Polymod(check) != BECH32M_CONST) return false;
+            data.resize(data.size() - 6); //drop checksum
+            if (data.empty() || (data[0] != 1)) return false; //witness version 1 only
+            program.clear();
+            if (!convertBits(vector<uint8_t>(data.begin() + 1, data.end()), 5, 8, false, program)) return false;
+            return program.size() == 32;
+        }
+
+        string encodeTaproot(const string& hrp, const vector<uint8_t>& program) {
+            vector<uint8_t> data = {1}; //witness version 1
+            convertBits(program, 8, 5, true, data);
+            vector<uint8_t> check = bech32HrpExpand(hrp);
+            check.insert(check.end(), data.begin(), data.end());
+            check.insert(check.end(), 6, 0);
+            uint32_t mod = bech32Polymod(check) ^ BECH32M_CONST;
+            string out = hrp + "1";
+            for (uint8_t d: data) out.push_back(BECH32_CHARSET[d]);
+            for (int i = 0; i < 6; i++) out.push_back(BECH32_CHARSET[(mod >> (5 * (5 - i))) & 31]);
+            return out;
+        }
+
+        array<uint8_t, 32> doubleSha256(const vector<uint8_t>& data) {
+            SHA256 first;
+            first.update(data.data(), data.size());
+            array<uint8_t, 32> once = first.digest();
+            SHA256 second;
+            second.update(once.data(), once.size());
+            return second.digest();
+        }
+    } // namespace
+
+    string toDigiDollarAddress(const string& taprootAddress) {
+        string hrp;
+        vector<uint8_t> program;
+        if (!decodeTaproot(taprootAddress, hrp, program)) return "";
+        for (const DDNetwork& net: DD_NETWORKS) {
+            if (hrp != net.hrp) continue;
+            vector<uint8_t> payload = {net.version[0], net.version[1]};
+            payload.insert(payload.end(), program.begin(), program.end());
+            array<uint8_t, 32> hash = doubleSha256(payload);
+            payload.insert(payload.end(), hash.begin(), hash.begin() + 4);
+            return Base58::encode(payload);
+        }
+        return ""; //taproot, but not a DigiByte network
+    }
+
+    string fromDigiDollarAddress(const string& ddAddress) {
+        //Base58::decode does not reject foreign characters, so screen them first(this also
+        //rejects any whitespace, as DigiByte Core does)
+        static const char* BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        if (ddAddress.empty() || (ddAddress.size() > 64)) return "";
+        for (char c: ddAddress) {
+            if ((c == '\0') || (strchr(BASE58, c) == nullptr)) return "";
+        }
+        vector<uint8_t> raw = Base58::decode(ddAddress);
+        if (raw.size() != 38) return ""; //2 version + 32 key + 4 checksum
+        vector<uint8_t> payload(raw.begin(), raw.begin() + 34);
+        array<uint8_t, 32> hash = doubleSha256(payload);
+        if (!equal(hash.begin(), hash.begin() + 4, raw.begin() + 34)) return "";
+        for (const DDNetwork& net: DD_NETWORKS) {
+            if ((payload[0] != net.version[0]) || (payload[1] != net.version[1])) continue;
+            return encodeTaproot(net.hrp, vector<uint8_t>(payload.begin() + 2, payload.end()));
+        }
+        return "";
+    }
+
+    string normalizeAddress(const string& address) {
+        string taproot = fromDigiDollarAddress(address);
+        return taproot.empty() ? address : taproot;
     }
 
 } // namespace DigiDollar

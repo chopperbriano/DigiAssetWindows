@@ -150,6 +150,45 @@ namespace DigiDollar {
      */
     double priceToExchangeRate(uint64_t priceMicroUSD);
 
+    /*
+     * DigiDollar addresses(DD...)
+     *
+     * A DigiDollar output is an ordinary taproot output, so DigiByte Core's getrawtransaction
+     * reports it under its bech32m dgb1p... address.  DigiByte wallets show the same output in
+     * DigiDollar form instead.  Spec: DigiByte Core src/base58.cpp, CDigiDollarAddress(v9.26.5):
+     *
+     *   DD address = Base58Check( version(2 bytes) || 32 byte taproot output key )
+     *   version: mainnet 0x52 0x85 -> "DD...", testnet 0xb1 0x29 -> "TD...",
+     *            regtest 0xa3 0xa4 -> "RD..."
+     *
+     * The 32 bytes are exactly the witness program of the P2TR output(the same bytes inside the
+     * dgb1p address), so the two forms convert losslessly.  Only taproot(witness v1, 32 byte
+     * program) addresses have a DigiDollar form.  The network is taken from the address itself:
+     * hrp dgb <-> DD, dgbt <-> TD, dgbrt <-> RD.
+     *
+     * The node stores and indexes the dgb1p form(it is what the chain and DigiByte Core use);
+     * the DD form is added for display and accepted as input.
+     */
+
+    /**
+     * Convert a taproot address(dgb1p..., dgbt1p..., dgbrt1p...) to its DigiDollar form.
+     * @return the DD/TD/RD address, or "" if address is not a valid taproot address
+     */
+    std::string toDigiDollarAddress(const std::string& taprootAddress);
+
+    /**
+     * Convert a DigiDollar address(DD..., TD..., RD...) back to its taproot address.
+     * @return the dgb1p/dgbt1p/dgbrt1p address, or "" if ddAddress is not a valid DigiDollar
+     *         address(bad characters, length, checksum or version)
+     */
+    std::string fromDigiDollarAddress(const std::string& ddAddress);
+
+    /**
+     * RPC input helper: if address is a valid DigiDollar address return its taproot form,
+     * otherwise return address unchanged.  Lets every address taking RPC accept DD addresses.
+     */
+    std::string normalizeAddress(const std::string& address);
+
 } // namespace DigiDollar
 
 #endif //DIGIASSET_CORE_DIGIDOLLAR_H
