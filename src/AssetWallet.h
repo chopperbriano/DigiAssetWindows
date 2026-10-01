@@ -78,10 +78,13 @@ namespace AssetWallet {
     int64_t dgbToSats(const Json::Value& amount);
 
     /**
-     * Rough miner fee estimate in sats for a not yet funded asset transaction: the node's
-     * estimatesmartfee rate(min relay rate fallback) over an approximated funded size
-     * (base + op_return + outputs + one funding input + change).  DigiByte fees are tiny
-     * so rough is fine - used by the dryrun option of the asset RPC methods.
+     * Miner fee in sats for a not yet funded asset transaction, used by the dryrun option of
+     * the asset RPC methods.  Funds the transaction exactly the way fundSignSend will(same
+     * coin locking, same wallet fee rate) without signing or broadcasting, and returns the
+     * fee the wallet chose - so the quote matches what the send pays.  Only if that funding
+     * fails(e.g. not enough confirmed DGB right now) does it fall back to a rough estimate:
+     * the wallet's paytxfee if set, else estimatesmartfee(min relay rate fallback), over an
+     * approximated funded size.
      */
     uint64_t estimateMinerFee(const DigiByteTransaction& tx);
 

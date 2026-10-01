@@ -102,8 +102,8 @@ namespace AssetWallet {
             }
         }
 
-        //prefer utxos that hold only the wanted asset, then largest amount first so we use the
-        //fewest inputs possible
+        //for gathering below: utxos that hold only the wanted asset first, then largest amount
+        //first so we use the fewest inputs possible
         auto countOf = [assetIndex](const AssetUTXO& utxo) {
             uint64_t total = 0;
             for (const DigiAsset& asset: utxo.assets) {
@@ -118,7 +118,25 @@ namespace AssetWallet {
             return countOf(a) > countOf(b);
         });
 
-        //select until we have enough
+        //one coin that covers it on its own beats splitting the biggest coin: an exact match
+        //needs no asset change at all, and otherwise the smallest coin that is enough keeps the
+        //big coins whole.  Largest-first alone split a 96-unit coin for a 1-unit send while three
+        //1-unit coins sat in the same wallet.  Only coins holding just this asset qualify - a
+        //mixed coin drags its other assets into the transaction as change
+        const AssetUTXO* single = nullptr;
+        for (const AssetUTXO& utxo: candidates) {
+            if (utxo.assets.size() != 1) continue;
+            uint64_t have = countOf(utxo);
+            if (have < amount) continue;
+            if (have == amount) {
+                single = &utxo;
+                break;
+            }
+            if ((single == nullptr) || (have < countOf(*single))) single = &utxo;
+        }
+        if (single != nullptr) return {*single};
+
+        //no single coin is enough: gather largest first so we use the fewest inputs possible
         vector<AssetUTXO> selected;
         uint64_t total = 0;
         for (const AssetUTXO& utxo: candidates) {
@@ -221,81 +239,45 @@ namespace AssetWallet {
         }
     }
 
-    uint64_t estimateMinerFee(const DigiByteTransaction& tx) {
-        uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
-        try {
-            Json::Value feeParams = Json::arrayValue;
-            feeParams.append(6);
-            Json::Value est = AppMain::GetInstance()->getDigiByteCore()->sendcommand("estimatesmartfee", feeParams);
-            if (est.isMember("feerate") && est["feerate"].isNumeric() && (est["feerate"].asDouble() > 0)) {
-                feeRate = static_cast<uint64_t>(est["feerate"].asDouble() * 100000000);
+    namespace {
+        //createrawtransaction for tx: its inputs, then its outputs in order followed by the
+        //asset OP_RETURN.  Outputs use the array form so their order is preserved
+        //exactly(transfer instructions reference outputs by index)
+        string buildRawTransaction(DigiByteCore* dgb, const DigiByteTransaction& tx) {
+            Json::Value inputs = Json::arrayValue;
+            for (size_t i = 0; i < tx.getInputCount(); i++) {
+                Json::Value input = Json::objectValue;
+                input["txid"] = tx.getInput(i).txid;
+                input["vout"] = tx.getInput(i).vout;
+                inputs.append(input);
             }
-        } catch (...) {} //fallback rate already set
-        size_t estimatedVSize = 200 + (tx.encodeAssetOpReturn().length() / 2) +
-                                (tx.getOutputCount() * 35) + (tx.getInputCount() * 70) + 150;
-        return feeRate * estimatedVSize / 1000;
-    }
-
-    string fundSignSend(const DigiByteTransaction& tx, string* signedHex) {
-        AppMain* main = AppMain::GetInstance();
-        DigiByteCore* dgb = main->getDigiByteCore();
-        Database* db = main->getDatabase();
-
-        // Safety backstop: run the indexer's OWN rule check on the fully-built
-        // transfer before spending a fee to broadcast it. If the transaction would
-        // violate any asset rule (royalty/deflation/signer/vote/KYC/expiry) every
-        // indexer replays it as an unintentional burn and DESTROYS the asset - so
-        // we refuse here instead of broadcasting a burn. This checks EVERY asset
-        // flowing through (including bystander/change assets) and, unlike the
-        // early per-asset guard, it also *allows* a transfer that genuinely
-        // satisfies the rules (e.g. a full transfer to a valid vote/KYC address).
-        // The chain tip is the mining-height estimate the tx will most likely
-        // confirm at. Issuances add their own rule outputs and are checked at
-        // decode, so they're skipped here.
-        if (!tx.isIssuance()) {
-            DigiByteTransaction verifyTx = tx;
-            uint64_t now = (uint64_t) std::chrono::duration_cast<std::chrono::seconds>(
-                                   std::chrono::system_clock::now().time_since_epoch())
-                                   .count();
-            verifyTx.setChainContext(db->getBlockHeight(), now);
-            try {
-                verifyTx.checkRulesPass();
-            } catch (const DigiAsset::exceptionRuleFailed& e) {
-                throw DigiByteException(RPC_MISC_ERROR,
-                                        std::string("Refusing to broadcast: this transfer would fail the asset's rules "
-                                                    "and burn the asset (") +
-                                                e.what() + ").");
+            Json::Value outputs = Json::arrayValue;
+            for (size_t i = 0; i < tx.getOutputCount(); i++) {
+                Json::Value output = Json::objectValue;
+                output[tx.getOutput(i).address] = satsToDecimal(tx.getOutput(i).digibyte);
+                outputs.append(output);
             }
+            Json::Value dataOutput = Json::objectValue;
+            dataOutput["data"] = tx.encodeAssetOpReturn();
+            outputs.append(dataOutput);
+    
+            Json::Value createParams = Json::arrayValue;
+            createParams.append(inputs);
+            createParams.append(outputs);
+            return dgb->sendcommand("createrawtransaction", createParams).asString();
         }
 
-        //build createrawtransaction params.  Outputs use the array form so their order is
-        //preserved exactly(transfer instructions reference outputs by index)
-        Json::Value inputs = Json::arrayValue;
-        for (size_t i = 0; i < tx.getInputCount(); i++) {
-            Json::Value input = Json::objectValue;
-            input["txid"] = tx.getInput(i).txid;
-            input["vout"] = tx.getInput(i).vout;
-            inputs.append(input);
-        }
-        Json::Value outputs = Json::arrayValue;
-        for (size_t i = 0; i < tx.getOutputCount(); i++) {
-            Json::Value output = Json::objectValue;
-            output[tx.getOutput(i).address] = satsToDecimal(tx.getOutput(i).digibyte);
-            outputs.append(output);
-        }
-        Json::Value dataOutput = Json::objectValue;
-        dataOutput["data"] = tx.encodeAssetOpReturn();
-        outputs.append(dataOutput);
-
-        Json::Value createParams = Json::arrayValue;
-        createParams.append(inputs);
-        createParams.append(outputs);
-        string rawHex = dgb->sendcommand("createrawtransaction", createParams).asString();
-
-        //a transaction broadcast moments ago can take a beat to register in the wallet's
-        //unspent view; until then fundrawtransaction can select coins that tx already spent
-        //and the broadcast fails with a mempool conflict.  Retry funding when that happens
-        for (int attempt = 0;; attempt++) {
+        /**
+         * One funding attempt: lock every wallet coin that must not pay the fee, let the
+         * wallet fund rawHex, unlock.  Shared by the real send and the dryrun quote so the
+         * quote is the fee the send will actually pay - the dryrun used to price the fee
+         * itself with estimatesmartfee while the wallet funded at its own rate(13x apart on
+         * a node with the default 0.1 DGB/kB wallet fee).
+         * @return false when funding should be retried after a short wait(only spendable
+         *         coins are unconfirmed change), true with fundedHex(and feeSats) set
+         */
+        bool fundOnce(DigiByteCore* dgb, Database* db, const DigiByteTransaction& tx, const string& rawHex,
+                      int attempt, string& fundedHex, uint64_t* feeSats) {
 
             //protect all wallet UTXOs that carry assets or are unconfirmed(the local database can't
             //know about unconfirmed assets yet) so fundrawtransaction can't select them for fees.
@@ -354,28 +336,116 @@ namespace AssetWallet {
                 }
             }
 
-            string fundedHex;
             if (!toLock.empty()) dgb->lockunspent(false, toLock);
             try {
                 Json::Value fundOptions = Json::objectValue;
-                fundOptions["changePosition"] = static_cast<Json::UInt>(outputs.size()); //append change after all outputs
+                fundOptions["changePosition"] = static_cast<Json::UInt>(tx.getOutputCount() + 1); //append change after all outputs(+1 = the OP_RETURN)
                 Json::Value fundParams = Json::arrayValue;
                 fundParams.append(rawHex);
                 fundParams.append(fundOptions);
-                fundedHex = dgb->sendcommand("fundrawtransaction", fundParams)["hex"].asString();
+                Json::Value funded = dgb->sendcommand("fundrawtransaction", fundParams);
+                fundedHex = funded["hex"].asString();
+                //the fee the wallet actually chose, in DGB - exact, so the dryrun quote matches the send
+                if (feeSats != nullptr) *feeSats = static_cast<uint64_t>(llround(funded["fee"].asDouble() * 100000000.0));
             } catch (const DigiByteException& e) {
                 if (!toLock.empty()) dgb->lockunspent(true, toLock);
                 //when everything spendable is sitting in still-unconfirmed change(which we
                 //lock because its asset content can't be verified yet), funding fails with
-                //insufficient funds.  A confirmation fixes that, so wait out a block interval
+                //insufficient funds.  A confirmation fixes that, so tell the caller to wait and retry
                 if ((e.getMessage().find("nsufficient") == string::npos) || !lockedUnconfirmed || (attempt >= 4)) throw;
-                this_thread::sleep_for(chrono::seconds(5));
-                continue;
+                return false;
             } catch (...) {
                 if (!toLock.empty()) dgb->lockunspent(true, toLock);
                 throw;
             }
             if (!toLock.empty()) dgb->lockunspent(true, toLock);
+            return true;
+        }
+    } // namespace
+
+    uint64_t estimateMinerFee(const DigiByteTransaction& tx) {
+        //exact: fund it the way the send will(same coin locking, same wallet fee rate) and read
+        //the fee back.  Nothing is signed or broadcast and every lock is released again
+        try {
+            AppMain* main = AppMain::GetInstance();
+            DigiByteCore* dgb = main->getDigiByteCore();
+            string fundedHex;
+            uint64_t feeSats = 0;
+            //attempt 4 = no waiting: a dryrun should answer now, not after a block interval
+            if (fundOnce(dgb, main->getDatabase(), tx, buildRawTransaction(dgb, tx), 4, fundedHex, &feeSats) &&
+                (feeSats > 0)) {
+                return feeSats;
+            }
+        } catch (...) {} //e.g. insufficient funds right now - fall back to the rough estimate
+
+        uint64_t feeRate = 100000; //sats per kB fallback(the v8.22 min relay rate)
+        try {
+            //a wallet with a fixed paytxfee funds at exactly that rate, so use it if set
+            Json::Value info = AppMain::GetInstance()->getDigiByteCore()->sendcommand("getwalletinfo", Json::Value(Json::arrayValue));
+            if (info.isMember("paytxfee") && info["paytxfee"].isNumeric() && (info["paytxfee"].asDouble() > 0)) {
+                feeRate = static_cast<uint64_t>(llround(info["paytxfee"].asDouble() * 100000000.0));
+                size_t vSize = 200 + (tx.encodeAssetOpReturn().length() / 2) +
+                               (tx.getOutputCount() * 35) + (tx.getInputCount() * 70) + 150;
+                return feeRate * vSize / 1000;
+            }
+        } catch (...) {}
+        try {
+            Json::Value feeParams = Json::arrayValue;
+            feeParams.append(6);
+            Json::Value est = AppMain::GetInstance()->getDigiByteCore()->sendcommand("estimatesmartfee", feeParams);
+            if (est.isMember("feerate") && est["feerate"].isNumeric() && (est["feerate"].asDouble() > 0)) {
+                feeRate = static_cast<uint64_t>(est["feerate"].asDouble() * 100000000);
+            }
+        } catch (...) {} //fallback rate already set
+        size_t estimatedVSize = 200 + (tx.encodeAssetOpReturn().length() / 2) +
+                                (tx.getOutputCount() * 35) + (tx.getInputCount() * 70) + 150;
+        return feeRate * estimatedVSize / 1000;
+    }
+
+    string fundSignSend(const DigiByteTransaction& tx, string* signedHex) {
+        AppMain* main = AppMain::GetInstance();
+        DigiByteCore* dgb = main->getDigiByteCore();
+        Database* db = main->getDatabase();
+
+        // Safety backstop: run the indexer's OWN rule check on the fully-built
+        // transfer before spending a fee to broadcast it. If the transaction would
+        // violate any asset rule (royalty/deflation/signer/vote/KYC/expiry) every
+        // indexer replays it as an unintentional burn and DESTROYS the asset - so
+        // we refuse here instead of broadcasting a burn. This checks EVERY asset
+        // flowing through (including bystander/change assets) and, unlike the
+        // early per-asset guard, it also *allows* a transfer that genuinely
+        // satisfies the rules (e.g. a full transfer to a valid vote/KYC address).
+        // The chain tip is the mining-height estimate the tx will most likely
+        // confirm at. Issuances add their own rule outputs and are checked at
+        // decode, so they're skipped here.
+        if (!tx.isIssuance()) {
+            DigiByteTransaction verifyTx = tx;
+            uint64_t now = (uint64_t) std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count();
+            verifyTx.setChainContext(db->getBlockHeight(), now);
+            try {
+                verifyTx.checkRulesPass();
+            } catch (const DigiAsset::exceptionRuleFailed& e) {
+                throw DigiByteException(RPC_MISC_ERROR,
+                                        std::string("Refusing to broadcast: this transfer would fail the asset's rules "
+                                                    "and burn the asset (") +
+                                                e.what() + ").");
+            }
+        }
+
+        string rawHex = buildRawTransaction(dgb, tx);
+
+        //a transaction broadcast moments ago can take a beat to register in the wallet's
+        //unspent view; until then fundrawtransaction can select coins that tx already spent
+        //and the broadcast fails with a mempool conflict.  Retry funding when that happens
+        for (int attempt = 0;; attempt++) {
+            string fundedHex;
+            if (!fundOnce(dgb, db, tx, rawHex, attempt, fundedHex, nullptr)) {
+                //wait out a block interval - a confirmation frees the unconfirmed change
+                this_thread::sleep_for(chrono::seconds(5));
+                continue;
+            }
 
             //sign(signrawtransactionwithwallet on modern cores, signrawtransaction on old ones)
             Json::Value signParams = Json::arrayValue;

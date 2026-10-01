@@ -42,7 +42,7 @@
 <tr><td>txid</td><td>string</td><td>Transaction id of the issuance transaction.</td></tr>
 <tr><td>assetId</td><td>string</td><td>Id of the newly created asset (empty if it must be looked up once the tx confirms).</td></tr>
 <tr><td>cid</td><td>string</td><td>IPFS cid of the published metadata.</td></tr>
-<tr><td>(dryrun)</td><td>object</td><td>Dry run only. Instead of the above, an object with cid, assetOutputs, ruleOutputs, pspFee, estimatedMinerFee, estimatedTotal (decimal DGB strings) and a sats object with the same figures in sats.</td></tr>
+<tr><td>(dryrun)</td><td>object</td><td>Dry run only. Instead of the above, an object with cid, assetOutputs, ruleOutputs, pspFee, estimatedMinerFee, estimatedTotal (decimal DGB strings) and a sats object with the same figures in sats. The miner fee is priced by funding the transaction exactly as the real send will, so it matches what the send pays.</td></tr>
 </tbody>
 </table>
 </div>

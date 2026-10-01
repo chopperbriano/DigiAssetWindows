@@ -9,7 +9,7 @@
 <div class="document" id="sendasset">
 <h1 class="title">sendasset</h1>
 <p><tt class="docutils literal">sendasset address asset amount ( options )</tt></p>
-<p>Sends DigiAssets from the wallet to an address. The wallet picks which asset UTXOs to spend, returns any asset change (of this or other assets carried on the same UTXOs) back to the wallet, and pays the transaction fee in DigiByte. Use sendtoaddress, not this method, to send DigiByte (assetIndex 1).</p>
+<p>Sends DigiAssets from the wallet to an address. The wallet picks which asset UTXOs to spend (a confirmed UTXO holding exactly the amount if there is one, else the smallest single UTXO that covers it, else as few UTXOs as possible, largest first), returns any asset change (of this or other assets carried on the same UTXOs) back to the wallet, and pays the transaction fee in DigiByte. Use sendtoaddress, not this method, to send DigiByte (assetIndex 1).</p>
 <div class="section" id="arguments">
 <h1>Arguments</h1>
 <table border="1" class="docutils">
@@ -30,7 +30,7 @@
 <tbody valign="top">
 <tr><td>txid</td><td>string</td><td>Transaction id of the broadcast send (default response).</td></tr>
 <tr><td>outputs</td><td>string</td><td>Dry run only. Total value of the transaction outputs in decimal DGB.</td></tr>
-<tr><td>estimatedMinerFee</td><td>string</td><td>Dry run only. Estimated miner fee in decimal DGB.</td></tr>
+<tr><td>estimatedMinerFee</td><td>string</td><td>Dry run only. Miner fee in decimal DGB, priced by funding the transaction exactly as the real send will (same wallet fee rate), so it matches what the send pays. Falls back to an estimate only if the wallet cannot fund it right now.</td></tr>
 <tr><td>estimatedTotal</td><td>string</td><td>Dry run only. Estimated total cost (outputs plus miner fee) in decimal DGB.</td></tr>
 <tr><td>sats</td><td>object</td><td>Dry run only. The same "outputs" and "estimatedMinerFee" figures expressed in sats.</td></tr>
 </tbody>

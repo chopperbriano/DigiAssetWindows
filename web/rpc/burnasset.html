@@ -29,7 +29,7 @@
 <tbody valign="top">
 <tr><td>txid</td><td>string</td><td>Transaction id of the broadcast burn (default response).</td></tr>
 <tr><td>outputs</td><td>string</td><td>Dry run only. Total value of the transaction outputs in decimal DGB.</td></tr>
-<tr><td>estimatedMinerFee</td><td>string</td><td>Dry run only. Estimated miner fee in decimal DGB.</td></tr>
+<tr><td>estimatedMinerFee</td><td>string</td><td>Dry run only. Miner fee in decimal DGB, priced by funding the transaction exactly as the real send will (same wallet fee rate), so it matches what the send pays. Falls back to an estimate only if the wallet cannot fund it right now.</td></tr>
 <tr><td>estimatedTotal</td><td>string</td><td>Dry run only. Estimated total cost (outputs plus miner fee) in decimal DGB.</td></tr>
 <tr><td>sats</td><td>object</td><td>Dry run only. The same "outputs" and "estimatedMinerFee" figures expressed in sats.</td></tr>
 </tbody>

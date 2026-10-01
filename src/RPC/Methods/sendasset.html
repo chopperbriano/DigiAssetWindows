@@ -12,9 +12,11 @@ http://opensource.org/licenses/MIT. -->
             <tt class="docutils literal">sendasset</tt>
             <p>
                 Sends DigiAssets from the wallet to an address. The wallet
-                automatically picks which asset UTXOs to spend, sends any asset
-                change back to the wallet and pays the transaction fee in
-                DigiByte. Requires DigiByte Core to be built with wallet
+                automatically picks which asset UTXOs to spend - a confirmed
+                UTXO holding exactly the amount if there is one, otherwise the
+                smallest single UTXO that covers it, otherwise as few UTXOs as
+                possible, largest first - sends any asset change back to the
+                wallet and pays the transaction fee in DigiByte. Requires DigiByte Core to be built with wallet
                 support and the wallet to be unlocked.
             </p>
             <div class="section" id="input">
@@ -42,7 +44,8 @@ http://opensource.org/licenses/MIT. -->
     "changeAddress": "dgb1....",  // address asset change should go to.
     "dryrun": false               // when true builds the transaction and returns its cost
                                   // (outputs, estimatedMinerFee, estimatedTotal) without
-                                  // broadcasting anything
+                                  // broadcasting anything.  estimatedMinerFee is what the
+                                  // send will pay: the wallet funds it the same way
                                   // defaults to a new wallet change address
 }
 </pre

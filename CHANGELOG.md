@@ -20,9 +20,54 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — the node comes back after a reboot, and existing nodes get the new defaults (setup-digiasset.ps1 2.30.0)
+## Unreleased — asset sends quote the fee they pay and stop splitting coins; the node comes back after a reboot
 
-No binary change; reaches nodes through the maintenance task's self-update from master.
+Two kinds of change here. The **asset wallet fixes** are in the node binary and reach nodes with
+the next release. Everything from *At login, all three apps…* down is in `setup-digiasset.ps1`
+2.30.0 / `make-snapshot.ps1` 2.5.0 / `monitor-node.ps1` 1.4.0 and already reaches nodes through
+the maintenance task's self-update from master.
+
+Both wallet fixes come from mainnet testing of upstream DigiAsset Core `asset_features` 92dae26
+(PR #26) — a phone wallet round trip of asset 5381 — and apply to this fork unchanged.
+
+### Asset send dry runs quote the fee the send actually pays
+
+A `sendasset` dry run quoted `estimatedMinerFee` 0.00170192 DGB; the broadcast send then paid
+0.0225 DGB, about 13x more. The dry run priced the fee itself with `estimatesmartfee` (conf
+target 6, over a guessed size), while the send called `fundrawtransaction` with no fee option,
+so the wallet funded at its own rate — 0.1 DGB/kB on the tester's node.
+
+The dry run now funds the transaction exactly as the send does — same coin locking (asset
+and unconfirmed coins can never pay the fee), same wallet fee rate — without signing or
+broadcasting it, and reports the fee the wallet chose. Funding moved into one helper
+(`fundOnce` in `AssetWallet.cpp`) used by both paths, so they cannot drift apart again. Applies
+to the dry runs of `sendasset`, `burnasset`, `issueasset` and `reissueasset`.
+
+The send itself is unchanged and still pays the wallet's rate: matching the quote to the wallet
+keeps the operator's fee settings in charge, rather than overriding them with a lower rate. If
+the wallet cannot fund the transaction at quote time (not enough confirmed DGB), the dry run
+falls back to an estimate — now at the wallet's `paytxfee` when one is set.
+
+### A small send no longer splits a large asset coin
+
+For a 1-unit send the wallet split a 96-unit coin although three 1-unit coins of the same asset
+were in the wallet; selection was largest-first only. It now prefers, among confirmed coins
+holding only that asset: one holding exactly the amount (no asset change at all), else the
+smallest single coin that covers it (keeps big coins whole), and only then gathers coins
+largest-first as before. Coins carrying other assets too are never chosen as a single-coin
+match, since they would drag those assets into the transaction as change.
+
+### Already fixed here, still open upstream
+
+- The flood of `nonstandard: <txid>` lines (63,760 in one sync) for `6a bf 01…` coinbase outputs:
+  this fork classifies those as DigiDollar oracle commitments and prints only with
+  `DGBCORE_DEBUG_SCRIPTS` set.
+
+### Known, not fixed
+
+- DigiDollar outputs are reported under their taproot `dgb1p…` address, not the `DD…` form
+  wallets display. The node uses the address DigiByte Core returns and has no DD-address
+  encoder; adding one needs the DD address specification.
 
 ### At login, all three apps are started, watched and restarted
 
