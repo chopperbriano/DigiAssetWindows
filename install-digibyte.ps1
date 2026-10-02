@@ -4,7 +4,7 @@
     nothing else. No IPFS, no DigiAsset node, no pool.
 
     Does the whole job in one pass:
-      1. Downloads + silently installs DigiByte Core (pinned 9.26.5).
+      1. Downloads + silently installs DigiByte Core (pinned 9.26.6).
       2. Writes a complete digibyte.conf (full public service node, or -Lean).
       3. Seeds the blockchain from a pre-synced snapshot, so the wallet syncs
          only the recent delta instead of days/weeks from scratch.
@@ -30,7 +30,7 @@
                            Must contain NO spaces (see the NSIS note below).
 .PARAMETER DataDir         Blockchain data directory. Default <DigiByteDir>\Data.
                            Pass "$env:APPDATA\DigiByte" for the stock layout.
-.PARAMETER DigiByteVersion Version to install. Default 9.26.5. If that tag isn't
+.PARAMETER DigiByteVersion Version to install. Default 9.26.6. If that tag isn't
                            published, falls back to the current latest release.
 .PARAMETER SnapshotUrl     snapshot.json manifest. Defaults to the official feed.
 .PARAMETER SkipSeed        Install + configure only; sync normally from genesis.
@@ -65,7 +65,7 @@
 param(
     [string]$DigiByteDir     = 'C:\DigiByte',
     [string]$DataDir         = '',
-    [string]$DigiByteVersion = '9.26.5',
+    [string]$DigiByteVersion = '9.26.6',
     [string]$SnapshotUrl     = 'https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json',
     [switch]$SkipSeed,
     [switch]$Lean,
@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.0.0'
+$SCRIPT_VERSION = '1.1.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when

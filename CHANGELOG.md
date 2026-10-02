@@ -20,6 +20,32 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — DigiByte Core 9.26.6 (Thaw Day) for new installs
+
+No binary change; reaches nodes through master (the one-line installers and the maintenance
+task's self-update).
+
+DigiByte Core v9.26.6 (released 2026-10-01) carries **Thaw Day**: new DigiDollar block rules
+that activate at mainnet block **24,490,000** (around November 1, 2026). The release notes say
+every full node must upgrade before that height, DigiDollar user or not, because older
+software can disagree about valid blocks after it — the same failure shape as the 2026 Groestl
+split. The rules cover mint price checks, vault accounting and redemption, not transaction
+formats, so the node's DigiDollar decoder needs no change for it.
+
+- **`setup-digiasset.ps1` 2.31.0 and `install-digibyte.ps1` 1.1.0** pin 9.26.6 for fresh
+  installs (`-DigiByteVersion`). Existing nodes already move to it on their own: the
+  maintenance task updates DigiByte to the latest release.
+- **`monitor-node.ps1` 1.5.0** warns on DigiByte older than 9.26.6, with the number of blocks
+  left before Thaw Day, and fails once the chain is past it. The peer-count line is now
+  reported independently of the version line.
+- **readme** manual-install link points at the 9.26.6 installer.
+
+Left at 9.26.5 on purpose: the node's minimum-version check in `src/main.cpp` (9.26.5 still
+syncs correctly until block 24,490,000), statements about the published snapshot (built with
+9.26.5), and the DD-address spec citations.
+
+---
+
 ## 0.3.3-win.141 — asset sends quote the fee they pay and stop splitting coins; DigiDollar DD… addresses; the pool can remove entries; the node comes back after a reboot
 
 Two kinds of change here. The **asset wallet fixes, DD addresses and the pool's

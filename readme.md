@@ -297,7 +297,7 @@ This disables SQLite write verification (fsync), significantly reducing sync tim
 > until June 2026. For windows covering the incident, index 2 of the `algo` array is populated
 > rather than `null`. That is correct data, not a bug.
 
-Download and install DigiByte Core Wallet v9.26.5 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.5/digibyte-9.26.5-win64-setup.exe
+Download and install DigiByte Core Wallet v9.26.6 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.6/digibyte-9.26.6-win64-setup.exe
 Install to the default locations, unless you need to change the location on your hard drive. Then add the following lines to the digibyte.conf file.
 
 ```

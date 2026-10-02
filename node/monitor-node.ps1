@@ -22,7 +22,7 @@ param(
     [int]$Every = 15
 )
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.4.0'
+$ScriptVersion = '1.5.0'
 
 function Read-Cfg([string]$path) {
     $h = @{}
@@ -96,8 +96,16 @@ function Show-Status {
             $ver = ($ni.subversion -replace '[^0-9\.]', '').Trim('.')
             $conns = [int]$ni.connections
             $old = $false; try { $old = ([version]$ver -lt [version]'9.26.4') } catch {}
-            if ($old) { Line "DigiByte version" "FAIL" "$ver - too old, stalls on post-split Groestl blocks"; $issues += "DigiByte Core $ver predates the 2026 chain split fix - update to 9.26.4 or newer (re-run the installer)." }
-            elseif ($conns -lt 4) { Line "DigiByte peers" "WARN" "$ver, only $conns connection(s)"; $issues += "DigiByte has only $conns peer connection(s) - it can fall behind or follow a stale tip. Check the internet connection / port 12024." }
+            # 9.26.6 carries the Thaw Day DigiDollar rules that activate at mainnet block
+            # 24,490,000 (~Nov 1 2026); older nodes may reject valid blocks after it.
+            $preThaw = $false; try { $preThaw = ([version]$ver -lt [version]'9.26.6') } catch {}
+            if ($old) { Line "DigiByte version" "FAIL" "$ver - too old, stalls on post-split Groestl blocks"; $issues += "DigiByte Core $ver predates the 2026 chain split fix - update to 9.26.6 (re-run the installer)." }
+            elseif ($preThaw) {
+                $thawLvl = if ($dgbHeight -ge 24490000) { 'FAIL' } else { 'WARN' }
+                Line "DigiByte version" $thawLvl ("$ver - must be 9.26.6+ before block 24,490,000 (Thaw Day; {0:N0} blocks away)" -f [math]::Max(0, 24490000 - $dgbHeight))
+                $issues += "DigiByte Core $ver predates the Thaw Day rules at block 24,490,000 - the maintenance task updates it to 9.26.6, or re-run the installer."
+            }
+            if ($conns -lt 4) { Line "DigiByte peers" "WARN" "$ver, only $conns connection(s)"; $issues += "DigiByte has only $conns peer connection(s) - it can fall behind or follow a stale tip. Check the internet connection / port 12024." }
             else { Line "DigiByte peers" "OK" "$ver, $conns connections" }
         } catch {}
 
