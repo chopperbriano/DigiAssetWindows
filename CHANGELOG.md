@@ -20,15 +20,32 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — asset sends quote the fee they pay and stop splitting coins; DigiDollar DD… addresses; the node comes back after a reboot
+## 0.3.3-win.141 — asset sends quote the fee they pay and stop splitting coins; DigiDollar DD… addresses; the pool can remove entries; the node comes back after a reboot
 
-Two kinds of change here. The **asset wallet fixes** are in the node binary and reach nodes with
-the next release. Everything from *At login, all three apps…* down is in `setup-digiasset.ps1`
-2.30.0 / `make-snapshot.ps1` 2.5.0 / `monitor-node.ps1` 1.4.0 and already reaches nodes through
-the maintenance task's self-update from master.
+Two kinds of change here. The **asset wallet fixes, DD addresses and the pool's
+`/permanent/remove`** are in the binaries and arrive with this release. Everything from
+*At login, all three apps…* down is in `setup-digiasset.ps1` 2.30.0 / `make-snapshot.ps1` 2.5.0
+/ `monitor-node.ps1` 1.4.0, which already reached nodes through the maintenance task's
+self-update from master; they are listed here so the release notes are complete.
 
-The wallet fixes and DD addresses come from mainnet testing of upstream DigiAsset Core `asset_features` 92dae26
-(PR #26) — a phone wallet round trip of asset 5381 — and apply to this fork unchanged.
+The wallet fixes and DD addresses come from mainnet testing of upstream DigiAsset Core
+`asset_features` 92dae26 (PR #26) — a phone wallet round trip of asset 5381 — and apply to this
+fork unchanged.
+
+### Pool: POST /permanent/remove
+
+`/permanent/add` is INSERT OR IGNORE and had no inverse, so a bad entry was permanent. A
+publisher sent `ipfs://<cid>` strings for a while, leaving rows no node can pin (83 on
+pool.digistamp.co's frontier page). `DigiAssetPoolServer.exe` now takes, with the same token as
+add, either `{"token":"…","cids":"a,b"}` (remove those, reporting `requested` and `removed`) or
+`{"token":"…","malformed":"true"}` (remove every row whose cid holds a character that is not a
+letter or digit — no real CID does). Details and cautions in `pool/README.md`.
+
+Verified on a local pool server with a scratch database: wrong token 403; both or neither mode
+400; the sweep removed only the `ipfs://` row and left the valid CIDs; explicit removal of one
+present and one absent CID reported requested 2 / removed 1. **Before sweeping the live pool**,
+the publisher must send bare CIDs, or the next publish puts the rows back — the assets site's
+`publishAssetToPool` now normalises every CID itself (Assets `697a19a`), so deploy that first.
 
 ### Asset send dry runs quote the fee the send actually pays
 
