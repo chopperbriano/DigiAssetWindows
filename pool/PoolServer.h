@@ -263,6 +263,7 @@ private:
     // Idempotent (INSERT OR IGNORE). Lets the marketplace publish freshly
     // minted assets so they propagate to wallets via the pool fleet.
     void handlePermanentAdd(const std::string& body, int& outStatus, std::string& outBody);
+    void handlePermanentRemove(const std::string& body, int& outStatus, std::string& outBody);
     // POST /keepalive — a registered node checking in. Records the node's
     // liveness (keyed off `body` + `clientIp`) in the pool database.
     void handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody);

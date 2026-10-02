@@ -68,6 +68,28 @@ public:
                               const std::string& cid,
                               unsigned int page);
 
+    // Remove permanent rows by CID. Returns how many rows went.
+    //
+    // Needed because /permanent/add is INSERT OR IGNORE with no inverse, so a
+    // bad entry was permanent in the literal sense. A marketplace published
+    // "ipfs://<cid>" strings instead of bare CIDs for a while (its asset reader
+    // returns the media reference as a URI, and nothing collapsed it), which
+    // left rows no node can pin: the fetcher asks IPFS for a CID that is not a
+    // CID and moves on. Inert, but they sit in every page body forever and make
+    // the list look wrong to anyone reading it.
+    unsigned int removePermanentCids(const std::vector<std::string>& cids);
+
+    // Remove every permanent row whose cid cannot be a CID, meaning it contains
+    // a character no CID has.
+    //
+    // The predicate is deliberately narrow: a CID is base58btc or base32, so
+    // alphanumeric throughout. Anything holding a ':' or a '/' is a URI or a
+    // path, not a CID. That catches the "ipfs://..." rows and the
+    // "ipfs://<cid>/file.png" ones without being able to touch a real entry.
+    //
+    // Returns how many rows went.
+    unsigned int removeMalformedPermanentCids();
+
     // Mark a permanent page as done=true. The snapshot sets this based on
     // whether mctrivia's source page had done=true at fetch time.
     void setPermanentPageDone(unsigned int page, bool done, const std::string& daily);

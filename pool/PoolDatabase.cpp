@@ -504,6 +504,54 @@ int64_t PoolDatabase::getLastPayoutAt() {
     return last;
 }
 
+unsigned int PoolDatabase::removePermanentCids(const std::vector<std::string>& cids) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    if (cids.empty()) return 0;
+
+    // One statement, re-bound per CID, rather than an IN (...) list built by
+    // string concatenation. The values come from an HTTP body, so they are not
+    // going anywhere near the SQL text.
+    const char* sql = "DELETE FROM permanent_assets WHERE cid = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare removePermanentCids failed: ") +
+                                 sqlite3_errmsg(_db));
+    }
+
+    unsigned int removed = 0;
+    for (const auto& cid : cids) {
+        if (cid.empty()) continue;
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+        sqlite3_bind_text(stmt, 1, cid.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            removed += (unsigned int) sqlite3_changes(_db);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return removed;
+}
+
+unsigned int PoolDatabase::removeMalformedPermanentCids() {
+    std::lock_guard<std::mutex> lk(_mutex);
+
+    // GLOB, not LIKE: GLOB is case-sensitive and supports the [^...] negated
+    // class, so this says "contains at least one character that is not a
+    // letter or a digit". Every real CID is base58btc or base32 and so is
+    // alphanumeric throughout; a URI or a path is not. There is no wildcard
+    // here that a valid CID could trip.
+    const char* sql =
+        "DELETE FROM permanent_assets WHERE cid GLOB '*[^A-Za-z0-9]*';";
+
+    char* err = nullptr;
+    if (sqlite3_exec(_db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
+        std::string message = err ? err : "unknown error";
+        if (err) sqlite3_free(err);
+        throw std::runtime_error("removeMalformedPermanentCids failed: " + message);
+    }
+    return (unsigned int) sqlite3_changes(_db);
+}
+
 void PoolDatabase::insertPermanentAsset(const std::string& assetId,
                                         const std::string& txHash,
                                         const std::string& cid,

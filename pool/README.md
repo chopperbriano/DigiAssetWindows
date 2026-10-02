@@ -99,7 +99,7 @@ from the working directory. Keys:
 |---|---|---|
 | `poolport` | `14028` | TCP port the pool server listens on |
 | `pooldbpath` | `pool.db` | sqlite file for pool state |
-| `pooladmintoken` | *(unset)* | Shared secret gating `POST /permanent/add`. Unset = the ingestion endpoint is **disabled** (403). Set it (and give the same value to your publisher, e.g. the marketplace) to let a trusted service push freshly-minted asset CIDs onto the permanent list. |
+| `pooladmintoken` | *(unset)* | Shared secret gating `POST /permanent/add` and `POST /permanent/remove`. Unset = the ingestion endpoint is **disabled** (403). Set it (and give the same value to your publisher, e.g. the marketplace) to let a trusted service push freshly-minted asset CIDs onto the permanent list. |
 | `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
 | `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
@@ -190,6 +190,53 @@ wallet resolving those CIDs can fetch them.
 
 Verify it landed: `GET /permanent/<page>.json` should list the `assetId-txHash`
 key with its CIDs; then watch a subscribed node pin them.
+
+### Taking something back out: `POST /permanent/remove`
+
+`/permanent/add` is `INSERT OR IGNORE` and for a long time had no inverse, which
+made a bad entry permanent in the literal sense. This is the inverse. Same
+`pooladmintoken` gate.
+
+**Why it exists.** A publisher sent `ipfs://<cid>` strings instead of bare CIDs
+for a while, because its asset reader returns the media reference as a URI and
+nothing collapsed it before publishing. The result is rows no node can ever pin:
+the fetcher asks IPFS for a CID that is not a CID and moves on. They cost
+nothing to carry, and they sit in every page body making the list look wrong to
+anyone reading it.
+
+Two modes, and they are mutually exclusive. Sending both is a 400, because a
+single `removed` count could not say which one it referred to.
+
+```powershell
+# remove specific CIDs
+curl.exe -s -X POST "https://pool.digistamp.co/permanent/remove" `
+  -H "Content-Type: application/json" `
+  -d '{"token":"<pooladmintoken>","cids":"cid1,cid2"}'
+# -> {"ok":true,"mode":"cids","requested":2,"removed":2}
+
+# remove every row whose cid cannot be a CID
+curl.exe -s -X POST "https://pool.digistamp.co/permanent/remove" `
+  -H "Content-Type: application/json" `
+  -d '{"token":"<pooladmintoken>","malformed":"true"}'
+# -> {"ok":true,"mode":"malformed","removed":83}
+```
+
+The malformed sweep deletes rows matching `cid GLOB '*[^A-Za-z0-9]*'`, meaning
+the value contains at least one character that is not a letter or a digit. Every
+real CID is base58btc or base32 and therefore alphanumeric throughout, so the
+predicate cannot reach a valid entry. A URI or a path is not alphanumeric, which
+is exactly what it is for.
+
+Three things to know before running it:
+
+- **Fix the publisher first.** `GET /peer/assets` mirroring between pools is
+  `INSERT OR IGNORE` in both directions, so a peer that mirrored the bad rows
+  before your cleanup still has them and can hand them straight back. Sweeping
+  before the source is fixed just refills the list.
+- **Removing a CID does not remove the asset.** An asset with one good CID and
+  one bad one keeps the good one and stays pinnable.
+- **`requested` is reported next to `removed`** so a CID that was not there
+  reads as absent rather than as a failure.
 
 ---
 

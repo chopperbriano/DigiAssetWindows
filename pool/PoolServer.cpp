@@ -35,7 +35,9 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
     // --- Minimal URL decode -------------------------------------------------
@@ -674,6 +676,12 @@ void PoolServer::handleRequest(const std::string& method,
     // --- POST /permanent/add (token-gated marketplace/operator ingestion) --
     if (method == "POST" && path == "/permanent/add") {
         handlePermanentAdd(body, outStatus, outBody);
+        return;
+    }
+
+    // --- POST /permanent/remove (token-gated, the inverse of add) ----------
+    if (method == "POST" && path == "/permanent/remove") {
+        handlePermanentRemove(body, outStatus, outBody);
         return;
     }
 
@@ -1607,6 +1615,118 @@ void PoolServer::handlePermanentAdd(const std::string& body, int& outStatus, std
     }
     outBody = "{\"ok\":true,\"page\":" + std::to_string(page) +
               ",\"added\":" + std::to_string(added) + "}";
+}
+
+// POST /permanent/remove, token-gated. The inverse of /permanent/add, which
+// did not have one.
+//
+// Two modes, and the second is the reason this exists:
+//
+//   {"token":"..","cids":"cid1,cid2"}   remove those exact CIDs
+//   {"token":"..","malformed":"true"}   remove every row whose cid cannot be a
+//                                       CID, because it holds a character no
+//                                       CID has
+//
+// The malformed sweep cleans up after a publisher that sent "ipfs://<cid>"
+// instead of a bare CID. Those rows are inert (the fetcher asks IPFS for
+// something that is not a CID and moves on) but /permanent/add is
+// INSERT OR IGNORE with no inverse, so until now they were permanent in the
+// literal sense, sitting in every page body and making the list look wrong to
+// anybody reading it.
+//
+// Two things an operator should know before using this:
+//
+//   A page already marked done may be one that nodes have mirrored. Removing a
+//   row from it will not un-pin anything (nothing could pin these), but a peer
+//   pool that mirrored our list before the cleanup still has the row, and
+//   /peer/assets mirroring is INSERT OR IGNORE in both directions, so a
+//   malformed row can come BACK from a peer. Run the sweep after the publisher
+//   is fixed, not before, or it will simply refill.
+//
+//   Removing a CID does not remove the asset. An asset with one good CID and
+//   one malformed one keeps the good one and stays pinnable.
+void PoolServer::handlePermanentRemove(const std::string& body, int& outStatus, std::string& outBody) {
+    // Same gate as /permanent/add: disabled entirely unless the operator set a
+    // token in pool.cfg.
+    if (_ingestToken.empty()) {
+        outStatus = 403;
+        outBody = "{\"error\":\"ingestion disabled: set pooladmintoken in pool.cfg\"}";
+        return;
+    }
+    std::string token = jsonField(body, "token");
+    if (token.size() != _ingestToken.size() || token != _ingestToken) {
+        outStatus = 403;
+        outBody = "{\"error\":\"forbidden\"}";
+        return;
+    }
+
+    std::string malformed = jsonField(body, "malformed");
+    std::string cidsRaw = jsonField(body, "cids");
+
+    // The sweep and an explicit list are mutually exclusive on purpose. Asking
+    // for both is ambiguous about which answer the count refers to, and a
+    // delete endpoint is the wrong place to guess.
+    bool wantsSweep = (malformed == "true" || malformed == "1");
+    if (wantsSweep && !cidsRaw.empty()) {
+        outStatus = 400;
+        outBody = "{\"error\":\"send either cids or malformed, not both\"}";
+        return;
+    }
+
+    if (wantsSweep) {
+        unsigned int removed = 0;
+        try {
+            removed = _db.removeMalformedPermanentCids();
+        } catch (const std::exception& e) {
+            outStatus = 500;
+            outBody = std::string("{\"error\":\"") + e.what() + "\"}";
+            return;
+        }
+        outBody = "{\"ok\":true,\"mode\":\"malformed\",\"removed\":" +
+                  std::to_string(removed) + "}";
+        return;
+    }
+
+    if (cidsRaw.empty()) {
+        outStatus = 400;
+        outBody = "{\"error\":\"cids (comma-separated) or malformed:true is required\"}";
+        return;
+    }
+
+    // Split the comma-separated list, trimming whitespace. Same shape as
+    // /permanent/add, so the two endpoints take their input the same way.
+    std::vector<std::string> cids;
+    size_t start = 0;
+    while (start <= cidsRaw.size()) {
+        size_t comma = cidsRaw.find(',', start);
+        std::string piece = (comma == std::string::npos)
+                                ? cidsRaw.substr(start)
+                                : cidsRaw.substr(start, comma - start);
+        size_t a = piece.find_first_not_of(" \t\r\n");
+        size_t b = piece.find_last_not_of(" \t\r\n");
+        if (a != std::string::npos) cids.push_back(piece.substr(a, b - a + 1));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    if (cids.empty()) {
+        outStatus = 400;
+        outBody = "{\"error\":\"cids contained no valid entries\"}";
+        return;
+    }
+
+    unsigned int removed = 0;
+    try {
+        removed = _db.removePermanentCids(cids);
+    } catch (const std::exception& e) {
+        outStatus = 500;
+        outBody = std::string("{\"error\":\"") + e.what() + "\"}";
+        return;
+    }
+    // "requested" alongside "removed" so a caller can see that a CID it asked
+    // about was not there, rather than reading 0 as a failure.
+    outBody = "{\"ok\":true,\"mode\":\"cids\",\"requested\":" +
+              std::to_string(cids.size()) + ",\"removed\":" +
+              std::to_string(removed) + "}";
 }
 
 // Handle a node keepalive: parse the form-encoded body, and if it carries both
