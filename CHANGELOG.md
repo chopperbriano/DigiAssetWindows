@@ -20,10 +20,19 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — DigiByte Core 9.26.6 and Thaw Day
+## 0.3.3-win.142 — DigiByte Core 9.26.6 and the Thaw Day guard
 
-The script changes (installer pins, monitor) reach nodes through master. The Thaw Day guard in
-the node itself arrives with the next release.
+The binary changes are the Thaw Day guard and one cleanup. The script changes (installer pins,
+safe DigiByte updates, monitor) already reached nodes through master and are listed so the
+release notes are complete. Everything here must be in place before mainnet block 24,490,000.
+
+### Cleanup: the oracle price was captured twice per block
+
+`phaseSync` called `captureOracleCommitment` twice in a row for every block — merge `0be3b9a`
+kept both copies of the same change (the fork's and upstream's commit of the DigiDollar
+indexer). It never changed data: an epoch guard skips blocks whose price is already recorded
+and the write is `INSERT OR IGNORE`. But on a block with no commitment yet, the second call
+fetched the coinbase transaction from DigiByte Core again for nothing. Now called once.
 
 DigiByte Core v9.26.6 (released 2026-10-01) carries **Thaw Day**: new DigiDollar block rules
 that activate at mainnet block **24,490,000** (around November 1, 2026). The release notes say

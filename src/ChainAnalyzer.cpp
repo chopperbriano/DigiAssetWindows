@@ -800,12 +800,10 @@ void ChainAnalyzer::phaseSync() {
         }
         if (!fastMode) ss << "(" << setw(8) << (_state + 1) << ") ";
 
-        //record the oracle DGB/USD price this block commits to, if any
-        if (shouldTrackDigiDollar() && !blockData.tx.empty()) {
-            captureOracleCommitment(blockData.height, blockData.tx[0]);
-        }
-
-        //record the oracle DGB/USD price this block commits to, if any
+        //record the oracle DGB/USD price this block commits to, if any.  (Was called twice in a
+        //row: merge 0be3b9a kept both copies of the same change.  Harmless to the data - the
+        //epoch guard and INSERT OR IGNORE - but on blocks with no commitment yet the second
+        //call fetched the coinbase from DigiByte Core again for nothing.)
         if (shouldTrackDigiDollar() && !blockData.tx.empty()) {
             captureOracleCommitment(blockData.height, blockData.tx[0]);
         }
