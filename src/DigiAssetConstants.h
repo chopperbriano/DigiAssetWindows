@@ -27,6 +27,14 @@ namespace DigiAssetConstants {
     const unsigned int DIGIDOLLAR_ACTIVATION_HEIGHT = 23869440;
 
     /**
+     * DigiDollar "Thaw Day" (mainnet): new DigiDollar block rules apply from this height, in
+     * DigiByte Core v9.26.6 and later.  Older nodes can disagree about valid blocks from here on,
+     * so the node must not index past it against one.  Matches consensus.nDDThawDayHeight in
+     * DigiByte Core v9.26.6 src/kernel/chainparams.cpp (testnet26: 432,100).
+     */
+    const unsigned int THAW_DAY_HEIGHT = 24490000;
+
+    /**
      * DigiDollar transactions are tagged in the low 16 bits of the transaction version so the
      * node can exempt their 0 value outputs from dust checks.  The transaction type lives in
      * the high byte:  version = (type << 24) | DIGIDOLLAR_VERSION_MARKER

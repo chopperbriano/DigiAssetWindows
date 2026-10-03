@@ -146,6 +146,9 @@ private:
     // catch-up regardless of _verifyDatabaseWrite; if the operator wants durable
     // writes they're restored once at the tip. Tracks that one-time restore.
     bool _writeVerificationRestored = false;
+    //set once DigiByte Core has been confirmed new enough to index past Thaw Day, so the node
+    //version is asked for once rather than on every block (see phaseSync)
+    bool _thawDayNodeOk = false;
     // True only when the PREVIOUS pass ended in an exception, so the recovery preamble in
     // mainFunction runs for an actual failure and nothing else. This used to be _hasRunOnce
     // ("has mainFunction been called before"), which is true forever after the first pass -

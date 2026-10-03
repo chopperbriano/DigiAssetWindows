@@ -20,10 +20,10 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — DigiByte Core 9.26.6 (Thaw Day) for new installs
+## Unreleased — DigiByte Core 9.26.6 and Thaw Day
 
-No binary change; reaches nodes through master (the one-line installers and the maintenance
-task's self-update).
+The script changes (installer pins, monitor) reach nodes through master. The Thaw Day guard in
+the node itself arrives with the next release.
 
 DigiByte Core v9.26.6 (released 2026-10-01) carries **Thaw Day**: new DigiDollar block rules
 that activate at mainnet block **24,490,000** (around November 1, 2026). The release notes say
@@ -40,9 +40,24 @@ formats, so the node's DigiDollar decoder needs no change for it.
   reported independently of the version line.
 - **readme** manual-install link points at the 9.26.6 installer.
 
-Left at 9.26.5 on purpose: the node's minimum-version check in `src/main.cpp` (9.26.5 still
-syncs correctly until block 24,490,000), statements about the published snapshot (built with
-9.26.5), and the DD-address spec citations.
+### The node will not index past Thaw Day against older DigiByte (binary — next release)
+
+A flat minimum of 9.26.6 would stop every node whose DigiByte the maintenance task has not
+updated yet, weeks before it matters. So the minimum depends on the height, which is the
+actual risk (`THAW_DAY_HEIGHT` = 24,490,000, matching `consensus.nDDThawDayHeight` in DigiByte
+Core v9.26.6 `src/kernel/chainparams.cpp`; `THAW_DAY_NODE_VERSION` = 92606):
+
+- **At startup**, DigiByte older than 9.26.6 is a warning with the blocks left while the chain
+  is below Thaw Day, and a refusal to start once it is at or past it. 9.26.5 stays the hard
+  floor below that height.
+- **While running**, the chain analyzer asks DigiByte for its version the first time it reaches
+  a block at or past Thaw Day (once, then remembered). If it is older than 9.26.6 it stops
+  before that block's database transaction with a clear cause, and the normal recovery path
+  keeps retrying with back-off - so a node that started weeks earlier on 9.26.5 pauses at
+  exactly the right block and resumes by itself once DigiByte is upgraded.
+
+Left at 9.26.5 on purpose: statements about the published snapshot (built with 9.26.5) and the
+DD-address spec citations.
 
 ---
 

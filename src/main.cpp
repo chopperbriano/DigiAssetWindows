@@ -318,6 +318,26 @@ int main(int argc, char* argv[]) {
                         Log::CRITICAL);
         return -1;
     }
+    //Thaw Day: from DigiAssetConstants::THAW_DAY_HEIGHT on, only v9.26.6+ follows the right
+    //chain.  Before that height an older node is still correct, so only warn - refusing now
+    //would stop nodes whose DigiByte the maintenance task has not updated yet
+    if (nodeVersion < DigiByteCore::THAW_DAY_NODE_VERSION) {
+        unsigned int tip = 0;
+        try { tip = dgb.getBlockCount(); } catch (...) {}
+        if (tip >= DigiAssetConstants::THAW_DAY_HEIGHT) {
+            log->addMessage("DigiByte Core " + to_string(nodeVersion) + " is too old: the chain is past "
+                            "Thaw Day (block " + to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
+                            "), whose DigiDollar rules only v9.26.6 and newer follow.  An older node may be "
+                            "on a different chain.  Upgrade DigiByte Core and restart.",
+                            Log::CRITICAL);
+            return -1;
+        }
+        log->addMessage("DigiByte Core " + to_string(nodeVersion) + " must be upgraded to v9.26.6 before "
+                        "Thaw Day at block " + to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
+                        (tip > 0 ? " (" + to_string(DigiAssetConstants::THAW_DAY_HEIGHT - tip) + " blocks away)" : string()) +
+                        ".  Indexing will pause there until it is.",
+                        Log::WARNING);
+    }
     log->addMessage("DigiByte Core version " + to_string(nodeVersion) + " accepted");
 
     /*

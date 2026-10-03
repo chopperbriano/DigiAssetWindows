@@ -765,6 +765,21 @@ void ChainAnalyzer::phaseSync() {
             beginTotalTime = chrono::steady_clock::now();
         }
 
+        //Thaw Day: from this height only DigiByte Core v9.26.6+ follows the right chain.  A node
+        //that started on an older DigiByte (allowed while the height was still ahead) must not
+        //index past it.  Throwing here - before this block's database transaction - hands it to
+        //the normal recovery path, which logs the cause and keeps retrying with back-off, so
+        //indexing resumes on its own once DigiByte is upgraded.  Asked once, then remembered
+        if (!_thawDayNodeOk && (_height >= static_cast<int>(DigiAssetConstants::THAW_DAY_HEIGHT))) {
+            int nodeVersion = dgb->getNodeVersion();
+            if ((nodeVersion > 0) && (nodeVersion < DigiByteCore::THAW_DAY_NODE_VERSION)) {
+                throw runtime_error("DigiByte Core " + to_string(nodeVersion) + " is too old to index past Thaw Day (block " +
+                                    to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
+                                    ") - upgrade DigiByte Core to v9.26.6 or newer; indexing resumes by itself once it is");
+            }
+            if (nodeVersion > 0) _thawDayNodeOk = true; //0 = no answer: ask again next block
+        }
+
         //determine sync mode
         _state = 0 - blockData.confirmations;
         bool bulkSync = (_state < -110);

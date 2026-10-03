@@ -170,6 +170,14 @@ public:
      */
     static const int MINIMUM_NODE_VERSION = 92605;
 
+    /**
+     * Oldest node allowed from DigiAssetConstants::THAW_DAY_HEIGHT on.  v9.26.6 carries the
+     * Thaw Day DigiDollar rules; an older node may follow different blocks after that height.
+     * Below it MINIMUM_NODE_VERSION still applies, so a node whose DigiByte has not been
+     * updated yet keeps working until the height is near.
+     */
+    static const int THAW_DAY_NODE_VERSION = 92606;
+
 
     // Returns a formatted one-line row of accumulated RPC profiling stats:
     // total time, average time per call, and call count.
