@@ -20,9 +20,28 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — update one-liners, and updaters that cannot fight the node's supervisor
+## Unreleased — the node allows its operator tools by default; update one-liners; safer updaters
 
-No binary change; scripts and docs reach nodes through master.
+Scripts and docs reach nodes through master. The RPC default below is in the node binary and
+arrives with the next release.
+
+### The operator-tool RPCs are allowed by default (binary)
+
+The bundled scripts need five node RPCs: `version`, `syncstate`, `getnodestats`,
+`getipfscount` and `shutdown` (sync state, and a clean `cli shutdown` instead of a force kill).
+The installer writes `rpcallow` lines for them, but any config that did not come through it
+refused them: one copied from `example.cfg` (`rpcallow*=false`), one written by the node's own
+first-run questions, or one built by hand. That is how the snapshot box on 2026-10-03 could
+not stop its node. Now:
+
+- **The node allows those five unless the config names them** (`RPC::Server::isOperatorToolMethod`,
+  checked after explicit entries and before the `rpcallow*` wildcard). `rpcallow<method>=0`
+  still refuses one; everything else, wallet and send methods included, is unchanged. The RPC
+  listens on loopback and needs `rpcuser`/`rpcpassword` either way.
+- **`example.cfg`** lists them explicitly, with a note on why.
+- **The first-run questions** write them when the operator declines "allow all RPC commands".
+- Tested in `RPC_ServerTest` against `rpcallow*=0`: the tool methods are allowed, an explicit
+  `rpcallowgetipfscount=0` still refuses, and `sendasset` / `getencryptedkey` stay refused.
 
 ### One-liners for updating, in the readme and cheatsheet
 

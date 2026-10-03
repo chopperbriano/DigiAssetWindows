@@ -100,6 +100,7 @@ namespace RPC {
         void stop();                                                    // signal shutdown, unblock accept(), drain the worker pool and join all threads
         unsigned int getPort();
         bool isRPCAllowed(const string& method);                        // check method against the rpcallow list (with "*" wildcard default)
+        static bool isOperatorToolMethod(const string& method);         // allowed unless the config names it explicitly (see isRPCAllowed)
         Value executeCall(const std::string& methodName, const Json::Value& params, const Json::Value& id = 1);  // dispatch one call (cache/custom handler/Core pass-through) and return its JSON result
     };
 

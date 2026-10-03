@@ -195,6 +195,12 @@ int main(int argc, char* argv[]) {
         if (allowAllRPC) {
             config.setBool("rpcallow*", true);
         } else {
+            //the bundled operator scripts need these (sync state + a clean shutdown); the node
+            //allows them by default (RPC::Server::isOperatorToolMethod) - written out so the
+            //config shows it
+            for (const char* tool: {"version", "syncstate", "getnodestats", "getipfscount", "shutdown"}) {
+                config.setBool(string("rpcallow") + tool, true);
+            }
             cout << "Please list all RPC commands you would like to allow.  Press Enter on blank line when done";
             while (true) {
                 string command = utils::getAnswerString();

@@ -683,6 +683,15 @@ namespace RPC {
     }
 
     /**
+     * The RPC methods the bundled operator scripts depend on, allowed by default (see
+     * isRPCAllowed).  Keep in step with $NodeToolRpc in setup-digiasset.ps1.
+     */
+    bool Server::isOperatorToolMethod(const string& method) {
+        return (method == "version") || (method == "syncstate") || (method == "getnodestats") ||
+               (method == "getipfscount") || (method == "shutdown");
+    }
+
+    /**
      * Decides whether a method may be served, per the config's rpcallow map. An
      * explicit entry wins; otherwise the cached wildcard default is used, which
      * is computed once (lazily) from the "*" entry. The temporary self-recursion
@@ -694,6 +703,14 @@ namespace RPC {
     bool Server::isRPCAllowed(const string& method) {
         auto it = _allowedRPC.find(method);
         if (it == _allowedRPC.end()) {
+            //The operator tools - monitor-node.ps1, the snapshot scripts, the updaters - need
+            //these to read sync state and to stop the node cleanly.  A config with no rpcallow
+            //lines, or rpcallow*=false as example.cfg ships, refused them all, and a node that
+            //cannot be stopped cleanly gets force-killed (a torn chain.db).  So they are
+            //allowed unless the config names them explicitly (rpcallow<method>=0 still wins).
+            //Read-only apart from shutdown; the RPC listens on loopback and needs rpcuser/
+            //rpcpassword either way
+            if (isOperatorToolMethod(method)) return true;
             if (_allowRPCDefault == -1) {
                 _allowRPCDefault = 0; //default.  must set to prevent possible infinite loop
                 _allowRPCDefault = isRPCAllowed("*") ? 1 : 0;

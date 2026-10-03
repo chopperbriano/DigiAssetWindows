@@ -58,7 +58,8 @@ protected:
                    << "rpcassetport=" << RESTRICTED_PORT << "\n"
                    << "rpcparallel=2\n"
                    << "rpcallow*=0\n"
-                   << "rpcallowversion=1\n";
+                   << "rpcallowversion=1\n"
+                   << "rpcallowgetipfscount=0\n"; //explicitly off: must beat the operator-tool default
         restricted.close();
 
         // executeCall needs the RPC cache on AppMain; version needs nothing else
@@ -192,6 +193,18 @@ TEST_F(RPCServerTest, isRPCAllowedExplicitList) {
     EXPECT_TRUE(restrictedServer->isRPCAllowed("version"));
     EXPECT_FALSE(restrictedServer->isRPCAllowed("getblockcount"));
     EXPECT_FALSE(restrictedServer->isRPCAllowed("neverheardofit"));
+}
+
+TEST_F(RPCServerTest, operatorToolMethodsAllowedUnlessNamed) {
+    //rpcallow*=0 with no entry for them: the bundled scripts still need these
+    EXPECT_TRUE(restrictedServer->isRPCAllowed("shutdown"));
+    EXPECT_TRUE(restrictedServer->isRPCAllowed("syncstate"));
+    EXPECT_TRUE(restrictedServer->isRPCAllowed("getnodestats"));
+    //an explicit rpcallow<method>=0 still wins over the tool default
+    EXPECT_FALSE(restrictedServer->isRPCAllowed("getipfscount"));
+    //and the default is only for those - wallet/send methods stay refused
+    EXPECT_FALSE(restrictedServer->isRPCAllowed("sendasset"));
+    EXPECT_FALSE(restrictedServer->isRPCAllowed("getencryptedkey"));
 }
 
 /*
