@@ -73,7 +73,8 @@ if (-not $admin) {
     throw 'Run this in an elevated (Administrator) PowerShell.'
 }
 
-Say "=== Update DigiAsset node binaries ===" 'Cyan'
+$ScriptVersion = '1.1.0'
+Say "=== Update DigiAsset node binaries  (v$ScriptVersion) ===" 'Cyan'
 if (-not (Test-Path $DigiAssetDir)) { throw "Node folder not found: $DigiAssetDir (pass -DigiAssetDir)." }
 
 # What is the latest release?
@@ -114,20 +115,49 @@ foreach ($f in $Files) {
     $downloaded[$f] = $out
 }
 
+# Check each download against the release's SHA256SUMS before anything installed
+# is touched. A mismatch is fatal; a release without SHA256SUMS (before win.133)
+# falls back to the format check above, as setup-digiasset.ps1 does.
+$sums = $null
+try {
+    $sf = Join-Path $tmp 'SHA256SUMS'
+    Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest/download/SHA256SUMS" -OutFile $sf -UseBasicParsing -TimeoutSec 60
+    $sums = Get-Content $sf
+} catch { Say '  (this release publishes no SHA256SUMS - format check only)' 'Yellow' }
+if ($sums) {
+    foreach ($f in $Files) {
+        $line = $sums | Where-Object { $_ -match ("\s\*?" + [regex]::Escape($f) + "$") } | Select-Object -First 1
+        if (-not $line) { throw "SHA256SUMS has no entry for $f - not installing it." }
+        $want = ($line -split '\s+')[0].ToLower()
+        $got = (Get-FileHash $downloaded[$f] -Algorithm SHA256).Hash.ToLower()
+        if ($want -ne $got) { throw "$f failed its SHA256 check - not installing it. The installed binaries are untouched." }
+    }
+    Say '  checksums verified (SHA256SUMS)' 'Green'
+}
+
 # Pause the auto-restart tasks so they can't relaunch the old exe during the swap.
+# Disabling a task does not stop the copy of it already running since logon - the
+# node's launcher, which restarts the node whenever it exits - so also hold its
+# pause file (setup-digiasset.ps1 Test-SupervisorPaused) until the swap is done.
+$pauseFile = Join-Path $DigiAssetDir 'supervisor.pause'
+try { Set-Content -Path $pauseFile -Value "$(Get-Date -Format s) update-node: replacing the node binaries" -Encoding ASCII } catch {}
 $disabled = @()
 foreach ($t in $Supervisors) {
     try { if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) { Disable-ScheduledTask -TaskName $t -ErrorAction Stop | Out-Null; $disabled += $t } } catch {}
 }
 
 try {
-    # Stop the node CLEANLY first (a force-kill can tear chain.db); force only if it won't exit.
+    # Stop the node CLEANLY first (a force-kill can tear chain.db); force only if it
+    # won't exit. It finishes its current block and flushes chain.db, so give it time.
     $cli = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
     if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) {
-        Say "Stopping the node (clean shutdown)..."
-        if (Test-Path $cli) { try { & $cli shutdown 2>$null | Out-Null } catch {} }
-        for ($i = 0; $i -lt 30 -and (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
-        Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Say "Stopping the node (clean shutdown, up to 2 min)..."
+        if (Test-Path $cli) { try { Push-Location $DigiAssetDir; & $cli shutdown 2>$null | Out-Null } catch {} finally { Pop-Location } }
+        for ($i = 0; $i -lt 120 -and (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
+        if (Get-Process DigiAssetWindows -ErrorAction SilentlyContinue) {
+            Say '  node did not exit within 2 min - forcing it.' 'Yellow'
+            Get-Process DigiAssetWindows -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
         Start-Sleep -Seconds 2
     }
 
@@ -139,6 +169,7 @@ try {
     if ($tag) { try { Set-Content -Path $tagFile -Value $tag -Encoding ASCII } catch {} }
 } finally {
     foreach ($t in $disabled) { try { Enable-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue | Out-Null } catch {} }
+    Remove-Item $pauseFile -Force -ErrorAction SilentlyContinue
 }
 
 # Restart the node now (the re-enabled tasks also keep it up on future boots/logons).

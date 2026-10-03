@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.2.0'
+$SCRIPT_VERSION = '1.3.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when
@@ -826,8 +826,61 @@ if (-not (Test-TagPublished $tag)) {
         Log "  could not reach the GitHub release API - trying $tag directly." 'WARN'
     }
 }
-Step 1 "Installing DigiByte Core $($tag.TrimStart('v'))..."
-Install-DigiByteBinaries (Resolve-DigiByteAsset $tag)
+# Re-running on a box that already has DigiByte: never downgrade it (the
+# maintenance updates of setup-digiasset may have moved it past the pin), and
+# never install over a running wallet - the NSIS installer fails on its locked
+# files. So: keep an equal-or-newer install; otherwise back up the wallets and
+# stop DigiByte cleanly first, as the v9.26.6 upgrade notes ask.
+$want = $tag.TrimStart('v')
+$have = ''
+$running = (Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')
+if ($running) {
+    try { $v = [int](Invoke-DgbRpc 'getnetworkinfo').version; if ($v -gt 0) { $have = "{0}.{1}.{2}" -f [math]::Floor($v / 10000), ([math]::Floor($v / 100) % 100), ($v % 100) } } catch {}
+}
+if (-not $have) {
+    foreach ($exe in @((Get-Digibyted), (Get-DigiByteQt))) {
+        if ($exe -and (Test-Path $exe)) {
+            $have = [regex]::Match("$((Get-Item $exe).VersionInfo.ProductVersion) $((Get-Item $exe).VersionInfo.FileVersion)", '\d+\.\d+\.\d+').Value
+            if ($have) { break }
+        }
+    }
+}
+$keep = $false
+try { if ($have) { $keep = ([version]$have -ge [version]$want) } } catch {}
+if ($keep) {
+    Step 1 "DigiByte Core $have is already installed (this script installs $want) - keeping it."
+} else {
+    Step 1 "Installing DigiByte Core $want$(if ($have) { " (replacing $have)" })..."
+    if ($running) {
+        # Back up every loaded wallet (backupwallet: consistent copy while running,
+        # an encrypted wallet's copy stays encrypted), then stop via RPC and wait.
+        $bdir = Join-Path $DigiByteDir 'wallet-backups'
+        try {
+            Ensure-Dir $bdir
+            $cfg = Read-Conf $DgbConf
+            $port = $RpcPort; if ($cfg['rpcport']) { try { $port = [int]$cfg['rpcport'] } catch {} }
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($cfg['rpcuser']):$($cfg['rpcpassword'])"))
+            foreach ($w in @(Invoke-DgbRpc 'listwallets')) {
+                $name = if ("$w") { "$w" } else { 'default' }
+                $dest = Join-Path $bdir ("{0}-before-v{1}-{2:yyyyMMdd-HHmmss}.dat" -f ($name -replace '[^A-Za-z0-9_.-]', '_'), $want, (Get-Date))
+                $body = '{"jsonrpc":"1.0","id":"bk","method":"backupwallet","params":["' + ($dest -replace '\\', '\\') + '"]}'
+                try {
+                    Invoke-RestMethod -Uri ("http://127.0.0.1:$port/wallet/" + [uri]::EscapeDataString("$w")) -Method Post -ContentType 'text/plain' -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 60 -Body $body | Out-Null
+                    Log "  wallet '$name' backed up -> $dest" 'OK'
+                } catch { Log "  wallet '$name' backup FAILED: $($_.Exception.Message)" 'WARN' }
+            }
+        } catch { Log "  wallet backup skipped: $($_.Exception.Message)" 'WARN' }
+        Log '  stopping DigiByte cleanly (up to 5 min)...'
+        try { Invoke-DgbRpc 'stop' | Out-Null } catch {}
+        for ($w = 0; $w -lt 300 -and ((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')); $w++) { Start-Sleep -Seconds 1 }
+        if ((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')) {
+            Log '  DigiByte did not exit within 5 min - forcing it.' 'WARN'
+            Get-Process digibyted, digibyte-qt -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+        }
+    }
+    Install-DigiByteBinaries (Resolve-DigiByteAsset $tag)
+}
 
 # --- 2. Configure -----------------------------------------------------------
 Step 2 'Writing digibyte.conf...'

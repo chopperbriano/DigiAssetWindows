@@ -108,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.32.0'
+$SCRIPT_VERSION = '2.33.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -2006,8 +2006,27 @@ function Invoke-Install {
     Ensure-VCRuntime
 
     # 1. DigiByte (GUI wallet) -----------------------------------------------
-    Step 1 "Installing DigiByte Core $DigiByteVersion (wallet GUI)..."
-    Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion")
+    # A re-run on a live box: never downgrade DigiByte (the maintenance task may have
+    # moved it past the pin) and never install over a running wallet - NSIS fails on
+    # its locked files. Keep an equal-or-newer install; otherwise back up the wallets,
+    # stop DigiByte cleanly and hold the supervisor pause, as the 9.26.6 notes ask.
+    $haveDgb = ''
+    try { $haveDgb = (Read-State).digibyte } catch {}
+    if ((Test-Path (Get-Digibyted)) -and $haveDgb -and -not (Test-Newer $DigiByteVersion $haveDgb)) {
+        Step 1 "DigiByte Core $haveDgb is already installed (pin $DigiByteVersion) - keeping it."
+        $script:InstalledDigiByte = $haveDgb
+    } else {
+        Step 1 "Installing DigiByte Core $DigiByteVersion (wallet GUI)..."
+        $dgbWasRunning = (Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')
+        if ($dgbWasRunning) {
+            Set-SupervisorPause "installer: updating DigiByte to $DigiByteVersion"
+            Backup-DigiByteWallets "before-v$DigiByteVersion" | Out-Null
+            Stop-DigiByteGracefully
+        }
+        try { Install-DigiByteBinaries (Resolve-DigiByteAsset "v$DigiByteVersion") }
+        finally { if ($dgbWasRunning) { Clear-SupervisorPause } }
+        $script:InstalledDigiByte = $DigiByteVersion
+    }
     $rpc = Write-DigiByteConf
     Protect-SecretFile $DgbConf   # digibyte.conf holds the RPC password (B-INST7)
     Restore-Snapshot   # fast-sync: extract pre-synced blockchain + chain.db before first launch (fresh install only)
@@ -2117,7 +2136,7 @@ function Invoke-Install {
     }
     # Record what we installed so Service mode knows the baseline.
     $state = Read-State
-    $state.digibyte  = $DigiByteVersion
+    $state.digibyte  = $(if ($script:InstalledDigiByte) { $script:InstalledDigiByte } else { $DigiByteVersion })
     $state.kubo      = "$ipfsVer"   # IPFS Desktop version (field name kept for compatibility)
     $state.digiasset = (Get-DigiAssetLatestTag)
     $state.script    = $SCRIPT_VERSION

@@ -30,7 +30,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.4.0'
+$ScriptVersion = '2.5.0'
 # A real Windows .exe starts with 'MZ'. Reject a truncated download or an HTML
 # error body before we overwrite a working binary with garbage.
 function Test-ValidExe($path) {
@@ -188,6 +188,11 @@ function Update-WebConsole {
 # Pause the auto-restart supervisors so they can't relaunch the OLD exe during
 # the swap (which would re-lock the file or leave two instances). Re-enabled in
 # the finally block no matter what happens.
+# Disabling a task does not stop the instance already running since logon - the
+# node's launcher, which restarts the node whenever it exits - so also hold its
+# pause file (setup-digiasset.ps1 Test-SupervisorPaused); removed in the finally.
+$pauseFile = Join-Path $DigiAssetDir 'supervisor.pause'
+try { Set-Content -Path $pauseFile -Value "$(Get-Date -Format s) update-binaries: replacing binaries" -Encoding ASCII } catch {}
 $disabledSupervisors = @()
 foreach ($tn in $Supervisors) {
     try { if (Get-ScheduledTask -TaskName $tn -EA SilentlyContinue) { Disable-ScheduledTask -TaskName $tn -EA Stop | Out-Null; $disabledSupervisors += $tn } } catch {}
@@ -202,6 +207,18 @@ try {
         if (-not $src) { Write-Host "  skip $($it.name) - could not get it (not built / not in the release?)" -ForegroundColor Yellow; continue }
         $dst = Join-Path $DigiAssetDir $it.name
         if ($it.proc -and (Get-Process $it.proc -ErrorAction SilentlyContinue)) {
+            # The node runs SQLite with journal_mode=MEMORY, so a hard kill mid-write can
+            # tear chain.db. Ask it to shut down the way ctrl-c does (finish the block,
+            # flush) and give it 2 min; kill only if it will not go. The pool server has
+            # no such command and keeps the old behaviour.
+            if ($it.proc -eq 'DigiAssetWindows') {
+                $cli = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
+                if (Test-Path $cli) {
+                    Write-Host '  stopping the node cleanly (up to 2 min)...' -ForegroundColor Yellow
+                    try { Push-Location $DigiAssetDir; & $cli shutdown 2>$null | Out-Null } catch {} finally { Pop-Location }
+                    for ($w = 0; $w -lt 120 -and (Get-Process $it.proc -ErrorAction SilentlyContinue); $w++) { Start-Sleep -Seconds 1 }
+                }
+            }
             Get-Process $it.proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
             # Wait until every instance is really gone so the .exe unlocks before copy.
             for ($w = 0; $w -lt 20 -and (Get-Process $it.proc -ErrorAction SilentlyContinue); $w++) { Start-Sleep -Milliseconds 500 }
@@ -253,6 +270,7 @@ try {
 finally {
     # Always restore the supervisors so the node keeps auto-starting normally.
     foreach ($tn in $disabledSupervisors) { try { Enable-ScheduledTask -TaskName $tn -EA Stop | Out-Null } catch {} }
+    Remove-Item $pauseFile -Force -ErrorAction SilentlyContinue
 }
 
 if ($updated -eq 0) { Write-Host "`nNothing updated." -ForegroundColor Yellow; return }

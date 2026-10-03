@@ -2,6 +2,12 @@
 
 > **This is a Windows port of [DigiAsset Core](https://github.com/DigiAsset-Core/DigiAsset_Core) originally created by [mctrivia](https://github.com/mctrivia).** All core logic, chain analysis, RPC methods, and DigiAsset protocol implementation are their work. This repository only adds Windows (MSVC) build support, platform-specific stubs, and a console dashboard UI.
 
+**One-liners:** [Install a node](#-quick-install-recommended) ·
+[Update & maintain a node](#-update--maintain-an-existing-node) ·
+[DigiByte wallet only](#-install-a-digibyte-core-wallet-seeded-standalone) ·
+[Seed an existing wallet](#already-have-digibyte-core-installed) ·
+[Snapshot box](#snapshot-box-refresh-the-snapshot-scripts)
+
 ## ⚡ Quick install (recommended)
 
 **Most people should use this — you do not need to clone or build anything.** On
@@ -28,6 +34,63 @@ always-on box). It asks only for your DGB payout address. Full walkthrough:
 Your node hosts DigiAsset content and automatically joins the **DigiStamp pool**
 (`pool.digistamp.co`), which verifies it and pays it DGB for hosting. You don't
 run or manage a pool — it's already run for you. Full guide: **[NODE-SETUP.md](NODE-SETUP.md)**.
+
+## ⚡ Update & maintain an existing node
+
+A node already keeps itself current: its maintenance task checks every 6 hours and at
+boot, updates DigiByte Core and the DigiAsset binaries to the latest releases, and
+refreshes the helper scripts. Use these when you want something **now**. Every line
+downloads the **latest** script from this repo and runs it; paste into an
+**Administrator PowerShell** (they self-elevate). Each one is safe to re-run.
+
+**Update the DigiAsset binaries now** — the latest release's `DigiAssetWindows.exe` +
+CLI (and `DigiAssetPoolServer.exe` on a box that has it), SHA256-checked, swapped in
+after a clean node shutdown, plus the web console:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/update-binaries.ps1 -OutFile "$env:TEMP\update-binaries.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-binaries.ps1"
+```
+
+**Pool box** — the same, making sure the pool server is updated too:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/update-binaries.ps1 -OutFile "$env:TEMP\update-binaries.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-binaries.ps1" -IncludePool
+```
+
+**Update everything** — DigiByte Core (to the pinned release, currently **9.26.6**; it
+never downgrades a newer one), IPFS Desktop, config defaults and start-up tasks — by
+re-running the installer. It keeps your config, payout address and wallet, backs the
+wallet up first, and stops DigiByte cleanly before replacing it:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
+```
+
+**Health check** — DigiByte version and whether it agrees with the network, DigiAsset
+sync, IPFS, the pool, port 4001, auto-start. Saves the latest copy next to the node,
+then runs it (add `-Watch` to keep it refreshing):
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/monitor-node.ps1 -OutFile C:\DigiAssetWindows\monitor-node.ps1 -UseBasicParsing; powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1
+```
+
+**Refresh all the node helper scripts** into `C:\DigiAssetWindows` (monitor, stop,
+both updaters, memory watch) without running anything:
+
+```powershell
+$b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node'; 'monitor-node.ps1','stop-node.ps1','update-node.ps1','update-binaries.ps1','memwatch.ps1' | % { iwr "$b/$_" -OutFile "C:\DigiAssetWindows\$_" -UseBasicParsing }
+```
+
+### Snapshot box: refresh the snapshot scripts
+
+For the box that publishes the fast-sync snapshot. Downloads the latest snapshot
+scripts into `C:\snapshots`; then run `C:\snapshots\publish-snapshot.ps1` as usual
+(details in [snapshots/README.md](snapshots/README.md)). Bring DigiByte and the node
+up to date on that box first, so the snapshot is built by current software:
+
+```powershell
+New-Item -ItemType Directory -Force C:\snapshots | Out-Null; $b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots'; 'make-snapshot.ps1','publish-snapshot.ps1','seed-digibyte.ps1','setup-cloudflare-snapshots.ps1','snapshot-digibyte-datadir.ps1' | % { iwr "$b/$_" -OutFile "C:\snapshots\$_" -UseBasicParsing }
+```
 
 ## ⚡ Install a DigiByte Core wallet, seeded (standalone)
 

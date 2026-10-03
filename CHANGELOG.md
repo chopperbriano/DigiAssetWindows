@@ -20,6 +20,42 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — update one-liners, and updaters that cannot fight the node's supervisor
+
+No binary change; scripts and docs reach nodes through master.
+
+### One-liners for updating, in the readme and cheatsheet
+
+The readme only had install one-liners. It now opens with a jump line to every one-liner
+and has an **Update & maintain an existing node** section: update the binaries now
+(`update-binaries.ps1`, `-IncludePool` on a pool box), update everything including DigiByte by
+re-running the installer, run the health check, refresh all node helper scripts, and refresh
+the snapshot scripts on the snapshot box. Each downloads the latest script from master. The
+same lines are in `CHEATSHEET.md` section 0.
+
+### Updaters: clean stop, supervisor pause, checksums (update-binaries 2.5.0, update-node 1.1.0)
+
+- **`update-binaries.ps1` force-killed the node** to swap its exe — the torn-`chain.db` risk
+  the maintenance updater stopped taking in setup 2.28.0. It now asks `cli shutdown` and
+  waits up to 2 min first. `update-node.ps1` already shut down cleanly but gave it 30 s;
+  now 2 min.
+- **Both hold `supervisor.pause`** during the swap. They disabled the start-up tasks, but
+  disabling a task does not stop the copy running since logon — the launcher that restarts
+  the node whenever it exits — so it could relaunch the old exe mid-swap.
+- **`update-node.ps1` verifies SHA256SUMS** like `update-binaries.ps1` does; it only checked
+  that the download looked like an exe.
+
+### Re-running an installer on a live box (setup-digiasset 2.33.0, install-digibyte 1.3.0)
+
+Both installers reinstalled DigiByte on every run: over a running wallet (NSIS fails on the
+locked files), with no wallet backup, and down to the pin even if the maintenance task had
+moved the node past it. They now keep an installed DigiByte that is equal to or newer than the
+pin, and otherwise back up the wallets, stop DigiByte cleanly (up to 5 min) and — in
+setup — hold the supervisor pause before installing. Setup records the version actually
+installed, so the maintenance task does not reinstall a newer one.
+
+---
+
 ## 0.3.3-win.142 — DigiByte Core 9.26.6 and the Thaw Day guard
 
 The binary changes are the Thaw Day guard and one cleanup. The script changes (installer pins,

@@ -36,6 +36,35 @@ doesn't look like a DigiByte directory):
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots/seed-digibyte.ps1 -OutFile "$env:TEMP\seed-digibyte.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\seed-digibyte.ps1"
 ```
 
+**Update the DigiAsset binaries now** — latest release, SHA256-checked, clean node
+shutdown, web console refreshed. Add `-IncludePool` on a pool box:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/update-binaries.ps1 -OutFile "$env:TEMP\update-binaries.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-binaries.ps1"
+```
+
+**Update everything incl. DigiByte Core** (pinned 9.26.6, never downgrades): re-run the
+full-node line at the top of this section. It keeps your config and wallet, backs the
+wallet up and stops DigiByte cleanly first.
+
+**Health check**, latest copy saved next to the node:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/monitor-node.ps1 -OutFile C:\DigiAssetWindows\monitor-node.ps1 -UseBasicParsing; powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1
+```
+
+**Refresh every node helper script** into `C:\DigiAssetWindows`:
+
+```powershell
+$b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node'; 'monitor-node.ps1','stop-node.ps1','update-node.ps1','update-binaries.ps1','memwatch.ps1' | % { iwr "$b/$_" -OutFile "C:\DigiAssetWindows\$_" -UseBasicParsing }
+```
+
+**Snapshot box: refresh the snapshot scripts** into `C:\snapshots`:
+
+```powershell
+New-Item -ItemType Directory -Force C:\snapshots | Out-Null; $b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots'; 'make-snapshot.ps1','publish-snapshot.ps1','seed-digibyte.ps1','setup-cloudflare-snapshots.ps1','snapshot-digibyte-datadir.ps1' | % { iwr "$b/$_" -OutFile "C:\snapshots\$_" -UseBasicParsing }
+```
+
 > **Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.**
 > `install-digibyte.ps1` checks and warns before committing to the download.
 > Both scripts read the published manifest at run time, so you always get the
