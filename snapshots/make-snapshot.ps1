@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.6.0'
+$ScriptVersion = '2.7.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -317,7 +317,11 @@ function New-ChainDbArchive {
             for ($i = 0; $i -lt 40 -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
         }
         if ($shutOut -notmatch '^\s*true\s*$' -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) {
-            throw "The DigiAsset node did not accept the shutdown request, so it is still running. The CLI said: $(if ($shutOut) { $shutOut } else { '(no output)' })`nFix that (or close the node window yourself and wait for it to exit), then re-run. The DigiByte archive, if already built, is in $OutDir - re-run with -Component chaindb, then publish-snapshot.ps1 -SkipBuild."
+            # "libcurl error: 22" = the node answered with an HTTP error, which the CLI's
+            # client reports without the body. With syncstate answering a moment ago, that
+            # is almost always rpcallow refusing shutdown.
+            $hint = if ($shutOut -match 'libcurl error: 22|forbidden') { "`nThat is almost always config.cfg refusing the 'shutdown' RPC: add rpcallowshutdown=1 to $DigiAssetDir\config.cfg and restart the node." } else { '' }
+            throw "The DigiAsset node did not accept the shutdown request, so it is still running. The CLI said: $(if ($shutOut) { $shutOut } else { '(no output)' })$hint`nFix that (or close the node window yourself and wait for it to exit), then re-run."
         }
         # Wait up to -StopWaitSec for a CLEAN exit: after "Safe to shut down" the node
         # still finishes its current block, stops the RPC server and flushes chain.db,
@@ -403,6 +407,22 @@ function New-Manifest {
 # relaunch the node seconds after the clean shutdown below - while chain.db is being
 # archived. It honours this file (ignoring it once it is 6h old, so a crashed run
 # can't pause it forever), and resumes as soon as it is removed.
+# Preflight, before anything is stopped or compressed: the chain.db step needs the
+# node to accept `cli shutdown`, and with no rpcallow lines (or a config that never
+# got the setup defaults) the node refuses it - which used to surface only after the
+# DigiByte archive had already taken 35+ minutes.
+if (($Component -ne 'digibyte') -and ($Component -ne 'manifest') -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) {
+    $ncfg = Read-Cfg (Join-Path $DigiAssetDir 'config.cfg')
+    $isOn = { param($v) "$v" -match '^(1|true)$' }
+    $allowAll = & $isOn $ncfg['rpcallow*']
+    # an explicit rpcallow<name> wins over rpcallow*, as in the node (Server::isRPCAllowed)
+    $missing = @('shutdown','syncstate','getnodestats') | Where-Object { if ($ncfg.ContainsKey("rpcallow$_")) { -not (& $isOn $ncfg["rpcallow$_"]) } else { -not $allowAll } }
+    if ($missing -contains 'shutdown') {
+        throw "The node's config.cfg does not allow the 'shutdown' RPC, so the chain.db step cannot stop it cleanly. Add these lines to $DigiAssetDir\config.cfg, restart the node, then re-run:`n" + (($missing | ForEach-Object { "  rpcallow$_=1" }) -join "`n")
+    }
+    if ($missing) { Say ("  NOTE: config.cfg does not allow " + ($missing -join ', ') + " - the chain.db height will not be recorded (add rpcallow<name>=1 lines).") 'Yellow' }
+}
+
 $supervisorPause = Join-Path $DigiAssetDir 'supervisor.pause'
 if ($Component -ne 'manifest') {
     try { Set-Content -Path $supervisorPause -Value "$(Get-Date -Format s) make-snapshot: archiving ($Component)" -Encoding ASCII } catch {}
@@ -412,8 +432,15 @@ try {
         'digibyte' { New-DigiByteArchive }
         'chaindb'  { New-ChainDbArchive }
         'manifest' { New-Manifest }
-        'archives' { New-DigiByteArchive; New-ChainDbArchive }   # both archives, NO manifest
-        default    { New-DigiByteArchive; New-ChainDbArchive; New-Manifest }
+        # chain.db FIRST. The pair is only safe with chain.db at or behind the DigiByte
+        # snapshot (a node restored from it catches up through the newer blocks), and
+        # the node can never be ahead of the DigiByte it reads - so stop the node and
+        # archive chain.db, then archive DigiByte. The old order (DigiByte first) always
+        # produced a chain.db AHEAD, because the node kept indexing while DigiByte was
+        # being compressed; that went unnoticed only while chain.db's height was never
+        # recorded (fixed in 2.4.1), and since then New-Manifest rightly refuses it.
+        'archives' { New-ChainDbArchive; New-DigiByteArchive }   # both archives, NO manifest
+        default    { New-ChainDbArchive; New-DigiByteArchive; New-Manifest }
     }
 } finally {
     Remove-Item $supervisorPause -Force -ErrorAction SilentlyContinue

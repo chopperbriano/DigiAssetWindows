@@ -45,6 +45,25 @@ same lines are in `CHEATSHEET.md` section 0.
 - **`update-node.ps1` verifies SHA256SUMS** like `update-binaries.ps1` does; it only checked
   that the download looked like an exe.
 
+### make-snapshot 2.7.0: archive chain.db first; check rpcallow before starting
+
+A snapshot run on 2026-10-03 failed at the chain.db step after the DigiByte archive had
+already taken 35 minutes, and exposed a second problem that would have stopped it anyway:
+
+- **Archive order.** A chain.db must be at or behind the DigiByte snapshot it ships with — a
+  restored node catches up through newer blocks, but cannot have analysis for blocks its
+  wallet lacks. `New-Manifest` refuses the other way round, and in an unattended publish that
+  refusal aborts. DigiByte was archived first and chain.db second, so the node had always
+  indexed further by then (24,320,760 vs 24,320,499 in that run). It went unnoticed only while
+  chain.db's height was never recorded (always 0, which skips the check) — the 2.4.1 fix made
+  every unattended publish trip it. chain.db is now archived first: the node can never be
+  ahead of the DigiByte it reads, so the pair always comes out in the safe direction.
+- **Preflight.** If the node is running and its `config.cfg` does not allow the `shutdown` RPC,
+  the run stops before anything is stopped or compressed, naming the `rpcallow<name>=1` lines
+  to add. An explicit `rpcallow<name>` wins over `rpcallow*`, as in the node.
+- **The failure message** for a refused shutdown names that likely cause. `libcurl error: 22`
+  means the node answered with an HTTP error, which the CLI reports without the body.
+
 ### Re-running an installer on a live box (setup-digiasset 2.33.0, install-digibyte 1.3.0)
 
 Both installers reinstalled DigiByte on every run: over a running wallet (NSIS fails on the
