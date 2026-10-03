@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.5.0'
+$ScriptVersion = '2.6.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -177,9 +177,17 @@ function New-DigiByteArchive {
                 Say "Stopping DigiByte cleanly (via RPC)..." 'Cyan'; try { Dgb 'stop' | Out-Null } catch {}
             } catch { Say "  RPC not answering (server=1 not enabled?)." 'Yellow' }
         } else { Say "  DigiByte is running but has no RPC access (no server=1 / creds)." 'Yellow' }
-        for($i=0;$i -lt 60 -and (Get-Process digibyte-qt,digibyted -EA SilentlyContinue);$i++){ Start-Sleep -Seconds 1 }
+        # A big node flushes its chainstate on the way out, which can take minutes (the
+        # v9.26.6 notes: "stop the old node normally and wait for it to exit"). Same
+        # budget as the DigiAsset node: -StopWaitSec.
+        $t0 = Get-Date
+        while ((Get-Process digibyte-qt,digibyted -EA SilentlyContinue) -and ((Get-Date) - $t0).TotalSeconds -lt $StopWaitSec) {
+            Write-Progress -Activity 'Waiting for DigiByte to exit' -Status ("elapsed {0:mm\:ss} of up to {1}s (flushing its databases)" -f ((Get-Date) - $t0), $StopWaitSec)
+            Start-Sleep -Seconds 1
+        }
+        Write-Progress -Activity 'Waiting for DigiByte to exit' -Completed
         if (Get-Process digibyte-qt,digibyted -EA SilentlyContinue) {
-            throw "DigiByte is still running and I couldn't stop it cleanly. Please CLOSE DigiByte yourself (File > Exit, or right-click the tray icon > Exit), wait ~10s for it to fully close, then re-run this. Do NOT force-kill it - that can corrupt the data."
+            throw "DigiByte is still running ${StopWaitSec}s after the stop request and I couldn't stop it cleanly. Please CLOSE DigiByte yourself (File > Exit, or right-click the tray icon > Exit), wait for it to fully close, then re-run this. Do NOT force-kill it - that can corrupt the data."
         }
     } else {
         Say "  DigiByte is not running - good, its data is already flushed to disk." 'Green'

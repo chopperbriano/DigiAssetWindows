@@ -40,6 +40,33 @@ formats, so the node's DigiDollar decoder needs no change for it.
   reported independently of the version line.
 - **readme** manual-install link points at the 9.26.6 installer.
 
+### Rolling DigiByte forward safely (setup-digiasset 2.32.0, install-digibyte 1.2.0, seed-digibyte 1.5.0, make-snapshot 2.6.0)
+
+The maintenance task updates DigiByte to the latest release on its own, so 9.26.6 started
+rolling out the day it was published. The v9.26.6 upgrade notes ask operators to back up
+wallets, "stop the old node normally and wait for it to exit", and let a possibly long
+start-up finish. Several scripts did not:
+
+- **Wallets are backed up before every DigiByte update.** `backupwallet` for each loaded wallet
+  into `C:\DigiByte\wallet-backups\<wallet>-before-<version>-<time>.dat` (newest 10 kept per
+  wallet; an encrypted wallet's copy stays encrypted). A failed backup is logged and the update
+  goes ahead, since it replaces program files, not wallet data, and skipping it could leave a
+  node short of a required upgrade.
+- **DigiByte gets 5 minutes to exit after RPC `stop`**, not 60 seconds, before a last-resort
+  force kill, which is now logged. A big node flushing its chainstate can take minutes, and a
+  hard kill can mean a long rebuild on the next start. Same for `install-digibyte.ps1`'s
+  daemon-to-wallet swap, which used to kill without asking.
+- **`make-snapshot.ps1`** waits up to `-StopWaitSec` (default 10 min) for DigiByte to exit,
+  where it used to give up after 60 seconds.
+- **`seed-digibyte.ps1`** stops DigiByte over RPC before replacing `blocks\` + `chainstate\`
+  (the wallet in the same folder is not replaced, so a hard kill could damage it), and refuses
+  a snapshot written by a newer DigiByte than the one installed, unless `-Force`: an older
+  program may not read newer data, and once the snapshot is rebuilt on 9.26.6 a 9.26.5 wallet
+  reseeding from it would be exactly that.
+
+Not a risk here: both installers write `prune=0`, so 9.26.6's DigiDollar history retention
+floor (block 23,627,520) never meets a small prune target.
+
 ### The node will not index past Thaw Day against older DigiByte (binary — next release)
 
 A flat minimum of 9.26.6 would stop every node whose DigiByte the maintenance task has not

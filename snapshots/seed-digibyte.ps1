@@ -36,7 +36,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.4.0'
+$ScriptVersion = '1.5.0'
 # Did the user set -DataDir explicitly? Captured BEFORE we elevate so the answer
 # survives the UAC relaunch (we only forward -DataDir when it was set). That is
 # how the elevated instance knows whether to PROMPT for a location or not.
@@ -157,6 +157,32 @@ Say ("Snapshot: {0}   height {1:N0}   DigiByte {2}{3}" -f `
         $m.digibyte.file,[int]$m.digibyte.height,$m.digibyte.version,`
         $(if ($szGB) { "   ~{0:N1} GB download" -f $szGB } else { '' })) 'White'
 
+# A snapshot written by a NEWER DigiByte than the one installed here is a downgrade
+# of the data: the older program may not read it, and after Thaw Day (v9.26.6,
+# block 24,490,000) an older node is on the wrong rules anyway. Compare against the
+# installed program's file version; refuse unless -Force. Unknown either way = warn.
+$snapVer = ("$($m.digibyte.version)" -replace '[^0-9.]', '').Trim('.')
+$haveVer = ''
+foreach ($root in @((Split-Path -Parent $DataDir), 'C:\DigiByte', "$env:ProgramFiles\DigiByte")) {
+    if (-not $root -or -not (Test-Path $root)) { continue }
+    $exe = Get-ChildItem $root -Recurse -Include 'digibyte-qt.exe','digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($exe) {
+        $haveVer = [regex]::Match("$($exe.VersionInfo.ProductVersion) $($exe.VersionInfo.FileVersion)", '\d+\.\d+\.\d+').Value
+        if ($haveVer) { break }
+    }
+}
+$older = $false
+try { if ($snapVer -and $haveVer) { $older = ([version]$haveVer -lt [version]$snapVer) } } catch {}
+if ($older) {
+    Say "`nThis snapshot was made by DigiByte $snapVer, but this PC has DigiByte $haveVer." 'Yellow'
+    Say "Upgrade DigiByte to $snapVer or newer first (re-run install-digibyte.ps1 or setup-digiasset.ps1)," 'Yellow'
+    Say "then seed. An older DigiByte may not read newer data." 'Yellow'
+    if (-not $Force) { throw "Installed DigiByte $haveVer is older than the snapshot's $snapVer (pass -Force to seed anyway)." }
+    Say '  -Force set: continuing anyway.' 'Yellow'
+} elseif (-not $haveVer) {
+    Say "  (could not find the installed DigiByte version - make sure it is $snapVer or newer)" 'DarkGray'
+}
+
 # --- Choose + validate the target data directory ---------------------------
 # The tar unpacks blocks\ + chainstate\ straight into $DataDir, so pointing it
 # at the wrong folder scatters the chain there. Prompt (unless -DataDir was
@@ -208,8 +234,25 @@ if (Test-Path (Join-Path $DataDir 'blocks')) {
 
 if (Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue) {
     Say "Stopping DigiByte so its files can be replaced..." 'Cyan'
-    Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    for ($i=0; $i -lt 20 -and (Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
+    # Ask it to stop over RPC first: blocks\ + chainstate\ get replaced anyway, but
+    # the wallet in the same folder does not, and a hard kill mid-write can damage
+    # it. RPC creds come from digibyte.conf (our layout keeps it one level up).
+    $conf = @((Join-Path (Split-Path -Parent $DataDir) 'digibyte.conf'), (Join-Path $DataDir 'digibyte.conf')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($conf) {
+        $c = @{}; foreach ($l in Get-Content $conf) { $t = $l.Trim(); $i = $t.IndexOf('='); if (($i -gt 0) -and -not $t.StartsWith('#')) { $c[$t.Substring(0, $i).Trim()] = $t.Substring($i + 1).Trim() } }
+        if ($c['rpcuser']) {
+            $port = 14022; if ($c['rpcport']) { try { $port = [int]$c['rpcport'] } catch {} }
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($c['rpcuser']):$($c['rpcpassword'])"))
+            try { Invoke-RestMethod -Uri "http://127.0.0.1:$port" -Method Post -ContentType 'text/plain' -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 10 -Body '{"jsonrpc":"1.0","id":"seed","method":"stop","params":[]}' | Out-Null } catch {}
+        }
+    }
+    $t0 = Get-Date
+    while ((Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue) -and ((Get-Date) - $t0).TotalSeconds -lt 300) { Start-Sleep -Seconds 1 }
+    if (Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue) {
+        Say '  DigiByte did not exit within 5 min - forcing it.' 'Yellow'
+        Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        for ($i=0; $i -lt 20 -and (Get-Process digibyte-qt,digibyted -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
+    }
     Start-Sleep -Seconds 2
 }
 

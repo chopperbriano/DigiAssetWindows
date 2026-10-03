@@ -108,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.31.0'
+$SCRIPT_VERSION = '2.32.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -1020,10 +1020,45 @@ function Stop-DigiByteGracefully {
         } catch {}
     }
     # Wait for BOTH the daemon and the GUI wallet to exit (either can be the one
-    # running), then force-kill whichever is left - otherwise the binary swap below
-    # hits a locked digibyte-qt.exe and silently produces a half-updated install.
-    for ($i = 0; $i -lt 30 -and ((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')); $i++) { Start-Sleep -Seconds 2 }
-    Get-Process digibyted, digibyte-qt -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # running). DigiByte flushes its chainstate and wallets on the way out, and a big
+    # node can take minutes; the 9.26.6 notes say to "stop the old node normally and
+    # wait for it to exit". So wait up to 5 min, and only then force-kill whatever is
+    # left (a locked digibyte-qt.exe would otherwise leave a half-updated install) -
+    # loudly, because a hard kill can mean a long chainstate rebuild on next start.
+    $t0 = Get-Date
+    while (((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')) -and ((Get-Date) - $t0).TotalSeconds -lt 300) { Start-Sleep -Seconds 2 }
+    if ((Test-ProcRunning 'digibyted') -or (Test-ProcRunning 'digibyte-qt')) {
+        Log '  DigiByte did not exit within 5 min of RPC stop - forcing it. Expect a longer start-up check next time.' 'WARN'
+        Get-Process digibyted, digibyte-qt -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    } else {
+        Log ("  DigiByte stopped cleanly after {0:N0}s." -f ((Get-Date) - $t0).TotalSeconds) 'OK'
+    }
+}
+
+# Back up every loaded wallet before DigiByte is updated - step 2 of the v9.26.6
+# upgrade notes. backupwallet writes a consistent copy while the node runs, needs
+# no passphrase for an encrypted wallet, and the copy stays encrypted. Kept in
+# <DigiByteDir>\wallet-backups, newest 10 per wallet. Never fatal: a failed backup
+# is logged, and the caller decides whether to go on.
+function Backup-DigiByteWallets([string]$why) {
+    $dir = Join-Path $DigiByteDir 'wallet-backups'
+    $ok = $true
+    try {
+        Ensure-Dir $dir
+        $wallets = @(Invoke-DgbRpc 'listwallets')
+        foreach ($w in $wallets) {
+            $name = if ("$w") { "$w" } else { 'default' }
+            $safe = ($name -replace '[^A-Za-z0-9_.-]', '_')
+            $dest = Join-Path $dir ("{0}-{1}-{2:yyyyMMdd-HHmmss}.dat" -f $safe, $why, (Get-Date))
+            # JSON-escape the Windows path (backslashes) for the RPC parameter.
+            $p = '["' + ($dest -replace '\\', '\\') + '"]'
+            try { Invoke-DgbWalletRpc "$w" 'backupwallet' $p | Out-Null; Log "  wallet '$name' backed up -> $dest" 'OK' }
+            catch { $ok = $false; Log "  wallet '$name' backup FAILED: $($_.Exception.Message)" 'WARN' }
+            Get-ChildItem $dir -Filter "$safe-*.dat" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
+                Select-Object -Skip 10 | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    } catch { $ok = $false; Log "  wallet backup skipped: $($_.Exception.Message)" 'WARN' }
+    return $ok
 }
 
 function Start-DigiByte {
@@ -2421,6 +2456,12 @@ function Invoke-Service {
             # files being replaced; cleared as soon as DigiByte is back up.
             Set-SupervisorPause "maintenance: updating DigiByte to $latest"
             try {
+                # Wallets first (upgrade notes, step 2). The update only replaces program
+                # files, so a failed backup is a warning rather than a reason to stay on an
+                # old release - skipping could leave the node short of a required upgrade.
+                if (-not (Backup-DigiByteWallets "before-$latest")) {
+                    Log '  continuing the update without a complete wallet backup (wallet files are not touched by it).' 'WARN'
+                }
                 Stop-DigiByteGracefully
                 Install-DigiByteBinaries (Resolve-DigiByteAsset $latest)
                 $state.digibyte = $latest.TrimStart('v'); Write-State $state

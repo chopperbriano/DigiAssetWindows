@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.1.0'
+$SCRIPT_VERSION = '1.2.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when
@@ -655,9 +655,16 @@ function Start-DigiByteWallet {
     if (-not (Test-ProcRunning 'digibyte-qt')) {
         # Only one process may hold the datadir, so stop the daemon first if a
         # previous headless run left it running.
+        # RPC stop first and wait (up to 5 min) - a hard kill can corrupt chainstate
+        # and force a long rebuild; kill only as the last resort.
         if (Test-ProcRunning 'digibyted') {
-            Get-Process digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            for ($w = 0; $w -lt 15 -and (Test-ProcRunning 'digibyted'); $w++) { Start-Sleep -Seconds 1 }
+            try { Invoke-DgbRpc 'stop' | Out-Null } catch {}
+            for ($w = 0; $w -lt 300 -and (Test-ProcRunning 'digibyted'); $w++) { Start-Sleep -Seconds 1 }
+            if (Test-ProcRunning 'digibyted') {
+                Log '  DigiByte daemon did not exit within 5 min of RPC stop - forcing it.' 'WARN'
+                Get-Process digibyted -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                for ($w = 0; $w -lt 15 -and (Test-ProcRunning 'digibyted'); $w++) { Start-Sleep -Seconds 1 }
+            }
         }
         Start-Process $qt -ArgumentList "-datadir=$DataDir -conf=$DgbConf"   # paths validated space-free
     }
