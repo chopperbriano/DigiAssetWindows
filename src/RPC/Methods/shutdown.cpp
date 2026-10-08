@@ -1,10 +1,9 @@
 //
 // Created by mctrivia on 17/03/24.
 //
-// RPC method "shutdown": exposed through the node's JSON-RPC server to bring the
-// node to a safe stopping point. It halts the chain analyzer and the IPFS
-// subsystem so no processing is left mid-write, then logs that it is safe for
-// the operator to terminate the process.
+// RPC method "shutdown": exposed through the node's JSON-RPC server to stop the
+// node cleanly. It replies at once and signals the main thread, which stops every
+// subsystem in order, flushes chain.db and exits the process.
 //
 
 #include "AppMain.h"
@@ -17,22 +16,23 @@
 namespace RPC {
     namespace Methods {
         /**
-        * Stops the node's background workers so the process can be terminated
-        * cleanly. Calls stop() on the chain analyzer and on the IPFS controller,
-        * then writes a CRITICAL "Safe to shut down" log line. params is ignored.
-        * Returns true, uncached (blocksGoodFor = -1). Note: this does not exit the
-        * process itself; the operator/host still terminates it.
+        * Requests a clean shutdown: logs it and raises SIGTERM, which the main thread
+        * turns into the ordered teardown (RPC server, web console, chain analyzer,
+        * pool threads, IPFS, WAL flush) and a process exit. params is ignored.
+        * Returns true at once, uncached (blocksGoodFor = -1); callers wait for the
+        * process to exit, which can take a minute while the analyzer finishes its block.
         */
         extern const Response shutdown(const Json::Value& params) {
-            AppMain* main=AppMain::GetInstance();
-            main->getChainAnalyzer()->stop();
-            main->getIPFS()->stop();
+            //Hand the whole shutdown to the main thread - the same path as ctrl-c, which
+            //already stops the RPC server, web console, chain analyzer, pool threads and
+            //IPFS in a safe order and then flushes the WAL.  This used to stop the analyzer
+            //and IPFS here first, on the RPC thread, before replying: the analyzer finishes
+            //its current block, so the reply routinely outlasted the CLI's 10 s timeout and
+            //callers saw "libcurl error: 22" (a timeout in the node's curl numbering) for a
+            //shutdown that was in fact under way.  The response still goes out because the
+            //RPC worker pool is drained before the sockets close.
             Log* log = Log::GetInstance();
-            log->addMessage("Safe to shut down", Log::CRITICAL);
-
-            //hand the rest of the shutdown(stop RPC server, flush WAL, close db) to the
-            //main thread - same path as ctrl-c.  The response still goes out because the
-            //RPC worker pool is drained before the sockets close
+            log->addMessage("Shutdown requested over RPC - stopping cleanly", Log::CRITICAL);
             std::raise(SIGTERM);
 
             //return response

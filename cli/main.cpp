@@ -87,9 +87,16 @@ int main(int argc, char* argv[]) {
     } catch (const DigiByteException& e) {
         string errorMessage=e.getMessage();
 
-        //check if DigiAsset for Windows is offline
-        if (errorMessage.substr(0,20)=="Could not connect to") {
+        //check if DigiAsset for Windows is offline.  The connector prefixes its text
+        //("libcurl error: 6 -> Could not connect to ..."), so search rather than compare
+        //the start - the old prefix test never matched
+        if (errorMessage.find("Could not connect to") != string::npos) {
             cout << "Exception: It looks like DigiAsset for Windows RPC Service is down.";
+            return 0;
+        }
+        //a timeout is not a refusal: shutdown in particular may still be going ahead
+        if (errorMessage.find("Operation timed out") != string::npos) {
+            cout << "Exception: the node did not answer " + command + " in time (it may still be busy, or shutting down).";
             return 0;
         }
 

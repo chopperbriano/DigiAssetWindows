@@ -110,9 +110,12 @@ void HttpClient::SendRPCMessage(const std::string &message, std::string &result)
     std::stringstream str;
     str << "libcurl error: " << res;
 
-    if (res == 7)
+    //this build links the WinHTTP curl stub (src/curl/curl.h), whose CURLcode numbering
+    //differs from real libcurl (7 = connect failed, 28 = timeout there; 6 and 22 here),
+    //so compare names, not numbers - "libcurl error: 22" read like an HTTP error
+    if (res == CURLE_COULDNT_CONNECT)
       str << " -> Could not connect to " << this->url;
-    else if (res == 28)
+    else if (res == CURLE_OPERATION_TIMEDOUT)
       str << " -> Operation timed out";
     throw JsonRpcException(Errors::ERROR_CLIENT_CONNECTOR, str.str());
   }

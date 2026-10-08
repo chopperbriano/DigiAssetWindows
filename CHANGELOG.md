@@ -20,6 +20,27 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — a clean shutdown that answers in time
+
+A snapshot publish on 2026-10-08 failed with `libcurl error: 22` from `cli shutdown`, and the
+script blamed rpcallow even though its preflight had just confirmed `shutdown` was allowed.
+
+- **22 was a timeout, not a refusal.** The node links its own WinHTTP curl stub, whose
+  `CURLcode` numbering differs from real libcurl: 22 there is `CURLE_OPERATION_TIMEDOUT`. The
+  CLI's HTTP client annotated errors by real-libcurl numbers (7, 28), so a timeout was never
+  labelled and a refused connection never recognised. It now compares the named constants, and
+  the CLI says "the node did not answer ... in time" for a timeout and recognises "RPC service
+  is down" again (its prefix test never matched).
+- **The `shutdown` RPC replies at once (binary).** It stopped the chain analyzer - which
+  finishes its block - and IPFS on the RPC thread before replying, which outlasted the CLI's
+  10 s timeout while the node went on shutting down. It now just signals the main thread,
+  which already does the full ordered teardown (RPC, web console, analyzer, pool threads,
+  IPFS, WAL flush) and exits.
+- **make-snapshot 2.9.0** (already on master) fails fast only on an explicit "forbidden" and
+  otherwise waits the full `-StopWaitSec` for the node to exit, so it works with older nodes too.
+
+---
+
 ## 0.3.3-win.144 — punch list: installer fixes, GUI fixes, docs rework
 
 The script and doc changes reached nodes through master; the GUI fixes are the binary change in
