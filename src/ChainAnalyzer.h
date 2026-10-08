@@ -42,6 +42,10 @@ public:
     explicit ChainAnalyzer();
     ~ChainAnalyzer();
 
+    //trackdigidollar as loaded - public so the web console can say "not tracked"
+    //instead of showing a DigiDollar index that will never finish
+    bool shouldTrackDigiDollar() const;
+
     //load/save config
     void setFileName(const std::string& fileName);
     void saveConfig();
@@ -124,7 +128,6 @@ private:
     bool shouldPruneUTXOHistory() const;
     bool shouldPruneVoteHistory() const;
     bool shouldStoreNonAssetUTXO() const;
-    bool shouldTrackDigiDollar() const;
 
     //state(for defaults see resetConfig() )
     std::atomic<int> _state{STOPPED}; // atomic: written by the analyzer thread AND the RPC/stats path

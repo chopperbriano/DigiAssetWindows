@@ -294,7 +294,8 @@
         <div style="margin-bottom:9px"><span class="pill gray" id="ddPill"><span class="pd"></span><span>—</span></span></div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
           <div>
-            <div class="row"><span class="k">Your holdings</span><span class="v" id="ddMine">—</span></div>
+            <!-- No "Your holdings" row: a wallet DigiDollar balance is too costly to
+                 compute on every status poll. The getwalletbalances RPC reports it. -->
             <div class="row"><span class="k">Oracle price</span><span class="v" id="ddPrice">—</span></div>
             <div class="row"><span class="k">Oracles signing</span><span class="v" id="ddOracles">—</span></div>
           </div>
@@ -424,6 +425,8 @@ function applyStatus(d){
   document.getElementById('syncHeight').textContent=fmt(s.height);
   document.getElementById('chainTip').textContent=fmt(s.chainTip);
   var pct=(s.progress||0)*100;
+  // Same cap as the console: a node still behind must never round up to 100.00%.
+  if(s.height < s.chainTip && pct > 99.99) pct=99.99;
   document.getElementById('syncPct').textContent=pct.toFixed(2)+'%';
   var bar=document.getElementById('syncBar'); bar.style.width=Math.min(100,pct)+'%';
   document.getElementById('syncBarWrap').classList.toggle('done', !!s.synced);
@@ -561,11 +564,14 @@ function applyStatus(d){
    integer cents/sats there); the browser never does the fixed-point maths. */
 function renderDigiDollar(d){
   var dd = d.digidollar || {};
-  var ids = ['ddMine','ddPrice','ddOracles','ddPriceHeight','ddSupply','ddHolders','ddCollateral','ddVaults'];
+  var ids = ['ddPrice','ddOracles','ddPriceHeight','ddSupply','ddHolders','ddCollateral','ddVaults'];
   function blank(){ ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.textContent='—'; }); }
 
   if(dd.error){ setPill('ddPill','red','unavailable'); blank(); return; }
   if(dd.indexed===undefined){ setPill('ddPill','gray','—'); blank(); return; }
+  // Checked before "indexed": an untracked node never finishes indexing, and
+  // amber "indexing" forever would read as a stuck node.
+  if(dd.tracking===false){ setPill('ddPill','gray','not tracked (trackdigidollar=0)'); blank(); return; }
 
   if(!dd.indexed){
     // syncHeight below activation means the backfill has not finished
@@ -597,11 +603,6 @@ function renderDigiDollar(d){
       (dd.priceHeight!==undefined)
         ? (fmt(dd.priceHeight) + (dd.priceEpoch!==undefined ? (' · epoch '+fmt(dd.priceEpoch)) : ''))
         : '—';
-
-  // Wallet holdings come from the wallet block when the node reports them.
-  var w = (d.digibyte&&d.digibyte.wallet) || {};
-  document.getElementById('ddMine').textContent =
-      (w.digidollar!==undefined && w.digidollar!==null) ? ('$'+w.digidollar) : 'none';
 }
 function markOffline(){
   document.getElementById('offline').classList.add('show');

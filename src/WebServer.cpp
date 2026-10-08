@@ -244,6 +244,10 @@ std::string WebServer::statusJson() {
         dd["activationHeight"] = DigiAssetConstants::DIGIDOLLAR_ACTIVATION_HEIGHT;
         dd["indexed"] = false;
         dd["available"] = false;
+        // With trackdigidollar=0 the index never catches up, so without this the
+        // UI would show "indexing" forever. Ask the analyzer what it actually loaded.
+        ChainAnalyzer* ddAnalyzer = app->getChainAnalyzerIfSet();
+        dd["tracking"] = ddAnalyzer ? ddAnalyzer->shouldTrackDigiDollar() : true;
         try {
             Database* ddb = app->getDatabase();
             if (ddb != nullptr) {

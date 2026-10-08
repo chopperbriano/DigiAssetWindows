@@ -408,8 +408,17 @@ void ConsoleDashboard::render() {
         std::lock_guard<std::mutex> lock(_pspStatusMutex);
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration<double>(now - _lastPspCheck).count();
-        if (elapsed >= 600.0 || _pspStatus.empty()) {
-            std::thread([this]() { checkPspRegistration(); }).detach();
+        // Claim the in-flight flag before spawning so the next frame can't start
+        // a second probe while this one is still waiting on the network.
+        bool expected = false;
+        if ((elapsed >= 600.0 || _pspStatus.empty()) &&
+            _pspCheckInFlight.compare_exchange_strong(expected, true)) {
+            std::thread([this]() {
+                // Its catch handlers still call out (config, NodeStats), so catch
+                // here too: a throw must not leave the flag stuck true.
+                try { checkPspRegistration(); } catch (...) {}
+                _pspCheckInFlight = false;
+            }).detach();
         }
     }
 
@@ -790,10 +799,12 @@ void ConsoleDashboard::render() {
         // background checkPspRegistration() thread writes _pspStatus and
         // _pspNodeCount, so naked reads here would race.
         bool serverUp;
+        bool pspChecked;
         int pspNodeCountSnapshot;
         {
             std::lock_guard<std::mutex> lock(_pspStatusMutex);
-            serverUp = !_pspStatus.empty() && _pspStatus.find("unreachable") == std::string::npos;
+            pspChecked = !_pspStatus.empty();
+            serverUp = pspChecked && _pspStatus.find("unreachable") == std::string::npos;
             pspNodeCountSnapshot = _pspNodeCount;
         }
 
@@ -804,7 +815,11 @@ void ConsoleDashboard::render() {
         std::string statusText;
         const char* statusColor = FG_YELLOW;
 
-        if (!serverUp) {
+        if (!pspChecked) {
+            // First probe still in flight - don't flash a red error at every start.
+            statusText = "Checking pool...";
+            statusColor = FG_CYAN;
+        } else if (!serverUp) {
             statusText = "Pool unreachable";
             statusColor = FG_RED;
         } else if (!pool) {
@@ -1388,7 +1403,7 @@ std::string ConsoleDashboard::getConfiguredPoolBase() {
  * /nodes.json, counts how many nodes it reports online (by counting "id" keys),
  * and publishes that count plus a "Pool reachable"/"Pool unreachable" status
  * under _pspStatusMutex. The HTTP fetch is done outside the lock; a success is
- * timestamped to cache for ~10 min while a failure is left uncached to retry.
+ * timestamped to cache for ~10 min while a failure is cached for ~30 s.
  */
 void ConsoleDashboard::checkPspRegistration() {
     auto now = std::chrono::steady_clock::now();
@@ -1428,13 +1443,16 @@ void ConsoleDashboard::checkPspRegistration() {
         {
             std::lock_guard<std::mutex> lock(_pspStatusMutex);
             _pspStatus = "Pool unreachable";
-            // don't cache failure — retry next refresh
+            // Short-cache the failure: back-date the timestamp so the 600 s
+            // test passes again in ~30 s, instead of re-probing every frame.
+            _lastPspCheck = now - std::chrono::seconds(570);
         }
         NodeStats::instance().setPool(false, 0, getConfiguredPoolBase());
     } catch (...) {
         {
             std::lock_guard<std::mutex> lock(_pspStatusMutex);
             _pspStatus = "Pool unreachable";
+            _lastPspCheck = now - std::chrono::seconds(570);
         }
         NodeStats::instance().setPool(false, 0, getConfiguredPoolBase());
     }
@@ -1918,8 +1936,8 @@ void ConsoleDashboard::printSwarmConnectCommands() {
 // ---- Port checking ----------------------------------------------------------
 
 /**
- * [P] command handler. For each relevant inbound port (IPFS swarm 4001, the web
- * UI port, DigiByte P2P 12024) asks ifconfig.co/port/<n> to attempt an external
+ * [P] command handler. For each relevant inbound port (IPFS swarm 4001,
+ * DigiByte P2P 12024) asks ifconfig.co/port/<n> to attempt an external
  * TCP connect back to our WAN IP, and logs each as Open/Closed (WARNING when not
  * reachable). Aborts if the external IP is unknown. Runs on a detached thread.
  */
@@ -1944,10 +1962,9 @@ void ConsoleDashboard::checkPorts() {
         std::string name;
     };
     std::vector<PortInfo> ports;
+    // No Web UI entry: the web server binds 127.0.0.1 only, so an external test
+    // of its port always reports Closed - a false warning, and correct as is.
     ports.push_back({4001, "IPFS Swarm"});
-    if (ws) {
-        ports.push_back({(int)ws->getPort(), "Web UI"});
-    }
     ports.push_back({12024, "DigiByte P2P"});
 
     log->addMessage("--- Port Check (external IP: " + externalIP + ") ---");

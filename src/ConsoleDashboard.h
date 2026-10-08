@@ -105,6 +105,10 @@ private:
     std::string _pspStatus;
     int _pspNodeCount = 0;
     std::chrono::steady_clock::time_point _lastPspCheck;
+    // True while a probe thread is running. render() fires every ~500 ms and the
+    // first probe (or one against a dead pool) takes up to 5 s, so without this
+    // guard each frame would spawn another overlapping network probe.
+    std::atomic<bool> _pspCheckInFlight{false};
     void checkPspRegistration();
 
     // IPFS bitswap stats: are we actually serving content out to peers?
