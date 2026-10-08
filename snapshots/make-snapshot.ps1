@@ -307,6 +307,10 @@ function New-ChainDbArchive {
         Say "  Cosmetic only; fast-sync still works. Pass -Height <N> to record the real height." 'Yellow'
     }
     Say "`nStopping the DigiAsset node (clean shutdown)..." 'Cyan'
+    # Operators used to see DigiByte close first and took its staying open for a stall.
+    if ($Component -in 'both','archives') {
+        Say "  (DigiByte stays running for now: chain.db is archived first, then DigiByte is stopped and archived.)" 'DarkGray'
+    }
     if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
         $shutOut = ''
         if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $shutOut = (& $CliExe shutdown 2>&1 | Out-String).Trim(); Pop-Location } catch { try{Pop-Location}catch{}; $shutOut = $_.Exception.Message } }
