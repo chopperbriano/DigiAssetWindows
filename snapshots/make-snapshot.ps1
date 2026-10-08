@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.7.0'
+$ScriptVersion = '2.8.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -78,8 +78,10 @@ function Write-Utf8NoBom($path, $text) {
 # single-threaded gzip is inherently slow (often 20-60 min) - this just shows it's
 # still working. Returns $true on success.
 function Invoke-TarWithProgress($archive, $srcDir, $items, $label, $sayEverySec = 300) {
-    $argList = @('-czf', "$archive", '-C', "$srcDir") + $items
-    $p = Start-Process -FilePath 'tar.exe' -ArgumentList $argList -PassThru -WindowStyle Hidden
+    # Windows' own tar, one argument string with every path quoted: an array -ArgumentList is
+    # joined with bare spaces under PS 5.1, so a path containing a space would split.
+    $argStr = (@('-czf', "`"$archive`"", '-C', "`"$srcDir`"") + ($items | ForEach-Object { "`"$_`"" })) -join ' '
+    $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\tar.exe') -ArgumentList $argStr -PassThru -WindowStyle Hidden
     $t0 = Get-Date; $lastSay = $t0
     while (-not $p.HasExited) {
         Start-Sleep -Seconds 3
@@ -116,7 +118,7 @@ $DgbData = $DataDir
 # keeps it in the datadir. Prefer the parent, fall back to the datadir.
 $DgbConf = if (Test-Path (Join-Path $DigiByteDir 'digibyte.conf')) { Join-Path $DigiByteDir 'digibyte.conf' } else { Join-Path $DgbData 'digibyte.conf' }
 Say "=== Make DigiAsset fast-sync snapshot ($Component)  (v$ScriptVersion) ===" 'Cyan'
-if ($Component -ne 'manifest' -and -not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw "tar.exe not found (needs Windows 10 1803+ / Windows 11)." }
+if ($Component -ne 'manifest' -and -not (Test-Path (Join-Path $env:SystemRoot 'System32\tar.exe'))) { throw "tar.exe not found (needs Windows 10 1803+ / Windows 11)." }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # --- Resolve BaseUrl NOW, not after the archives are built -------------------

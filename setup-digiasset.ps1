@@ -3,20 +3,23 @@
     One script that installs AND maintains a full DigiAsset for Windows node on a
     fresh PC, then keeps it updated and healthy on every restart.
 
-    Stack it sets up (all automatic, all start on boot):
-      * DigiByte Core wallet (digibyted)  -> C:\DigiByte   (blockchain + RPC)
-      * IPFS / kubo daemon                -> C:\DigiAssetWindows  (file storage)
-      * DigiAsset for Windows node        -> C:\DigiAssetWindows  (the node + dashboard)
+    Stack it sets up (all automatic, all start when you log in):
+      * DigiByte Core wallet (digibyte-qt) -> C:\DigiByte   (blockchain + RPC)
+      * IPFS Desktop (tray icon, bundles kubo) -> installed for your Windows user
+      * DigiAsset for Windows node         -> C:\DigiAssetWindows  (the node + dashboard)
 
 .DESCRIPTION
-    TWO MODES in one file:
+    THREE MODES in one file: Install, Service (maintenance) and LaunchNode (logon).
 
-    -Mode Install  (default, run it yourself the first time)
-        ALL QUESTIONS UP FRONT, then walk away. Two things are asked before any
+    -Mode Install  (default, run it yourself the first time - and safe to re-run)
+        ALL QUESTIONS UP FRONT, then walk away. Three things are asked before any
         download starts, because only you can answer them:
           * payout address    - press ENTER to have one created in the DigiByte
-                                wallet this sets up on your PC, or paste one you
-                                already control. Pre-answer with -PayoutAddress.
+                                wallet this sets up on your PC (on a re-run, ENTER
+                                keeps the address already configured), or paste one
+                                you control. Pre-answer with -PayoutAddress.
+          * auto-login        - offers Sysinternals Autologon so the node comes back
+                                after a reboot. Optional; -SkipAutologon skips it.
           * wallet encryption - offered with the passphrase collected now and
                                 applied near the end, once a wallet exists.
                                 -EncryptWallet pre-answers yes, -NoEncryptPrompt
@@ -32,20 +35,25 @@
                               "allow this app?" alert.
 
         Downloads and installs DigiByte Core (pinned to 9.26.7 by
-        -DigiByteVersion), plus the CURRENT latest IPFS Desktop and DigiAsset
-        for Windows - neither of those is pinned, both track their newest
-        GitHub release. IPFS Desktop bundles its own kubo, so kubo is never
-        downloaded separately. Then writes every config file, opens the local
-        firewall, registers all the boot tasks, tests internet reachability,
-        and installs itself as a maintenance task.
+        -DigiByteVersion; never downgrades a newer one), IPFS Desktop (at least
+        0.50.1 by -IpfsDesktopVersion; IPFS Desktop updates itself after that)
+        and the latest DigiAsset for Windows release. On a fresh install it
+        fast-syncs from the published snapshot when there is room for it. Then
+        writes every config file, opens the local firewall, registers the logon
+        tasks, tests internet reachability, installs itself as a maintenance
+        task, and saves the next steps to "DigiAsset - next steps.txt" on the desktop.
 
-    -Mode Service  (runs itself automatically at every boot, as SYSTEM)
-        Non-interactive. Checks GitHub / IPFS for newer versions of ALL THREE
-        components and updates them (verified downloads, graceful restarts),
-        then health-checks the whole stack and AGGRESSIVELY self-heals
-        (restart tasks, re-download corrupt files, re-open firewall). Only
-        pops a Windows alert if healing fails. Everything is logged to
-        C:\DigiAssetWindows\logs.
+    -Mode Service  (runs itself at every boot and every 6 hours, as SYSTEM)
+        Non-interactive. Updates DigiByte Core and DigiAsset for Windows to their
+        latest releases (wallets backed up, clean stops, verified downloads),
+        refreshes the helper scripts and config defaults, repairs the start-up
+        tasks, and health-checks the stack. IPFS Desktop is a per-user install
+        that updates itself; the logon launcher repairs or upgrades it. Only pops
+        a Windows alert if something stays broken. Logged to C:\DigiAssetWindows\logs.
+
+    -Mode LaunchNode  (the logon task, as your user)
+        Starts the DigiByte wallet, IPFS Desktop and the node in order and keeps
+        all three running for the session.
 
 .USAGE
     Right-click > Run with PowerShell (it will ask for Administrator), or:
@@ -86,7 +94,7 @@ param(
     [switch]$NoStartOnLogon,
     # -Lean: build a leaner DigiByte node that skips the OPTIONAL service indexes
     # (coinstatsindex, block/bloom filters, digidollar stats) to save disk + CPU.
-    # Default (omit) = full public service node. Interactive install also offers this.
+    # Default (omit) = full public service node, unless free disk space says lean.
     [switch]$Lean,
     # -NoUpnp: skip the automatic router port-forward (UPnP) attempt.
     [switch]$NoUpnp,
@@ -103,12 +111,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Invoke-WebRequest in Windows PowerShell 5.1 redraws a progress bar per chunk, which
+# slows every download dramatically (DigiByte, IPFS Desktop, VC++, the snapshot
+# fallback). The long steps report progress themselves with Write-Progress.
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.34.0'
+$SCRIPT_VERSION = '2.35.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -678,6 +690,19 @@ function Invoke-DgbWalletRpc([string]$wallet, [string]$method, [string]$paramsJs
 #
 # Needs DigiByte RPC up and a wallet loaded, so call it after Wait-ForDigiByteRpc +
 # Ensure-DigiByteWallet and before Write-NodeConfig (which writes it to config.cfg).
+# The payout address already in config.cfg (psp2 = DigiStamp slot, psp1 = legacy), or ''
+# when there is none or it is not a valid DigiByte address.
+function Get-ExistingPayoutAddress {
+    try {
+        $c = Read-Conf $NodeConfig
+        foreach ($k in 'psp2payout', 'psp1payout') {
+            $v = "$($c[$k])".Trim()
+            if ($v -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') { return $v }
+        }
+    } catch {}
+    return ''
+}
+
 function Resolve-PayoutAddress {
     if ($script:PayoutAddress -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
         Log "  payout address (supplied): $script:PayoutAddress" 'OK'
@@ -686,6 +711,14 @@ function Resolve-PayoutAddress {
     if ($script:PayoutAddress) {
         Log "  ignoring -PayoutAddress '$script:PayoutAddress' - not a valid DigiByte address." 'WARN'
         $script:PayoutAddress = ''
+    }
+    # Re-run (also unattended): keep the address already configured rather than creating a
+    # new one, which would move the earnings address and re-register with the pool.
+    $existing = Get-ExistingPayoutAddress
+    if ($existing) {
+        $script:PayoutAddress = $existing
+        Log "  payout address (already configured): $existing" 'OK'
+        return
     }
 
     $wallet = ''
@@ -797,13 +830,27 @@ function Get-InstallAnswers {
 
     # --- 1. Payout address (skipped when -PayoutAddress was passed) ----------
     if (-not $script:PayoutAddress) {
+        # A re-run must not quietly swap the payout address: ENTER used to mean "make a new
+        # one" every time, so each "safe re-run" moved the earnings address and re-registered
+        # the node with the pool. With an address already in config.cfg, ENTER keeps it.
+        $existing = Get-ExistingPayoutAddress
         Write-Host '1) Where should your hosting earnings be paid?' -ForegroundColor White
-        Write-Host '   Press ENTER to create an address in the DigiByte wallet on this PC (recommended -' -ForegroundColor Gray
-        Write-Host '   only you hold its keys). Or paste an address you already control (D..., S..., dgb1...).' -ForegroundColor Gray
+        if ($existing) {
+            Write-Host "   Press ENTER to keep your current payout address: $existing" -ForegroundColor Gray
+            Write-Host '   Or paste a different address you control (D..., S..., dgb1...).' -ForegroundColor Gray
+        } else {
+            Write-Host '   Press ENTER to create an address in the DigiByte wallet on this PC (recommended -' -ForegroundColor Gray
+            Write-Host '   only you hold its keys). Or paste an address you already control (D..., S..., dgb1...).' -ForegroundColor Gray
+        }
         for ($t = 0; $t -lt 5; $t++) {
             $a = ("$(Read-Host '   Payout address (or press Enter)')").Trim()
             if (-not $a) {
-                Write-Host '   OK - one will be created in your wallet on this PC.' -ForegroundColor Green
+                if ($existing) {
+                    $script:PayoutAddress = $existing
+                    Write-Host '   OK - keeping your current payout address.' -ForegroundColor Green
+                } else {
+                    Write-Host '   OK - one will be created in your wallet on this PC.' -ForegroundColor Green
+                }
                 break
             }
             if ($a -match '^(D|S|dgb1)[0-9A-Za-z]{6,90}$') {
@@ -1309,7 +1356,7 @@ function Update-NodeToolRpc {
 # Companion tools, staged FLAT into $DigiAssetDir from node/ on master. Refreshed on
 # every maintenance run so existing nodes get fixes (e.g. new monitor-node checks)
 # without a reinstall. A download must parse and differ before it replaces the copy.
-$NodeTools = @('monitor-node.ps1','stop-node.ps1','update-node.ps1','memwatch.ps1')
+$NodeTools = @('monitor-node.ps1','stop-node.ps1','update-node.ps1','update-binaries.ps1','memwatch.ps1')
 function Update-NodeTools {
     foreach ($tool in $NodeTools) {
         try {
@@ -1662,7 +1709,8 @@ function Write-NodeConfig($rpc) {
     $lines = @(
         '# =============================================================================',
         '# DigiAsset for Windows - node configuration (config.cfg)',
-        '#   Written by setup-digiasset.ps1. Safe to edit by hand; lines starting with',
+        '#   Written by setup-digiasset.ps1. Safe to edit by hand - open Notepad with',
+        '#   "Run as administrator" (this file is limited to Administrators). Lines starting with',
         '#   # are comments. Restart the node (DigiAssetWindows.exe) after any change.',
         '# =============================================================================',
         '',
@@ -1758,6 +1806,7 @@ function Update-SelfScript {
 # (and resumes an in-progress job if the installer is re-run). Falls back to a
 # plain download if BITS is unavailable. Returns $true on success.
 function Get-DownloadWithProgress($url, $dest, $label) {
+    $ProgressPreference = 'Continue'   # local: this function draws its own bar (script default is silent)
     Import-Module BitsTransfer -ErrorAction SilentlyContinue
     if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
         $name = 'DigiAssetSnapshot'
@@ -1788,19 +1837,33 @@ function Get-DownloadWithProgress($url, $dest, $label) {
             Log "  download ended in state '$($job.JobState)'." 'WARN'; $job | Remove-BitsTransfer -ErrorAction SilentlyContinue; return $false
         } catch { Log "  (BITS unavailable: $($_.Exception.Message)) - falling back." 'WARN' }
     }
+    $ProgressPreference = 'SilentlyContinue'   # IWR's own bar slows a 37 GB download to a crawl
     try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 0; return (Test-Path $dest) } catch { return $false }
 }
 
 # Extract with a "still working" heartbeat, since tar shows nothing for minutes
 # on a huge archive and the heavy disk I/O can look like a freeze.
 function Expand-WithProgress($archive, $destDir, $label) {
+    $ProgressPreference = 'Continue'   # local: this function draws its own bar (script default is silent)
     # DriveInfo.AvailableFreeSpace does a live syscall every read; Get-PSDrive's
     # .Free is cached and jitters (would show negative deltas mid-extract).
     $drive = (Split-Path $destDir -Qualifier).TrimEnd(':')
     $di = try { New-Object System.IO.DriveInfo $drive } catch { $null }
     $freeBefore = if ($di) { $di.AvailableFreeSpace } else { 0 }
     Log "  extracting $label - heavy disk activity for several minutes; this is NORMAL, not frozen." 'WARN'
-    $p = Start-Process -FilePath 'tar.exe' -ArgumentList @('-xzf', "$archive", '-C', "$destDir") -PassThru -WindowStyle Hidden
+    # Unpack into a staging folder beside the destination and move the result into place
+    # only when tar succeeds. Extracting straight into $destDir left a half-written
+    # blocks\ after a failed or interrupted extract, and a re-run then saw blocks\, skipped
+    # the restore and started DigiByte on a damaged chain. Same drive, so the move is a rename.
+    $stage = Join-Path (Split-Path $destDir -Parent) ((Split-Path $destDir -Leaf) + '.extracting')
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    Ensure-Dir $stage
+    # Windows' own bsdtar, not whatever tar.exe is first on PATH (Git's GNU tar reads
+    # "C:\..." as a remote host). One argument string with each path quoted: PowerShell
+    # 5.1 joins an -ArgumentList array with bare spaces, so a profile path with a space
+    # ("C:\Users\John Smith\...") split in two and the extract failed after a 37 GB download.
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    $p = Start-Process -FilePath $tar -ArgumentList "-xzf `"$archive`" -C `"$stage`"" -PassThru -WindowStyle Hidden
     $t0 = Get-Date
     while (-not $p.HasExited) {
         Start-Sleep -Seconds 5
@@ -1808,10 +1871,51 @@ function Expand-WithProgress($archive, $destDir, $label) {
         Write-Progress -Activity "Extracting $label snapshot" -Status ("~{0:N1} GB written   elapsed {1}   (working, please wait...)" -f ($written/1GB), (((Get-Date)-$t0).ToString('hh\:mm\:ss')))
     }
     Write-Progress -Activity "Extracting $label snapshot" -Completed
-    return ($p.ExitCode -eq 0)
+    if ($p.ExitCode -ne 0) {
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    try {
+        Ensure-Dir $destDir
+        foreach ($item in @(Get-ChildItem -LiteralPath $stage -Force)) {
+            Move-Item -LiteralPath $item.FullName -Destination (Join-Path $destDir $item.Name) -Force
+        }
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        Log "  could not move the extracted $label into place: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
 }
 
-function Get-Snapshot($url, $sha, $destDir, $label) {
+# Free space needed before a snapshot download: the archive itself in $Tmp, plus
+# roughly 1.5x its size once unpacked at the destination (the same ~2.5x total that
+# install-digibyte.ps1 checks). Returns '' when it fits, else the reason to skip.
+function Test-SnapshotSpace([int64]$sizeBytes, [string]$destDir) {
+    if ($sizeBytes -le 0) { return '' }
+    $need = @{}
+    foreach ($pair in @(@($Tmp, [double]$sizeBytes), @($destDir, [double]$sizeBytes * 1.5))) {
+        $d = (Split-Path $pair[0] -Qualifier).TrimEnd(':').ToUpper()
+        if (-not $need.ContainsKey($d)) { $need[$d] = 0.0 }
+        $need[$d] += $pair[1]
+    }
+    foreach ($d in $need.Keys) {
+        $free = 0.0
+        try { $free = [double](New-Object System.IO.DriveInfo $d).AvailableFreeSpace } catch { continue }
+        if ($free -lt $need[$d]) {
+            return ("needs about {0:N0} GB free on drive {1}, and only {2:N0} GB is free" -f ($need[$d] / 1GB), $d, ($free / 1GB))
+        }
+    }
+    return ''
+}
+
+function Get-Snapshot($url, $sha, $destDir, $label, [int64]$sizeBytes = 0) {
+    $short = Test-SnapshotSpace $sizeBytes $destDir
+    if ($short) {
+        Log ("  skipping the $label snapshot ({0:N1} GB): it $short. Syncing normally instead (slower, but it works)." -f ($sizeBytes / 1GB)) 'WARN'
+        return $false
+    }
+    if ($sizeBytes -gt 0) { Log ("  $label snapshot is {0:N1} GB - disk space checked, OK." -f ($sizeBytes / 1GB)) }
     $tmp = Join-Path $Tmp (Split-Path $url -Leaf)
     if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     Log "  downloading $label snapshot (large; resumable - safe to leave running)..." 'STEP'
@@ -1833,7 +1937,7 @@ function Get-Snapshot($url, $sha, $destDir, $label) {
 function Restore-Snapshot {
     $url = if ($SnapshotUrl) { $SnapshotUrl } else { $DefaultSnapshotUrl }
     if (-not $url) { return }
-    if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { Log '  fast-sync needs tar (Win10 1803+); syncing normally.' 'WARN'; return }
+    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\tar.exe'))) { Log '  fast-sync needs tar (Win10 1803+); syncing normally.' 'WARN'; return }
     Log 'Fast-sync: fetching snapshot manifest...' 'STEP'
     # Parse defensively: R2/other hosts may serve .json as octet-stream, in which
     # case Invoke-RestMethod would hand back raw text instead of an object. Fetch
@@ -1859,13 +1963,13 @@ function Restore-Snapshot {
     $base = ("$($m.baseUrl)").TrimEnd('/')
     if ($m.digibyte -and -not (Test-Path (Join-Path $DgbData 'blocks'))) {
         Ensure-Dir $DgbData
-        if (Get-Snapshot "$base/$($m.digibyte.file)" $m.digibyte.sha256 $DgbData 'DigiByte blockchain') {
+        if (Get-Snapshot "$base/$($m.digibyte.file)" $m.digibyte.sha256 $DgbData 'DigiByte blockchain' ([int64]$m.digibyte.sizeBytes)) {
             Log "  + DigiByte blockchain restored (height $($m.digibyte.height))." 'OK'
         }
     } elseif ($m.digibyte) { Log '  DigiByte data already present - not restoring.' }
     if ($m.chaindb -and -not (Test-Path (Join-Path $DigiAssetDir 'chain.db'))) {
         Ensure-Dir $DigiAssetDir
-        if (Get-Snapshot "$base/$($m.chaindb.file)" $m.chaindb.sha256 $DigiAssetDir 'DigiAsset chain.db') {
+        if (Get-Snapshot "$base/$($m.chaindb.file)" $m.chaindb.sha256 $DigiAssetDir 'DigiAsset chain.db' ([int64]$m.chaindb.sizeBytes)) {
             Log '  + chain.db restored.' 'OK'
         }
     }
@@ -1986,7 +2090,12 @@ function Invoke-Install {
         $driveName = $drive.Name
     } catch { Log '  (could not check free disk space - continuing)' 'WARN' }
 
-    if ($null -ne $freeGB) {
+    # A re-run on a working node: the chain already sits on this disk, so its own size
+    # must not block a repair. Warn instead of refusing.
+    $haveChain = Test-Path (Join-Path $DgbData 'blocks')
+    if (($null -ne $freeGB) -and $haveChain -and ($freeGB -lt 25)) {
+        Log "  disk space: only $freeGB GB free on $driveName (the existing blockchain uses the rest) - continuing the repair, but free some space soon." 'WARN'
+    } elseif ($null -ne $freeGB) {
         if ($freeGB -lt 25) {
             throw "Not enough disk space: $freeGB GB free on drive $driveName, and this needs at least 25 GB to install and sync. Free up space (or point -DigiByteDir at a bigger drive) and re-run."
         }
@@ -2159,7 +2268,9 @@ function Invoke-Install {
     Start-Sleep 2
     $reach = Test-PortOpen4001
     if ($reach -eq $true) { Log '  SUCCESS: port 4001 is OPEN. You are set to be verified + paid.' 'OK' }
-    else { Log '  Port 4001 is NOT reachable yet - forward it on your router (below), then re-test.' 'WARN' }
+    elseif ($reach -eq $false) { Log '  Port 4001 is NOT reachable yet - forward it on your router (below), then re-test.' 'WARN' }
+    # $null = the online test itself could not run; that says nothing about the router.
+    else { Log "  Could not run the online port test right now - re-check later with $DigiAssetDir\monitor-node.ps1." 'WARN' }
 
     # Save a treasury/earnings note the user can always find.
     $treasuryNote = Join-Path $DigiAssetDir 'TREASURY.txt'
@@ -2187,12 +2298,27 @@ function Invoke-Install {
         Set-Content -Path $treasuryNote -Value $note -Encoding UTF8
     } catch {}
 
+    # Is the payout address in THIS PC's wallet? Only then do "earnings arrive in the
+    # wallet on this PC" and the wallet-backup advice describe the user's earnings - a
+    # pasted exchange or other-wallet address gets paid there instead.
+    $payoutLocal = $false
+    if ($PayoutAddress) {
+        try {
+            $wn = ''; try { $w = @(Invoke-DgbRpc 'listwallets'); if ($w.Count -gt 0) { $wn = "$($w[0])" } } catch {}
+            $info = if ($wn) { Invoke-DgbWalletRpc $wn 'getaddressinfo' "[`"$PayoutAddress`"]" } else { Invoke-DgbRpc 'getaddressinfo' "[`"$PayoutAddress`"]" }
+            $payoutLocal = [bool]$info.ismine
+        } catch {}
+    }
+
     # Summary ----------------------------------------------------------------
     Write-Host "`n===== Done =====" -ForegroundColor Green
     Write-Host 'Everything is installed, auto-starting on boot, and self-updating.' -ForegroundColor White
     Write-Host ''
     Write-Host 'ABOUT EARNINGS:' -ForegroundColor Cyan
-    if ($PayoutAddress) {
+    if ($PayoutAddress -and -not $payoutLocal) {
+        Write-Host '  * Earnings are paid to the address you gave - check that wallet to see them.' -ForegroundColor White
+        Write-Host "    Your payout address: $PayoutAddress" -ForegroundColor Gray
+    } elseif ($PayoutAddress) {
         Write-Host '  * Earnings go into the DigiByte wallet on THIS PC - open it to see them.' -ForegroundColor White
         Write-Host "    Your payout address: $PayoutAddress" -ForegroundColor Gray
     } else {
@@ -2235,7 +2361,10 @@ function Invoke-Install {
     Write-Host ''
     Write-Host 'YOUR SETTINGS (all in one documented file; edit then restart the node):' -ForegroundColor Cyan
     Write-Host "  * Config file : $NodeConfig" -ForegroundColor Gray
-    Write-Host '                  (open in Notepad - every setting has a # comment explaining it)' -ForegroundColor DarkGray
+    # Protect-SecretFile limits it to SYSTEM + Administrators (it holds the RPC password),
+    # so a normal Notepad gets "Access denied".
+    Write-Host '                  (to edit: right-click Notepad > Run as administrator, then File > Open.' -ForegroundColor DarkGray
+    Write-Host '                   Every setting has a # comment explaining it. Restart the node after.)' -ForegroundColor DarkGray
     Write-Host "  * Pool joined : $PoolServer   (key: psp2server - DigiStamp Pool)" -ForegroundColor Gray
     Write-Host "  * Payout addr : $(if ($PayoutAddress) { $PayoutAddress } else { '(pending - created automatically)' })   (key: psp2payout; change with -PayoutAddress)" -ForegroundColor Gray
     Write-Host '  * In the node window, the "PSP Pool" line reads "reachable" once it connects to' -ForegroundColor Gray
@@ -2268,8 +2397,13 @@ function Invoke-Install {
     Write-Host '============================================================' -ForegroundColor Yellow
     Write-Host ' ONE MORE THING - BACK UP YOUR WALLET (IMPORTANT)' -ForegroundColor Yellow
     Write-Host '============================================================' -ForegroundColor Yellow
-    Write-Host '  Your wallet is already created and your payout address is already in it.' -ForegroundColor White
-    Write-Host '  Your earnings live in THIS wallet, on THIS PC - so protect it:' -ForegroundColor White
+    if ($payoutLocal) {
+        Write-Host '  Your wallet is already created and your payout address is already in it.' -ForegroundColor White
+        Write-Host '  Your earnings live in THIS wallet, on THIS PC - so protect it:' -ForegroundColor White
+    } else {
+        Write-Host '  This PC has a DigiByte wallet (the node needs one). Your payouts go to the address' -ForegroundColor White
+        Write-Host '  you gave, but any DGB you keep on this PC lives in this wallet - so protect it:' -ForegroundColor White
+    }
     Write-Host '   1. Open the DigiByte wallet (it is starting now / on your taskbar).' -ForegroundColor White
     Write-Host '   2. File > Backup Wallet... -> save wallet.dat somewhere safe/offline.' -ForegroundColor White
     Write-Host '      Without a backup, a dead disk or a Windows reinstall loses the earnings.' -ForegroundColor Red
@@ -2297,6 +2431,45 @@ function Invoke-Install {
     Write-Host '     TCP 12024   DigiByte hosting          (recommended - serve DigiByte peers)' -ForegroundColor White
     Write-Host '  Keep 5001 / 14022 / 8090 PRIVATE - never forward them (local-only).' -ForegroundColor Red
     Write-Host '============================================================' -ForegroundColor Cyan
+
+    # The summary above scrolls away, and an install with a snapshot runs for hours while
+    # people walk off - so save the next steps where they will find them: the desktop.
+    try {
+        $desk = [Environment]::GetFolderPath('Desktop')
+        if (-not $desk) { $desk = $DigiAssetDir }
+        $ns = @(
+            "DigiAsset for Windows - next steps   (installed $(Get-Date -Format 'yyyy-MM-dd HH:mm'), setup v$SCRIPT_VERSION)",
+            '',
+            '1. FORWARD PORTS ON YOUR ROUTER (needed to be verified and paid)',
+            "   Forward to this PC: $(if ($localIp) { $localIp } else { 'run ipconfig, use the IPv4 Address' })",
+            '     TCP 4001   DigiAsset / IPFS hosting   REQUIRED',
+            '     UDP 4001   DigiAsset / IPFS (QUIC)    recommended',
+            '     TCP 12024  DigiByte peers             recommended',
+            '   Never forward 5001, 14022, 14024 or 8090 - those stay private.',
+            "   Port 4001 test at install: $(if ($reach -eq $true) { 'OPEN - nothing to do' } elseif ($reach -eq $false) { 'NOT reachable yet' } else { 'could not run' })",
+            '',
+            '2. BACK UP THE WALLET',
+            '   Open the DigiByte wallet > File > Backup Wallet... and keep the copy off this PC.',
+            '   Encrypting it (Settings > Encrypt Wallet) is optional - lose the passphrase and the coins are gone.',
+            '',
+            '3. EARNINGS',
+            "   Payout address: $(if ($PayoutAddress) { $PayoutAddress } else { '(being created automatically within the hour)' })",
+            "   $(if ($PayoutAddress -and -not $payoutLocal) { 'Paid to the address you gave - check that wallet.' } else { 'Paid into the DigiByte wallet on this PC.' })",
+            '   Payments are tiny and only made when the pool treasury has funds.',
+            '',
+            '4. CHECK ON IT ANY TIME (Administrator PowerShell)',
+            "   powershell -ExecutionPolicy Bypass -File $DigiAssetDir\monitor-node.ps1",
+            '   Updates install themselves (every 6 hours and at boot).',
+            '',
+            '5. SETTINGS',
+            "   $NodeConfig - open Notepad with 'Run as administrator' to edit; restart the node after.",
+            "   Install log: $LogFile"
+        )
+        $nsFile = Join-Path $desk 'DigiAsset - next steps.txt'
+        Set-Content -Path $nsFile -Value $ns -Encoding UTF8
+        Write-Host ''
+        Write-Host "These next steps are saved on your desktop: $nsFile" -ForegroundColor Green
+    } catch { Log "  (could not save the next-steps file: $($_.Exception.Message))" 'WARN' }
 
     # Durable proof of completion (the window may close; this file + log line stay).
     Log "Install completed successfully (script v$SCRIPT_VERSION)." 'OK'
@@ -2593,18 +2766,14 @@ try {
         default      { Invoke-Install }
     }
     # The self-elevated install runs in its own window that would otherwise close the
-    # instant the script ends - leaving no proof it finished. Hold it open long enough
-    # to read the summary, but on a TIMER rather than a keypress: a successful install
-    # should not need one last click from the user. Enter closes it early.
+    # instant the script ends. It used to close on a 60 s timer, but an install with a
+    # snapshot runs for hours and people walk away - they came back to a closed window
+    # and had lost the router-port and wallet-backup steps. Wait for Enter instead (the
+    # steps are also saved to the desktop, so closing it loses nothing).
     if ($Mode -eq 'Install' -and [Environment]::UserInteractive) {
         try {
             Write-Host ''
-            for ($s = 60; $s -gt 0; $s--) {
-                Write-Host ("`r  All done. This window closes in {0,2}s (press Enter to close now)..." -f $s) -NoNewline -ForegroundColor Gray
-                if ($Host.UI.RawUI.KeyAvailable) { break }
-                Start-Sleep -Seconds 1
-            }
-            Write-Host ''
+            Read-Host '  All done. Press Enter to close this window' | Out-Null
         } catch {
             # No interactive console (piped/redirected host): nothing to hold open.
         }
@@ -2615,6 +2784,9 @@ try {
     elseif ($Mode -eq 'Install') {
         Write-Host "`nSomething went wrong: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "See $LogFile" -ForegroundColor Gray
+        Write-Host 'Fix what the message says (for a download error: check the internet connection,' -ForegroundColor White
+        Write-Host 'proxy or antivirus), then run the same one-liner again - re-running is safe and' -ForegroundColor White
+        Write-Host 'skips everything that is already done.' -ForegroundColor White
         if ([Environment]::UserInteractive) { try { Read-Host 'Press Enter to close' | Out-Null } catch {} }
     }
     exit 1

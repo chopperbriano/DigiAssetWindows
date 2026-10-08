@@ -36,7 +36,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.5.0'
+$ScriptVersion = '1.6.0'
 # Did the user set -DataDir explicitly? Captured BEFORE we elevate so the answer
 # survives the UAC relaunch (we only forward -DataDir when it was set). That is
 # how the elevated instance knows whether to PROMPT for a location or not.
@@ -70,7 +70,8 @@ function Get-DL($u,$d){
 function Expand-DL($a,$dst){
     $drv=(Split-Path $dst -Qualifier).TrimEnd(':'); $di=try{New-Object System.IO.DriveInfo $drv}catch{$null}; $fb=if($di){$di.AvailableFreeSpace}else{0}
     Say "Extracting into $dst - heavy disk activity for several minutes; this is NORMAL, not frozen." 'Yellow'
-    $p=Start-Process tar.exe -ArgumentList @('-xzf',"$a",'-C',"$dst") -PassThru -WindowStyle Hidden; $t0=Get-Date
+    # Windows' own tar with quoted paths (an array -ArgumentList splits a path with a space under PS 5.1)
+    $p=Start-Process (Join-Path $env:SystemRoot 'System32\tar.exe') -ArgumentList "-xzf `"$a`" -C `"$dst`"" -PassThru -WindowStyle Hidden; $t0=Get-Date
     while (-not $p.HasExited) { Start-Sleep -Seconds 5; $w=0; if($di){try{$w=[math]::Max(0,$fb-$di.AvailableFreeSpace)}catch{}}
         Write-Progress -Activity "Extracting" -Status ("~{0:N1} GB written  elapsed {1}  (working...)" -f ($w/1GB),(((Get-Date)-$t0).ToString('hh\:mm\:ss'))) }
     Write-Progress -Activity "Extracting" -Completed; return ($p.ExitCode -eq 0)
@@ -131,7 +132,7 @@ if (-not $admin) {
 }
 
 Say "=== Seed DigiByte wallet from snapshot  (v$ScriptVersion) ===" 'Cyan'
-if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { throw 'tar.exe not found (needs Windows 10 1803+ / Windows 11).' }
+if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\tar.exe'))) { throw 'tar.exe not found (needs Windows 10 1803+ / Windows 11).' }
 
 Say "Fetching manifest: $SnapshotUrl" 'Gray'
 # Parse defensively: R2 serves .json as octet-stream, so Invoke-RestMethod would

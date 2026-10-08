@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.4.0'
+$SCRIPT_VERSION = '1.5.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when
@@ -541,7 +541,16 @@ function Expand-WithProgress($archive, $destDir, $label) {
     $di = try { New-Object System.IO.DriveInfo $drive } catch { $null }
     $freeBefore = if ($di) { $di.AvailableFreeSpace } else { 0 }
     Log "  extracting $label - heavy disk activity for several minutes; this is NORMAL, not frozen." 'WARN'
-    $p = Start-Process -FilePath 'tar.exe' -ArgumentList @('-xzf', "$archive", '-C', "$destDir") -PassThru -WindowStyle Hidden
+    # Unpack beside the destination and move into place only on success: extracting
+    # straight in left a half-written blocks\ after a failure, and a re-run then skipped
+    # seeding ("existing blockchain left alone") and started DigiByte on a damaged chain.
+    $stage = Join-Path (Split-Path $destDir -Parent) ((Split-Path $destDir -Leaf) + '.extracting')
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    Ensure-Dir $stage
+    # Windows' own tar (not Git's GNU tar from PATH), one argument string with quoted
+    # paths - an array -ArgumentList splits a path containing a space under PS 5.1.
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    $p = Start-Process -FilePath $tar -ArgumentList "-xzf `"$archive`" -C `"$stage`"" -PassThru -WindowStyle Hidden
     $t0 = Get-Date
     while (-not $p.HasExited) {
         Start-Sleep -Seconds 5
@@ -549,7 +558,18 @@ function Expand-WithProgress($archive, $destDir, $label) {
         Write-Progress -Activity "Extracting $label snapshot" -Status ("~{0:N1} GB written   elapsed {1}   (working, please wait...)" -f ($written/1GB), (((Get-Date)-$t0).ToString('hh\:mm\:ss')))
     }
     Write-Progress -Activity "Extracting $label snapshot" -Completed
-    return ($p.ExitCode -eq 0)
+    if ($p.ExitCode -ne 0) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue; return $false }
+    try {
+        Ensure-Dir $destDir
+        foreach ($item in @(Get-ChildItem -LiteralPath $stage -Force)) {
+            Move-Item -LiteralPath $item.FullName -Destination (Join-Path $destDir $item.Name) -Force
+        }
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        Log "  could not move the extracted $label into place: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
 }
 
 function Get-Snapshot($url, $sha, $destDir, $label) {
@@ -578,7 +598,7 @@ function Restore-Snapshot {
         Log '  a blockchain is already present in the data directory - not seeding.' 'WARN'
         return $null
     }
-    if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\tar.exe'))) {
         Log '  seeding needs tar.exe (Windows 10 1803+); syncing normally.' 'WARN'; return $null
     }
     Log 'Fetching snapshot manifest...' 'STEP'
