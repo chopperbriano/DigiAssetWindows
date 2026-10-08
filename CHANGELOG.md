@@ -38,6 +38,16 @@ script blamed rpcallow even though its preflight had just confirmed `shutdown` w
   IPFS, WAL flush) and exits.
 - **make-snapshot 2.9.0** (already on master) fails fast only on an explicit "forbidden" and
   otherwise waits the full `-StopWaitSec` for the node to exit, so it works with older nodes too.
+- **Shutdown no longer waits out stuck IPFS pins (binary).** The next run then sat in "Waiting
+  for the DigiAsset node to exit" past the 10-minute limit. `IPFS::stop()` aborts in-flight
+  requests through the curl progress callback, but the WinHTTP stub only polled that between
+  body chunks - a request still waiting for its response ignored it. An IPFS `pin/add` for
+  content nobody serves waits up to 20 minutes, and a node with a backlog of those could not
+  stop until each timed out. The stub now tracks in-flight requests (by id, so a reused handle
+  value is never closed by mistake) and `CurlHandler::abortAllTransfers` closes them, which
+  cancels the blocked WinHTTP call at once. Tested with a server that accepts and never
+  answers: the request ends ~0 s after the abort (it hung until the server gave up without the
+  fix), and requests work normally once the abort is lifted.
 
 ---
 

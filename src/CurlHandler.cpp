@@ -120,6 +120,12 @@ namespace CurlHandler {
 
     void abortAllTransfers(bool abort) {
         _abortAll = abort;
+#ifdef _WIN32
+        //the progress callback only fires between body chunks, so a request still waiting
+        //for its response (an IPFS pin can wait 20 minutes) ignored it and held up shutdown;
+        //the WinHTTP stub can cancel those outright
+        curl_stub_abort_all(abort ? 1 : 0);
+#endif
     }
 
     long lastHttpStatus() {

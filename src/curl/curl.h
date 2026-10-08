@@ -214,6 +214,11 @@ void curl_slist_free_all(struct curl_slist *list);                              
 CURLcode curl_global_init(long flags);                                           /* process-wide init */
 void curl_global_cleanup(void);                                                  /* process-wide teardown */
 
+/* Not libcurl: WinHTTP-stub only. Nonzero closes every in-flight request (cancelling a
+ * call blocked waiting for its response) and refuses new ones until called with 0.
+ * Used by CurlHandler::abortAllTransfers for a prompt shutdown. */
+void curl_stub_abort_all(int abort);
+
 /* --- Windows-fork additions for asset_features (PR26) -----------------------
  * Upstream's postFile()/progress code uses libcurl's mime (multipart upload)
  * and xferinfo APIs. curl_mime_* are IMPLEMENTED over WinHTTP in curl_stubs.cpp

@@ -8,10 +8,65 @@
 #include <cstdarg>
 #include <cstring>
 #include <cstdlib>
+#include <atomic>
+#include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <windows.h>
 #include <winhttp.h>
+
+// ---- Shutdown abort ------------------------------------------------------------
+// The progress-callback abort below is only polled between body chunks, so a request
+// blocked waiting for its response - an IPFS pin/add for content nobody serves sends
+// nothing for up to 20 minutes - could not be cut short, and node shutdown waited for
+// every such pin to time out. curl_stub_abort_all() closes every in-flight request
+// handle instead: closing a WinHTTP request handle from another thread cancels the
+// blocked call. Requests are tracked by a per-request id, not the handle value, so a
+// handle value Windows reuses for a new request can never be closed by mistake.
+namespace {
+    std::mutex g_inflightMutex;
+    std::map<unsigned long long, HINTERNET> g_inflight;
+    unsigned long long g_nextRequestId = 1;
+    std::atomic<bool> g_abortAll{false};
+
+    // Register an open request; 0 = an abort is in force (caller closes it and bails).
+    unsigned long long trackRequest(HINTERNET hRequest) {
+        std::lock_guard<std::mutex> lock(g_inflightMutex);
+        if (g_abortAll) return 0;
+        unsigned long long id = g_nextRequestId++;
+        g_inflight[id] = hRequest;
+        return id;
+    }
+    // True if an abort has already closed this request's handle.
+    bool requestCancelled(unsigned long long id) {
+        std::lock_guard<std::mutex> lock(g_inflightMutex);
+        return g_inflight.find(id) == g_inflight.end();
+    }
+    // Close the request's handle - unless the aborter already did.
+    void releaseRequest(unsigned long long id) {
+        HINTERNET h = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_inflightMutex);
+            auto it = g_inflight.find(id);
+            if (it == g_inflight.end()) return;
+            h = it->second;
+            g_inflight.erase(it);
+        }
+        WinHttpCloseHandle(h);
+    }
+} // namespace
+
+void curl_stub_abort_all(int abort) {
+    std::map<unsigned long long, HINTERNET> victims;
+    {
+        std::lock_guard<std::mutex> lock(g_inflightMutex);
+        g_abortAll = (abort != 0);
+        if (!g_abortAll) return;
+        victims.swap(g_inflight);
+    }
+    for (auto& v: victims) WinHttpCloseHandle(v.second);
+}
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -420,6 +475,12 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
             if (ensureConnect(h, parsed) != CURLE_OK) return CURLE_COULDNT_CONNECT;
             continue; // retry with fresh connection
         }
+        // Registered so curl_stub_abort_all() can cancel it while it is blocked.
+        const unsigned long long reqId = trackRequest(hRequest);
+        if (reqId == 0) {
+            WinHttpCloseHandle(hRequest);
+            return CURLE_ABORTED_BY_CALLBACK; // shutting down: start nothing new
+        }
 
         BOOL sent;
         if (!extraHeaders.empty()) {
@@ -438,7 +499,9 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
 
         if (!sent) {
             DWORD err = GetLastError();
-            WinHttpCloseHandle(hRequest);
+            bool cancelled = requestCancelled(reqId);
+            releaseRequest(reqId);
+            if (cancelled) return CURLE_ABORTED_BY_CALLBACK;
             if (attempt == 0 && err != ERROR_WINHTTP_TIMEOUT && !h->isPost) {
                 // Possibly stale keep-alive connection — reconnect and retry once.
                 // GET ONLY: never silently re-send a POST. The Core JSON-RPC path
@@ -459,7 +522,9 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
 
         if (!WinHttpReceiveResponse(hRequest, nullptr)) {
             DWORD err = GetLastError();
-            WinHttpCloseHandle(hRequest);
+            bool cancelled = requestCancelled(reqId);
+            releaseRequest(reqId);
+            if (cancelled) return CURLE_ABORTED_BY_CALLBACK;
             return (err == ERROR_WINHTTP_TIMEOUT) ? CURLE_OPERATION_TIMEDOUT : CURLE_RECV_ERROR;
         }
 
@@ -498,14 +563,16 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
                 }
                 DWORD available = 0;
                 if (!WinHttpQueryDataAvailable(hRequest, &available)) {
-                    result = CURLE_PARTIAL_FILE; // connection dropped before body finished
+                    // connection dropped before body finished - or an abort closed it
+                    result = requestCancelled(reqId) ? CURLE_ABORTED_BY_CALLBACK : CURLE_PARTIAL_FILE;
                     break;
                 }
                 if (available == 0) break; // clean end of body
                 if (available > (DWORD)buf.size()) buf.resize(available);
                 DWORD bytesRead = 0;
                 if (!WinHttpReadData(hRequest, buf.data(), available, &bytesRead)) {
-                    result = CURLE_RECV_ERROR; // read failed mid-stream (also avoids a busy spin)
+                    // read failed mid-stream (also avoids a busy spin) - or an abort closed it
+                    result = requestCancelled(reqId) ? CURLE_ABORTED_BY_CALLBACK : CURLE_RECV_ERROR;
                     break;
                 }
                 if (bytesRead == 0) break; // no more data
@@ -514,7 +581,7 @@ CURLcode curl_easy_perform(CURL* easy_handle) {
             }
         }
 
-        WinHttpCloseHandle(hRequest);
+        releaseRequest(reqId);
         return result;
     }
 
