@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.8.0'
+$ScriptVersion = '2.9.0'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -311,19 +311,19 @@ function New-ChainDbArchive {
         $shutOut = ''
         if (Test-Path $CliExe) { try { Push-Location $DigiAssetDir; $shutOut = (& $CliExe shutdown 2>&1 | Out-String).Trim(); Pop-Location } catch { try{Pop-Location}catch{}; $shutOut = $_.Exception.Message } }
         else { $shutOut = "$CliExe not found" }
-        # A successful shutdown RPC prints "true". Anything else almost always means
-        # the node never got the request (RPC down, shutdown forbidden by rpcallow),
-        # so don't sit out the full wait - give it 20s in case the reply was merely
-        # lost as the node closed its sockets, then say why and stop.
-        if ($shutOut -notmatch '^\s*true\s*$') {
-            for ($i = 0; $i -lt 40 -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
+        # A successful shutdown RPC prints "true". Only an explicit refusal (rpcallow) means
+        # the node will not stop. Anything else - above all a CLI timeout - usually means
+        # it IS stopping: before win.145 the shutdown RPC stopped the chain analyzer (which
+        # finishes its block) and IPFS before replying, which outlasts the CLI's 10 s
+        # timeout. The CLI then printed "libcurl error: 22" - 22 is CURLE_OPERATION_TIMEDOUT
+        # in the node's own curl numbering, not an HTTP error - while the node carried on
+        # shutting down. So refuse fast only on "forbidden"; otherwise sit out the full
+        # -StopWaitSec below.
+        if ($shutOut -match 'forbidden') {
+            throw "The DigiAsset node refused the shutdown request (config.cfg rpcallow). The CLI said: $shutOut`nAdd rpcallowshutdown=1 to $DigiAssetDir\config.cfg (or update the node to win.143+, which allows it by default), restart the node, then re-run."
         }
-        if ($shutOut -notmatch '^\s*true\s*$' -and (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue)) {
-            # "libcurl error: 22" = the node answered with an HTTP error, which the CLI's
-            # client reports without the body. With syncstate answering a moment ago, that
-            # is almost always rpcallow refusing shutdown.
-            $hint = if ($shutOut -match 'libcurl error: 22|forbidden') { "`nThat is almost always config.cfg refusing the 'shutdown' RPC: add rpcallowshutdown=1 to $DigiAssetDir\config.cfg and restart the node." } else { '' }
-            throw "The DigiAsset node did not accept the shutdown request, so it is still running. The CLI said: $(if ($shutOut) { $shutOut } else { '(no output)' })$hint`nFix that (or close the node window yourself and wait for it to exit), then re-run."
+        if ($shutOut -notmatch '^\s*true\s*$') {
+            Say "  the shutdown request did not answer 'true' ($(if ($shutOut) { ($shutOut -split "`n")[-1].Trim() } else { 'no output' })) - usually it is still shutting down; waiting for it to exit." 'Yellow'
         }
         # Wait up to -StopWaitSec for a CLEAN exit: after "Safe to shut down" the node
         # still finishes its current block, stops the RPC server and flushes chain.db,
@@ -338,7 +338,7 @@ function New-ChainDbArchive {
         }
         Write-Progress -Activity 'Waiting for the DigiAsset node to exit' -Completed
         if (Get-Process DigiAssetWindows,DigiAssetCore -EA SilentlyContinue) {
-            throw "The DigiAsset node accepted shutdown but was still running after ${StopWaitSec}s. Aborting so we don't snapshot a possibly-inconsistent chain.db. Check the node window/log, let it exit, then re-run with -Component chaindb (and publish-snapshot.ps1 -SkipBuild), or raise -StopWaitSec."
+            throw "The DigiAsset node was still running ${StopWaitSec}s after the shutdown request. Aborting so we don't snapshot a possibly-inconsistent chain.db. Look at the node window: 'Shutting down...' means it is still flushing (let it finish, then re-run, or raise -StopWaitSec); no such line means the request never arrived (check rpcallow in config.cfg, then re-run)."
         }
         Say ("  node exited cleanly after {0:N0}s" -f ((Get-Date) - $t0).TotalSeconds) 'Green'
     }
