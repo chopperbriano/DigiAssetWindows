@@ -20,10 +20,10 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — punch list: installer fixes, GUI fixes, docs rework
+## 0.3.3-win.144 — punch list: installer fixes, GUI fixes, docs rework
 
-The script and doc changes reach nodes through master; the GUI fixes are in the binary and
-arrive with the next release. All found in a review of the installer, the two GUIs and the
+The script and doc changes reached nodes through master; the GUI fixes are the binary change in
+this release. All found in a review of the installer, the two GUIs and the
 operator docs before the next snapshot republish.
 
 ### Installer (setup-digiasset 2.35.0, install-digibyte 1.5.0, seed-digibyte 1.6.0, make-snapshot 2.8.0)
