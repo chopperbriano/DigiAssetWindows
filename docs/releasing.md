@@ -10,13 +10,14 @@ workflow, and that is deliberate — see [Why there is no CI release](#why-there
    hand-edit the generated header.
 
    ```
-   SET(WIN_BUILD 137)
+   SET(WIN_BUILD <N>)
    ```
 
-2. **Build Release and run the tests.**
+2. **Build Release and run the tests.** `BUILD_TEST` defaults to OFF, so turn it on or
+   there is no test binary to run.
 
    ```
-   cmake -B build -S .
+   cmake -B build -S . -DBUILD_TEST=ON
    cmake --build build --config Release
    cd build && .\tests\Release\Unit_Tests_run.exe
    ```
@@ -31,7 +32,7 @@ workflow, and that is deliberate — see [Why there is no CI release](#why-there
    ```
 
    This collects the six published assets, **regenerates `web.zip` from `web\`**, writes
-   `SHA256SUMS` over all of them, and reads the version back out of the built binary so a
+   `SHA256SUMS` over them (six published assets plus `SHA256SUMS`: seven files), and reads the version back out of the built binary so a
    stale build cannot be staged against a bumped `WIN_BUILD`.
 
 4. **Create the release** with the command the script prints, from `release-staging`.
@@ -46,7 +47,7 @@ workflow, and that is deliberate — see [Why there is no CI release](#why-there
 
 ## Published assets
 
-All seven must be present or the documented `/releases/latest/download/<file>` URLs 404:
+Six published assets plus `SHA256SUMS` (seven files). All seven must be present or the documented `/releases/latest/download/<file>` URLs 404:
 
 | Asset | Source |
 |---|---|

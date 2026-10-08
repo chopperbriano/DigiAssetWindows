@@ -65,12 +65,10 @@ $b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node
 New-Item -ItemType Directory -Force C:\snapshots | Out-Null; $b='https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/snapshots'; 'make-snapshot.ps1','publish-snapshot.ps1','seed-digibyte.ps1','setup-cloudflare-snapshots.ps1','snapshot-digibyte-datadir.ps1' | % { iwr "$b/$_" -OutFile "C:\snapshots\$_" -UseBasicParsing }
 ```
 
-> **Seeding downloads ~34 GB and needs roughly 86 GB free while it unpacks.**
-> `install-digibyte.ps1` checks and warns before committing to the download.
-> Both scripts read the published manifest at run time, so you always get the
-> newest snapshot rather than a pinned one — currently **DigiByte 9.26.5, block
-> ~24,045,000** (published Aug 2026). Archives are SHA256-verified, and a failure
-> falls back to a normal sync rather than leaving a half-written data directory.
+> **Seeding uses the newest published snapshot (~37 GB download, needs ~90 GB free).**
+> The scripts check the space before committing to the download. Archives are
+> SHA256-verified, and a failure falls back to a normal sync rather than leaving a
+> half-written data directory.
 >
 > Back up `wallet.dat` off the machine once it is created — there is no recovery
 > if the disk dies or the passphrase is lost.
@@ -88,14 +86,19 @@ New-Item -ItemType Directory -Force C:\snapshots | Out-Null; $b='https://raw.git
 
 | Do this | Command |
 |---|---|
-| **Install / re-run everything** | `.\setup-digiasset.ps1 -PayoutAddress D_YOUR_ADDR` |
-| First install, fast-sync from snapshot | `.\setup-digiasset.ps1 -PayoutAddress D_YOUR_ADDR -SnapshotUrl https://pub-bd3f441e6b464d499ba583016accfa01.r2.dev/snapshot.json` |
-| **Update the binaries** to latest release | `node\update-node.ps1` |
+| **Install / repair / update everything** (fast-sync is automatic on a fresh install) | `.\setup-digiasset.ps1 -PayoutAddress D_YOUR_ADDR` |
+| **Update the binaries** to latest release | `node\update-binaries.ps1` |
 | **Is it healthy?** (one look) | `node\monitor-node.ps1` |
 | Watch health live | `node\monitor-node.ps1 -Watch` |
 | **Stop** the node stack | `node\stop-node.ps1` |
 | Stop + never auto-start again | `node\stop-node.ps1 -DisableAutostart` |
 | Stop + remove everything | `node\stop-node.ps1 -Uninstall` |
+
+> On an installed node the installer keeps these helpers directly in `C:\DigiAssetWindows`
+> (e.g. `C:\DigiAssetWindows\update-binaries.ps1`). The maintenance task already updates
+> DigiByte Core and the binaries every 6 h and at boot.
+> `config.cfg` and `digibyte.conf` are locked to Administrators: edit them in Notepad
+> opened with **Run as administrator**.
 
 ---
 
@@ -170,7 +173,7 @@ standalone one-liners in **[§0](#0-one-liners-no-repo-checkout-needed)**:
 ### The 5 commands you'll actually use most
 ```powershell
 node\monitor-node.ps1                 # node OK?
-node\update-node.ps1                  # update a node
+node\update-binaries.ps1              # update a node
 pool\deploy\start-digistamp.ps1       # (re)start a pool + site
 pool\deploy\verify-pool-stack.ps1     # pool OK?
 snapshots\publish-snapshot.ps1        # refresh the fast-sync snapshot

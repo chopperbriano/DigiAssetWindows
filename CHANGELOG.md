@@ -20,6 +20,77 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — punch list: installer fixes, GUI fixes, docs rework
+
+The script and doc changes reach nodes through master; the GUI fixes are in the binary and
+arrive with the next release. All found in a review of the installer, the two GUIs and the
+operator docs before the next snapshot republish.
+
+### Installer (setup-digiasset 2.35.0, install-digibyte 1.5.0, seed-digibyte 1.6.0, make-snapshot 2.8.0)
+
+- **A re-run no longer changes the payout address.** ENTER at the payout question created a
+  new address every time and overwrote `config.cfg`, so each "safe re-run" moved the earnings
+  address and re-registered the node with the pool. ENTER now keeps the configured address
+  (shown in the prompt), and unattended re-runs reuse it too.
+- **The snapshot is only downloaded when it fits.** The install stopped only below 25 GB free
+  while the snapshot alone is a ~37 GB download plus its unpacked size. Each archive's
+  `sizeBytes` is now checked against ~2.5x free (archive in `%TEMP%` + ~1.5x unpacked); short
+  of that it syncs normally instead.
+- **Snapshots unpack into a staging folder** and move into place only when `tar` succeeds. A
+  failed extract used to leave a half-written `blocks\`, and a re-run then skipped the restore
+  and started DigiByte on a damaged chain. (`install-digibyte.ps1` too.)
+- **`tar` gets quoted paths and is Windows' own `System32\tar.exe`.** An array
+  `-ArgumentList` is joined with bare spaces under PowerShell 5.1, so a profile path with a
+  space split in two and the extract failed after the download; Git's GNU tar on PATH reads
+  `C:\...` as a host. All four call sites (setup, install-digibyte, seed, make-snapshot).
+- **Re-running on a full disk** warns instead of refusing when the blockchain is already there.
+- **The closing summary is saved to the desktop** as "DigiAsset - next steps.txt" (ports with
+  this PC's IP, wallet backup, payout, health check, config), and the window waits for Enter
+  instead of closing after 60 s - an install with a snapshot runs for hours and people walk away.
+- **Earnings wording follows the payout address**: "paid into the wallet on this PC" only when
+  the address is that wallet's (`getaddressinfo` `ismine`), otherwise "paid to the address you gave".
+- **Config editing**: the summary and the `config.cfg` header say to open Notepad with *Run as
+  administrator* - the file is limited to Administrators, so a normal Notepad was denied.
+- **Port 4001 test that could not run** now says so, instead of "NOT reachable - forward it".
+- **Downloads no longer crawl under PowerShell 5.1**: `$ProgressPreference` is silent for
+  `Invoke-WebRequest`; the snapshot download and extract keep their own progress bars.
+- **`update-binaries.ps1` is installed** with the other helper scripts (and refreshed by the
+  maintenance task), so the one recommended updater is on every node.
+- A failed install says that re-running the same one-liner is safe and resumes; the script's
+  own header text matches the current flow (three questions, IPFS floor, three modes).
+
+### GUI (binary)
+
+- **Console: the pool probe no longer runs away.** A failed `/nodes.json` probe was never
+  timestamped and nothing stopped overlapping probes, so whenever the pool was unreachable
+  (and briefly at every start) each ~500 ms frame started another network probe. An in-flight
+  guard now allows one at a time, and a failure retries after ~30 s.
+- **Console: "Checking pool..."** until the first probe answers, instead of a red "Pool unreachable" at every start.
+- **Console [P] Ports** no longer tests the web console port from the internet - it listens on
+  127.0.0.1 only, so it always reported "Closed" as a warning.
+- **Web console: DigiDollar card** - the "Your holdings" row (always "none"; the server never
+  sent it) is gone (`getwalletbalances` reports it), and a node with `trackdigidollar=0` shows
+  "not tracked" instead of "indexing" forever (`ChainAnalyzer::shouldTrackDigiDollar` is now public).
+- **Web console: sync %** caps at 99.99% while the node is behind, instead of rounding to 100.00%.
+
+### Docs
+
+- **readme.md is a landing page**: the install one-liner first with four bullets, a Thaw Day
+  note, the update/maintain one-liners (one updater: `update-binaries.ps1`), and links. Build
+  instructions, build options and the repo layout moved to the new **BUILDING.md**; the
+  components/ports tables and the DigiByte version-floor reasoning to **ARCHITECTURE.md** §6.
+  The stale manual install (hand-written `rpcpassword=pass11`), the old TOC with its dead
+  `#Documentation` link, and the "Removed in win.137" note are gone. Snapshot size is stated
+  without a DigiByte version or height, so it cannot go stale.
+- **NODE-SETUP.md**: one-liner first; the three questions; auto-login offered by the installer;
+  Thaw Day; sync time ("minutes to an hour with the snapshot") no longer contradicts itself;
+  updating = automatic + `update-binaries.ps1` + re-run to repair; editing config as administrator.
+- **CHEATSHEET.md** uses `update-binaries.ps1` throughout and drops the redundant `-SnapshotUrl` row.
+- **docs/releasing.md** builds with `-DBUILD_TEST=ON` (the tests it runs were never built) and
+  counts the assets as six plus SHA256SUMS.
+
+---
+
 ## 0.3.3-win.143 — DigiByte Core 9.26.7; the node allows its operator tools by default; update one-liners; safer updaters
 
 The binary change is the RPC default below. The script changes reached nodes through master

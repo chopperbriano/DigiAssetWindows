@@ -1,8 +1,51 @@
 # Run a DigiAsset node on Windows and earn DGB
 
-Host DigiAsset files, get paid DGB from the DigiStamp pool. This is the simple
-version. Three apps work together, and the installer sets up **all three** for you.
-They open as normal Windows apps — a wallet window, a tray icon, and a dashboard:
+Host DigiAsset files, get paid DGB from the DigiStamp pool. The amounts are small:
+this is a tip jar for helping keep DigiByte's asset data alive, not a salary (see
+[Be realistic about earnings](#be-realistic-about-earnings)).
+
+## 1. One-line install
+
+Open **PowerShell as Administrator** (click Start, type `PowerShell`, right-click
+**Windows PowerShell**, choose *Run as administrator*) and paste this single line:
+
+```powershell
+iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
+```
+
+It asks three things up front, then runs on its own:
+
+1. **Your DGB payout address** — where you want to be paid. Press ENTER and it
+   creates one in the local wallet. On a re-run, ENTER keeps the payout address you
+   already have.
+2. **Windows auto-login** — optional; see [below](#auto-start--running-it-unattended).
+3. **Wallet encryption** — a passphrase needed to spend. Receiving works without one.
+
+Then it:
+
+- installs the **DigiByte Core GUI wallet** (9.26.7) into `C:\DigiByte` and writes its config,
+- installs **IPFS Desktop** (the tray app) for your user,
+- downloads the latest **DigiAsset for Windows** node into `C:\DigiAssetWindows` and writes its config,
+- installs the **Visual C++ runtime** the node needs, if it's missing,
+- **opens your local firewall** and pre-approves the apps (so you don't get scary popups),
+- sets **all three to open when you log in**,
+- **tests** whether you're reachable from the internet and tells you what to forward,
+- drops the helper scripts into `C:\DigiAssetWindows` (`monitor-node.ps1`,
+  `update-binaries.ps1`, `stop-node.ps1`, `update-node.ps1`, `memwatch.ps1`),
+- installs a background **maintenance task** that, on every boot and every 6 hours,
+  **updates DigiByte Core and the node** and re-checks health — logging to
+  `C:\DigiAssetWindows\logs` and alerting you only if something needs your attention.
+
+**Fast-sync is automatic.** On a fresh install it downloads, verifies and extracts
+the newest published snapshot (~37 GB download, needs ~90 GB free). If there isn't
+enough space, or the snapshot is unavailable, it falls back to a normal sync.
+Nothing to configure.
+
+When it finishes, it saves its summary — the router port and backup steps — to
+**`DigiAsset - next steps.txt`** on your desktop.
+
+Three apps work together. They open as normal Windows apps — a wallet window, a
+tray icon, and a dashboard:
 
 ```
 DigiByte Core wallet  →  DigiAsset for Windows  →  IPFS Desktop
@@ -12,77 +55,35 @@ DigiByte Core wallet  →  DigiAsset for Windows  →  IPFS Desktop
 > Want to run the **pool server** (accept nodes and pay hosts) rather than just
 > host a node? That's a different job — see **[POOL-SETUP.md](POOL-SETUP.md)**.
 
-## Be realistic about earnings 🙂
-
-Please don't do this to get rich — do it to help keep DigiByte's asset data
-alive. A few honest points so there are no surprises:
-
-- **The amounts are small.** This is a tip jar for hosting, not a salary.
-- **You're only paid when there's DGB to pay out.** The pool pays from a shared
-  treasury funded by asset-creation fees and donations. When the treasury has
-  funds, they're split among all verified nodes; when it's empty, nobody is paid
-  that period — the pool never pays money it doesn't have.
-- **It's a share, not a fixed rate.** What you receive depends on how much is in
-  the treasury and how many nodes are sharing it.
-- **You must be verified** (reachable — see the port-4001 step) to be included at
-  all.
-
-Think of it as: contribute a little storage, help the network, and earn a bit of
-DGB when the pool has it to give. You can watch the live treasury balance and
-every payout at https://pool.digistamp.co.
-
-## 1. One-line install (recommended)
-
-Open **PowerShell as Administrator** (click Start, type `PowerShell`, right-click
-**Windows PowerShell**, choose *Run as administrator*) and paste this single line:
-
-```powershell
-iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"
-```
-
-It asks for **one thing — your DigiByte payout address** (where you want to be
-paid) — then does everything else automatically:
-
-- installs the **DigiByte Core GUI wallet** into `C:\DigiByte` and writes its config,
-- installs **IPFS Desktop** (the tray app) for your user,
-- downloads the latest **DigiAsset for Windows** node into `C:\DigiAssetWindows` and writes its config,
-- installs the **Visual C++ runtime** the node needs, if it's missing,
-- **opens your local firewall** and pre-approves the apps (so you don't get scary popups),
-- sets **all three to open when you log in**,
-- **tests** whether you're reachable from the internet and tells you what to forward,
-- installs a background **maintenance task** that, on every boot and every 6 hours,
-  **auto-updates the components** and re-checks health — logging to `C:\DigiAssetWindows\logs`
-  and alerting you only if something needs your attention.
-
-**Fast-sync is automatic.** On a fresh install it downloads, verifies, and extracts
-a pre-synced blockchain + `chain.db` snapshot, so a new node is ready in minutes
-instead of days. If the snapshot is ever unavailable it just falls back to a normal
-sync — nothing to configure.
-
-You do **not** edit any files by hand. The only manual step is one router port
-forward (next section).
-
 ### Auto-start & running it unattended
 
-The apps open **when you log in**: a DigiByte wallet window, the DigiAsset node
-dashboard, and the IPFS Desktop tray icon. Because they're desktop apps, they run
-while you're **logged in**.
+The apps open **when you log in**. Because they're desktop apps, they run while
+you're **logged in**.
 
-For an always-on node that comes back by itself after a reboot (nobody at the
-keyboard), set Windows to auto-login using Microsoft's free, official
-**[Sysinternals Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**:
-download it, run it once, enter your Windows username + password, and every boot
-auto-logs-in and launches the apps for you.
+For an always-on node that comes back by itself after a reboot, accept when the
+installer offers **auto-login**. It opens Microsoft's free
+**[Sysinternals Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**;
+check it shows your account and enter your Windows password there (never into the
+script). It is optional: type `N` to skip, or pass `-SkipAutologon` so it isn't
+asked. Skipped it? Re-run the installer, or run Autologon yourself any time.
 
 > Prefer to launch the apps yourself instead of at logon? Re-run the installer and
 > add `-NoStartOnLogon`.
 
+### Thaw Day
+
+DigiByte Core **9.26.6 or newer** is required before mainnet block **24,490,000**
+(about Nov 1 2026). The installer pins 9.26.7 and the maintenance task upgrades
+older installs, so you normally do nothing. On older DigiByte the node refuses to
+index past that block. If `monitor-node.ps1` shows an old DigiByte version,
+re-run the installer.
+
 ## 2. Let it sync (the one wait)
 
-DigiByte's blockchain is large, so the first sync takes **many hours — sometimes a
-day or two** (it's a big chain 🙂). Watch progress right in the **DigiByte wallet
-window**, or with the monitor (section 4). Just leave the PC on and logged in. Once
-DigiByte is synced, DigiAsset for Windows registers with the pool on its own.
+With the snapshot, the node is usually caught up in **minutes to an hour**. It
+takes **a day or more** only if the snapshot can't be used. Watch progress in the
+**DigiByte wallet window**, or with the monitor (section 4). Leave the PC on and
+logged in. Once DigiByte is synced, the node registers with the pool on its own.
 
 > Already had DigiByte Core installed? The installer detects it and just adds the
 > settings — restart DigiByte Core once if it says it wrote a new `digibyte.conf`.
@@ -116,11 +117,10 @@ powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1   
 powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\monitor-node.ps1 -Watch   # live, refreshes every 15s
 ```
 
-(The installer drops `monitor-node.ps1` into `C:\DigiAssetWindows` for you.)
-
-It shows one line each for **DigiByte Core** (sync %), **IPFS**, **DigiAsset for
-Windows**, your **local firewall** + **hosting ports** (4001 and 12024), and
-**Pool** (are you registered?), plus a plain-English list of anything to fix.
+It shows one line each for **DigiByte Core** (version and sync %), **IPFS**,
+**DigiAsset for Windows**, your **local firewall** + **hosting ports** (4001 and
+12024), and **Pool** (are you registered?), plus a plain-English list of anything
+to fix.
 
 Other quick checks:
 
@@ -135,23 +135,40 @@ Other quick checks:
 - **From anywhere:** visit https://pool.digistamp.co — your node shows up in the
   count once it's registered and verified.
 
-## Keeping it updated (+ a memory check)
+## Keeping it updated
 
-The installer drops these helpers into `C:\DigiAssetWindows` too:
+**It's automatic.** The maintenance task (every 6 hours and at boot) updates
+DigiByte Core and the DigiAsset binaries and refreshes the helper scripts.
+
+**Update now** — from an Administrator PowerShell:
 
 ```powershell
-# Update the node binaries to the latest release (node only - no pool, no build):
-powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\update-node.ps1
+powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\update-binaries.ps1
+```
 
-# Confirm memory is stable (only if you suspect a leak). Run once fully SYNCED:
+It downloads the latest release, checks its SHA256, stops the node cleanly, swaps
+the binaries and the web console in, and restarts it.
+
+**Repair or update everything** (DigiByte Core, IPFS Desktop, config defaults,
+start-up tasks): re-run the one-line install. It keeps your config, payout address
+and wallet.
+
+**Memory check** (only if you suspect a leak; run once fully synced):
+
+```powershell
 powershell -ExecutionPolicy Bypass -File C:\DigiAssetWindows\memwatch.ps1
 ```
 
-`update-node.ps1` stops the node cleanly, swaps `DigiAssetWindows.exe` + `-cli.exe`,
-and restarts it. `memwatch.ps1` logs Private Bytes over time — leave it ~1 hr at
-the tip; a flat "stable" verdict means no leak (growth *during* the initial sync
-is normal, just caches filling). The auto-update maintenance task also keeps the
-node current on its own, so you usually don't need `update-node.ps1` by hand.
+It logs Private Bytes over time — leave it ~1 hr at the tip; a flat "stable"
+verdict means no leak (growth *during* the initial sync is normal, just caches
+filling).
+
+## Editing the config
+
+You normally never edit files by hand. If you must, `config.cfg`
+(`C:\DigiAssetWindows`) and `digibyte.conf` (`C:\DigiByte`) are locked to
+Administrators: open **Notepad with Run as administrator**, then *File > Open* the
+file. Every `config.cfg` key is documented in [example.cfg](example.cfg).
 
 ## What "working" looks like
 
@@ -162,6 +179,23 @@ node current on its own, so you usually don't need `update-node.ps1` by hand.
 - Port 4001 tests as **open**.
 
 That's it — leave it running and you'll be paid from the pool for the content you host.
+
+## Be realistic about earnings
+
+Please don't do this to get rich — do it to help keep DigiByte's asset data
+alive. A few honest points so there are no surprises:
+
+- **The amounts are small.** This is a tip jar for hosting, not a salary.
+- **You're only paid when there's DGB to pay out.** The pool pays from a shared
+  treasury funded by asset-creation fees and donations. When the treasury has
+  funds, they're split among all verified nodes; when it's empty, nobody is paid
+  that period — the pool never pays money it doesn't have.
+- **It's a share, not a fixed rate.** What you receive depends on how much is in
+  the treasury and how many nodes are sharing it.
+- **You must be verified** (reachable — see the port-4001 step) to be included at
+  all.
+
+You can watch the live treasury balance and every payout at https://pool.digistamp.co.
 
 ## Stopping or removing it
 
@@ -188,7 +222,7 @@ if you want them gone too.
 - **`MSVCP140.dll was not found`:** the node needs the Visual C++ x64 runtime. The
   installer installs it automatically; if you still see this, re-run the one-liner.
 - **Node closes with "IPFS Exception: Timeout":** the node needs **IPFS** and
-  **DigiByte** running first. The installer now waits for both and retries, so this
+  **DigiByte** running first. The installer waits for both and retries, so this
   should be rare — but if it happens, make sure **IPFS Desktop** (tray icon) is
   running and give it a minute; the node relaunches once IPFS is up. The node keeps
   running while DigiByte finishes syncing (it doesn't need a full sync to start).
@@ -200,7 +234,8 @@ if you want them gone too.
 - **"DigiByte Core not responding":** the DigiByte wallet hasn't finished syncing
   yet (check with `monitor-node.ps1`), or it isn't open — open the DigiByte wallet.
 - **Apps didn't come back after a reboot:** they open at **logon**, so either log
-  in, or set up **[Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)**
-  (see section 1) so the PC logs in and launches them automatically.
+  in, or turn on auto-login (see [above](#auto-start--running-it-unattended)).
+- **"Access denied" saving `config.cfg` or `digibyte.conf`:** open Notepad with
+  **Run as administrator** (see [Editing the config](#editing-the-config)).
 - **PowerShell blocked / "cannot be loaded":** make sure you opened PowerShell
   **as Administrator**; the one-liner already passes `-ExecutionPolicy Bypass`.
