@@ -43,7 +43,7 @@ shutdown, web console refreshed. Add `-IncludePool` on a pool box:
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/update-binaries.ps1 -OutFile "$env:TEMP\update-binaries.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-binaries.ps1"
 ```
 
-**Update everything incl. DigiByte Core** (pinned 9.26.6, never downgrades): re-run the
+**Update everything incl. DigiByte Core** (pinned 9.26.7, never downgrades): re-run the
 full-node line at the top of this section. It keeps your config and wallet, backs the
 wallet up and stops DigiByte cleanly first.
 

@@ -57,7 +57,7 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node
 iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/node/update-binaries.ps1 -OutFile "$env:TEMP\update-binaries.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\update-binaries.ps1" -IncludePool
 ```
 
-**Update everything** — DigiByte Core (to the pinned release, currently **9.26.6**; it
+**Update everything** — DigiByte Core (to the pinned release, currently **9.26.7**; it
 never downgrades a newer one), IPFS Desktop, config defaults and start-up tasks — by
 re-running the installer. It keeps your config, payout address and wallet, backs the
 wallet up first, and stops DigiByte cleanly before replacing it:
@@ -360,7 +360,7 @@ This disables SQLite write verification (fsync), significantly reducing sync tim
 > until June 2026. For windows covering the incident, index 2 of the `algo` array is populated
 > rather than `null`. That is correct data, not a bug.
 
-Download and install DigiByte Core Wallet v9.26.6 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.6/digibyte-9.26.6-win64-setup.exe
+Download and install DigiByte Core Wallet v9.26.7 (the version the installer uses). https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.7/digibyte-9.26.7-win64-setup.exe
 Install to the default locations, unless you need to change the location on your hard drive. Then add the following lines to the digibyte.conf file.
 
 ```

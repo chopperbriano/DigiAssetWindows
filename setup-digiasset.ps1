@@ -31,7 +31,7 @@
                               it first starts, so Windows never raises its
                               "allow this app?" alert.
 
-        Downloads and installs DigiByte Core (pinned to 9.26.6 by
+        Downloads and installs DigiByte Core (pinned to 9.26.7 by
         -DigiByteVersion), plus the CURRENT latest IPFS Desktop and DigiAsset
         for Windows - neither of those is pinned, both track their newest
         GitHub release. IPFS Desktop bundles its own kubo, so kubo is never
@@ -69,7 +69,7 @@ param(
     # Pinned baseline versions used for a FIRST install. Service mode then
     # tracks the latest releases and updates past these. If a pinned version
     # isn't published yet, the installer falls back to the current latest.
-    [string]$DigiByteVersion = '9.26.6',
+    [string]$DigiByteVersion = '9.26.7',
     # Minimum IPFS Desktop version. A fresh install gets exactly this release; an
     # existing install OLDER than this is upgraded in place (by the installer and by
     # the node's logon task, which runs as the user - IPFS Desktop is a per-user
@@ -108,7 +108,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.33.0'
+$SCRIPT_VERSION = '2.34.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to

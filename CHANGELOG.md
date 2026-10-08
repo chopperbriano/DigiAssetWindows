@@ -20,10 +20,26 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — the node allows its operator tools by default; update one-liners; safer updaters
+## 0.3.3-win.143 — DigiByte Core 9.26.7; the node allows its operator tools by default; update one-liners; safer updaters
 
-Scripts and docs reach nodes through master. The RPC default below is in the node binary and
-arrives with the next release.
+The binary change is the RPC default below. The script changes reached nodes through master
+and are listed so the release notes are complete.
+
+### DigiByte Core 9.26.7 for new installs (setup-digiasset 2.34.0, install-digibyte 1.4.0)
+
+DigiByte Core v9.26.7 (released 2026-10-06) is a small follow-up to 9.26.6: faster chain-info
+requests, no false fatal error on shutdown, wallet fixes. Block rules, oracle requirements and
+the Thaw Day height (24,490,000) are unchanged, and an upgrade from 9.26.6 needs no reindex.
+The installers now pin 9.26.7; existing nodes already move to it through the maintenance task,
+which follows DigiByte's latest release (wallet backup and clean stop first).
+
+- Verified: the installer's asset lookup picks `digibyte-9.26.7-win64-setup.exe` and it matches
+  the release's `SHA256SUMS`.
+- The one RPC change - `getblockchaininfo`'s `difficulty` now means the tip block's - does not
+  touch the node, which reads difficulty only from `getblock`/`getmininginfo`.
+- 9.26.6 stays the minimum in the node's Thaw Day guard and in `monitor-node.ps1`: it is the
+  oldest release with the Thaw Day rules.
+- IPFS Desktop: 0.50.1 is still its newest release and is what the installer pins.
 
 ### The operator-tool RPCs are allowed by default (binary)
 
