@@ -10,6 +10,7 @@
 #include "PoolVerifier.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
+#include "KuboClient.h"
 #include <chrono>
 #include <iostream>
 #include <sstream>
@@ -170,6 +171,21 @@ void PoolVerifier::loop() {
             }
             _db.updateNodeScores(peer, coverage, (isSelf || sampleN > 0), ok);
         }
+
+        // Storage plan upkeep (pool/StoragePlan.h). Measure a few files whose
+        // size is not known yet, since payouts are weighted by bytes and a
+        // challenge needs a size to pick a range in. A handful per round keeps
+        // kubo's load low; the list fills in over a few hours and new files
+        // are measured as they arrive. Then close challenges past their
+        // deadline, which scores an ignored one as a fail.
+        try {
+            for (const auto& cid: _db.getCidsMissingSize(5)) {
+                if (!_running.load()) break;
+                int64_t size = 0;
+                if (KuboClient::fileSize(_ipfsApiBase, cid, size)) _db.setCidSize(cid, size);
+            }
+            _db.expireChallenges();
+        } catch (...) {}
 
         // Sleep ~60s between iterations, checking the stop flag every second
         // so shutdown is responsive.

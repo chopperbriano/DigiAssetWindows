@@ -1,71 +1,98 @@
 # Pool payout fairness
 
 How the DigiStamp pool decides **who gets paid and how much**, so payouts reward
-*actual hosting*, not just showing up.
+*actual hosting*, not just showing up, and stay worth having as more nodes join.
+
+The rules live in `pool/StoragePlan.h` (pure, unit-tested in
+`tests/StoragePlanTest.cpp`). The budget is unchanged: a share of the pool
+wallet per period (`poolpayoutpercent` or `poolspendperperiod`). This decides
+who it goes to.
 
 ## The model
 
-Each payout, every eligible node's share is:
+Each payout period:
 
-```
-share_i = budget * weight_i / Σ weight
-weight  = coverage × reliability          (both 0..1)
-```
+1. **A capped paid set.** Eligible nodes (gate below) that hold something are
+   ranked by reliability, then by how long they have served, and the top
+   `poolmaxpaidnodes` are paid. The rest wait and keep building their scores; a
+   paid node that drops out is replaced by the next. `0` means no cap.
 
-- **coverage** — of a random sample of the pool's permanent CID list, what fraction
-  does the node **provably provide**? This is *how much of the content it hosts*.
-- **reliability** — over recent verify rounds, how consistently did the node pass
-  verification? This is an *uptime / consistency* proxy.
+   This is what stops dilution. Before, every node stored everything and
+   shared one pot, so each new node shrank every share. With a cap, the pot is
+   split among a fixed number of nodes however many join.
 
-A node hosting 100% of the list, always up, earns the most. A partial or flaky
-host earns proportionally less. A node that's reachable but **hosts nothing**
-scores `coverage ≈ 0 → weight 0 → paid nothing**, even though it pings.
+2. **A fixed number of paid copies per file.** Each CID is assigned to
+   `poolreplicas` nodes of the paid set by rendezvous hashing: the nodes with
+   the highest `hash(cid|peerId)` win. Assignments are stable, so losing or
+   adding a node moves only the files that node held.
+
+3. **Paid by bytes.** The verifier measures each file's size from the pool's
+   own IPFS (`files/stat`), a few per minute. A node's weight is
+
+   ```
+   weight = bytes assigned x held x reliability
+   share  = budget x weight / sum of weights
+   ```
+
+   so a node holding a large video earns more than one holding a thumbnail. A
+   file not measured yet counts as 1 byte until it is.
+
+4. **`held` comes from storage challenges** when the node has answered any
+   (below), and otherwise from its DHT coverage times `poollegacyweight`
+   (default 0.5). An older client that cannot answer challenges still earns,
+   but half what a proving node does. Once a node has answered a challenge it
+   is judged by its answers only.
 
 ## Eligibility gate (must pass all)
-From `getVerifiedPayoutTargets()`:
 - seen (keepalive) within **7 days**, AND
 - passed dial-back verification within **24 h** (`lastVerifyOk`), AND
 - fewer than **3** consecutive verification failures, AND
-- **`coverageScore > 0`** — has demonstrably provided sampled content.
+- holds something: `held > 0` (passed challenges, or DHT coverage on an older
+  client). A node that holds nothing cannot take a paid slot.
 
-## How the scores are measured (Phase 1 — implemented)
-The `PoolVerifier` background loop (~every 60 s) does this per round:
-1. Samples **6 random CIDs** from `permanent_assets` and, for each, asks the DHT
-   who provides it (`findProviders`), gated on at least one being `fetchable`
-   (so dead content / a dead local IPFS node can't score anyone).
-2. For each node it's checking, **coverage this round** = fraction of those
-   sampled CIDs whose provider set includes the node's peerId. (A same-machine
-   node serves everything → 1.0.)
-3. Folds that into the node's EMA `coverageScore`, and folds the pass/fail of the
-   reachability probe into `reliabilityScore` (`updateNodeScores`, smoothing
-   `A = 0.1`). Coverage is only updated when there were live samples, so a
-   measurement gap never penalizes a node.
+## Storage challenges (implemented)
 
-Scores live in the `nodes` table (`coverageScore`, `reliabilityScore`, REAL 0..1),
-added by a `pool.db` migration. The dashboard's `[P]`/`[E]` show each node's
-`cover %` and `uptime %` next to its amount.
+Coverage from DHT provider records proves a node *announces* a file, not that it
+stores it. Challenges close most of that gap:
 
-### Phase 1 limitation (be honest)
-Coverage is inferred from **DHT provider records**, which prove a node *announces*
-it provides a CID (stock kubo only reprovides what it actually pins) — not a
-cryptographic proof of possession. A custom/modified node could announce without
-storing. Stock nodes can't, so this is a big improvement over "reachable = paid",
-but it isn't unforgeable.
+1. On each keepalive (about every 20 minutes) from a registered node, the pool
+   adds a `challenge` to its reply: a CID the node is assigned, and a random
+   byte range of up to 64 KiB. Older clients look only for the reply's usual
+   text and ignore the field.
+2. The node checks the file is **pinned locally** (it never fetches a file to
+   answer), reads that range from its own IPFS, and posts the SHA-256 to
+   `POST /proof` with its peerId and secret.
+3. The pool reads the same range from its own IPFS and compares. Each verdict
+   moves the node's `proofScore` (EMA, 0.2 per answer).
+4. An answer is accepted once, within **120 seconds**. A node that has
+   answered before and ignores a challenge is scored a fail, so going quiet on
+   a file you dropped does not protect your score. A node that has never
+   answered (an older client) is not penalised; `poollegacyweight` covers it.
+5. If the pool cannot read the file itself, it scores neither way.
 
-## Phase 2 — cryptographic proof of storage (planned, not yet built)
-Closes the "announce without storing" gap. Requires new code in **both** the pool
-and the DigiAsset node, released together:
+**What this does not prove.** A node that stores nothing could fetch the file
+from the network inside the deadline to answer. That costs it the bandwidth of
+holding the file, and the answer only comes from pinned files on an honest
+client, so cheating costs about what honest storage costs. It is not a
+cryptographic proof against a determined cheat with a fast connection.
 
-1. The pool picks a random CID the node should hold and a random **byte range**.
-2. It challenges the node: "return the hash of bytes `[a,b)` of CID `X`."
-3. The node must hold the data to answer; the pool verifies against its own copy.
-4. Pass/fail feeds the same `coverageScore` (replacing/augmenting the DHT signal),
-   so the weighting math is unchanged — only the coverage *measurement* gets
-   stronger.
+## Tuning knobs
 
-Until Phase 2 ships, Phase 1's sampling is the fairness mechanism.
+| `pool.cfg` key | Default | |
+|---|---|---|
+| `poolmaxpaidnodes` | `0` (no cap) | Paid nodes per period. Set it to stop dilution. |
+| `poolreplicas` | `3` | Paid copies of each file. |
+| `poollegacyweight` | `0.5` | Weight kept by a node that never answers challenges. |
+| `poolchallenges` | `1` | `0` turns challenges off. |
 
-## Tuning knobs (code constants today; could move to `pool.cfg`)
-- Sample size per round (**6** CIDs) — higher = less noisy coverage, more DHT load.
-- EMA smoothing (**A = 0.1**) — higher = reacts faster, lower = steadier/longer memory.
-- Verify batch/interval (**10 peers / ~60 s**).
+Code constants: challenge range 64 KiB, deadline 120 s, proof EMA 0.2
+(`StoragePlan.h`); DHT sample 6 CIDs per round and coverage/reliability EMA 0.1
+(`PoolVerifier.cpp`, `PoolDatabase.cpp`).
+
+## Not built yet
+
+- **Holder priority for paid slots.** The marketplace has no holder tiers yet.
+  When it does, the paid-set ranking can read a node operator's tier first.
+- **Nodes storing only their assignment.** Clients still pin the whole list;
+  they are paid only for the bytes assigned to them. A client that pins just
+  its assignment would let small machines take part.

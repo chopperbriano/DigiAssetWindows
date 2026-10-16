@@ -101,6 +101,11 @@ private:
     std::chrono::steady_clock::time_point _keepaliveFailSince{};
     void notePermanentFailure(const std::string& what);
     void noteKeepaliveResult(bool ok, const std::string& what);
+    // Answer the storage challenge a pool put in its keepalive reply, if any:
+    // SHA-256 of a byte range of a file this node has pinned, posted to
+    // <pool>/proof. A file not pinned here is not fetched to answer; the
+    // challenge simply goes unanswered. Never throws.
+    void answerStorageChallenge(const std::string& response, const std::string& peerId);
     std::chrono::steady_clock::time_point _lastRegistrationProbe{};
     // Whether the pool server's last /list response said it is actively
     // distributing payouts. A pool can be reachable and accept our

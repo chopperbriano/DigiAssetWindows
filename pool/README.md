@@ -104,6 +104,10 @@ from the working directory. Keys:
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |
 | `poolpayoutpercent` | *(unset)* | **Balance-derived budget (recommended).** Percent of the wallet's *spendable balance* to pay out per period (e.g. `10` = 10%), split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Because it scales with the balance it can never overspend an empty wallet — ideal for a donation-funded pool. Takes precedence over `poolspendperperiod` when set. |
 | `poolspendperperiod` | *(unset)* | Fixed DGB budget per period, split in proportion to each node's coverage x reliability weight (see FAIRNESS.md). Used only when `poolpayoutpercent` is unset. |
+| `poolmaxpaidnodes` | `0` (no cap) | How many nodes are paid each period. The most reliable, longest-serving nodes take the slots; the rest wait and keep their scores. **This is what stops dilution**: with a cap, one more node no longer shrinks every paid node's share. See FAIRNESS.md. |
+| `poolreplicas` | `3` | Paid copies of each file. Each file is assigned to this many paid nodes, and a node is paid for the bytes it is assigned. |
+| `poollegacyweight` | `0.5` | The share of its weight a node keeps while it has never answered a storage challenge (an older client), judged by DHT coverage instead. `1` treats it like a proving node; `0` pays it nothing. |
+| `poolchallenges` | `1` | Storage challenges on keepalive (`POST /proof`). `0` turns them off; every node is then judged as legacy. |
 | `poolpayoutperiodhours` | `24` | Minimum hours between payouts. `[E]` refuses a second payout until this elapses, so a double-press can't double-pay. Set `0` to disable the guard (not recommended). |
 | `poolwalletpassphrase` | *(unset)* | Passphrase for an **encrypted** pool wallet. When set, `[E]` unlocks the wallet with `walletpassphrase` just for the payout batch and re-locks it immediately after, so encrypted-wallet payouts work unattended. Leave blank for an unencrypted wallet. Keep `pool.cfg` readable only by the operator. |
 | `rpcuser` | *(unset)* | DigiByte Core RPC username — required for wallet `sendtoaddress`, `getbalance`, and the stats page. Copy from your DigiByte Core config. |
@@ -160,8 +164,10 @@ own local balance. The page shows the whole funnel: `Donated in` → `In treasur
 
 A node is **eligible for payout** only if it was verified (reachable) within the
 last 24h, has fewer than 3 consecutive verification failures, was seen in the
-last 7 days, AND is provably hosting (`coverageScore > 0`). Each eligible node's
-share is then **weighted by its coverage x reliability** — see **[FAIRNESS.md](FAIRNESS.md)**.
+last 7 days, AND holds something: it has passed storage challenges, or, on an
+older client that cannot answer them, has DHT coverage. Up to `poolmaxpaidnodes`
+of those are paid, each **weighted by the bytes it is assigned x how surely it
+holds them x reliability** — see **[FAIRNESS.md](FAIRNESS.md)**.
 
 ---
 

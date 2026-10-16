@@ -729,6 +729,15 @@ void IPFS::unpin(const string& cid) {
 
 
 
+/**
+ * Bytes [offset, offset+length) of a file, from the local node. See IPFS.h:
+ * the caller has already confirmed the CID is pinned here.
+ */
+string IPFS::catRange(const string& cid, uint64_t offset, uint64_t length) const {
+    if (!isValidCID(cid)) throw exception("Invalid CID for catRange");
+    return _command("cat?arg=" + cid + "&offset=" + to_string(offset) + "&length=" + to_string(length));
+}
+
 bool IPFS::isPinned(const string& cid) const {
     std::lock_guard<std::mutex> lock(_pinnedCacheMutex);
 

@@ -83,6 +83,11 @@ poolexplorertxprefix=https://digiexplorer.info/tx/
 poolpayouts=0
 poolpayoutpercent=10
 poolpayoutperiodhours=24
+
+# Who gets paid (see pool/FAIRNESS.md). A cap on paid nodes is what keeps a
+# node's share worth having as more nodes join; 0 means no cap.
+poolmaxpaidnodes=10
+poolreplicas=3
 ```
 
 Every key (and the payout options) is documented in

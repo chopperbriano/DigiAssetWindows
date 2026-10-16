@@ -321,6 +321,21 @@ int main(int /*argc*/, char** /*argv*/) {
                   << (ingestToken.empty() ? "disabled (set pooladmintoken)" : "ENABLED")
                   << "\n";
 
+        // Storage challenges + the storage plan (pool/StoragePlan.h). On unless
+        // poolchallenges=0. The plan's knobs (poolreplicas, poolmaxpaidnodes,
+        // poollegacyweight) pick which files each node is challenged on; the
+        // dashboard re-reads them from pool.cfg for every payout.
+        {
+            bool challenges = true;
+            try { if (cfg.count("poolchallenges")) challenges = std::stoi(cfg["poolchallenges"]) != 0; } catch (...) {}
+            auto plan = StoragePlan::configFrom(cfg);
+            server->setStorageChallenges(challenges ? ipfsApi : "", plan);
+            std::cout << "  storage challenges: " << (challenges ? "ON" : "off (poolchallenges=0)")
+                      << "  plan: " << plan.replicas << " paid copies per file, "
+                      << (plan.maxPaidNodes ? std::to_string(plan.maxPaidNodes) + " paid nodes max" : std::string("no cap on paid nodes"))
+                      << "\n";
+        }
+
         // Donation/treasury stats page (GET /pool/stats.json). Optional — if
         // the donation address or RPC creds are unset the endpoint reports
         // zeros. Uses the SAME DigiByte Core RPC creds the payout path uses.

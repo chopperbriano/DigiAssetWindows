@@ -11,6 +11,7 @@
 
 #include "PoolDatabase.h"
 #include <chrono>
+#include <map>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -133,6 +134,11 @@ void PoolDatabase::buildSchema() {
     tryAddColumn("ALTER TABLE nodes ADD COLUMN reliabilityScore REAL NOT NULL DEFAULT 0;");
     // win.77 anti-takeover: the per-node secret bound on first registration.
     tryAddColumn("ALTER TABLE nodes ADD COLUMN secret TEXT NOT NULL DEFAULT '';");
+    // Storage plan (pool/StoragePlan.h): proofScore is an EMA of byte-range
+    // challenges passed; proofAnswered counts every answer, right or wrong, so
+    // the plan can tell a node that proves from one on an older client.
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN proofScore    REAL    NOT NULL DEFAULT 0;");
+    tryAddColumn("ALTER TABLE nodes ADD COLUMN proofAnswered INTEGER NOT NULL DEFAULT 0;");
 
     // permanent_assets rows are imported from the first-run snapshot of
     // mctrivia's /permanent/<page>.json or added later by the operator.
@@ -150,6 +156,31 @@ void PoolDatabase::buildSchema() {
     );
     exec(
         "CREATE INDEX IF NOT EXISTS idx_perm_page ON permanent_assets(page);"
+    );
+    // The file's size in bytes, measured by the verifier from the pool's own
+    // IPFS (files/stat). 0 = not measured yet. Payouts are weighted by it.
+    tryAddColumn("ALTER TABLE permanent_assets ADD COLUMN sizeBytes INTEGER NOT NULL DEFAULT 0;");
+    exec(
+        "CREATE INDEX IF NOT EXISTS idx_perm_cid ON permanent_assets(cid);"
+    );
+
+    // Storage challenges, one row per question asked. answeredAt is set when a
+    // node's answer is claimed (or the deadline passes); passed is the verdict,
+    // NULL for one closed without an answer from a node never scored on proofs.
+    exec(
+        "CREATE TABLE IF NOT EXISTS storage_challenges ("
+        " id         TEXT PRIMARY KEY,"
+        " peerId     TEXT NOT NULL,"
+        " cid        TEXT NOT NULL,"
+        " offset     INTEGER NOT NULL,"
+        " length     INTEGER NOT NULL,"
+        " issuedAt   INTEGER NOT NULL,"
+        " answeredAt INTEGER,"
+        " passed     INTEGER"
+        ");"
+    );
+    exec(
+        "CREATE INDEX IF NOT EXISTS idx_challenge_open ON storage_challenges(peerId, answeredAt);"
     );
 
     // One row per page. When the operator imports a complete page (done=1)
@@ -347,39 +378,276 @@ unsigned int PoolDatabase::countFailedOut() {
     return count;
 }
 
-std::vector<PoolDatabase::PayoutTarget> PoolDatabase::getVerifiedPayoutTargets() {
+std::vector<StoragePlan::Node> PoolDatabase::getPlanNodes() {
     std::lock_guard<std::mutex> lk(_mutex);
     int64_t now = nowUnix();
-    int64_t seenCutoff = now - 7 * 24 * 60 * 60;   // seen in last 7 days
-    int64_t verifyCutoff = now - 24 * 60 * 60;       // verified in last 24h
-
-    std::vector<PayoutTarget> out;
-    // Eligible AND provably hosting: seen in 7d, verified in 24h, not failed-out,
-    // AND coverageScore > 0 (has demonstrably provided sampled content). The
-    // payout weight is coverage * reliability, so a partial/flaky host earns less.
+    std::vector<StoragePlan::Node> out;
+    // The same eligibility gate payouts always had: seen in 7 days, verified
+    // (reachable) in 24 hours, fewer than 3 consecutive failures. Whether a
+    // node HOLDS anything is the plan's question, not this query's.
     const char* sql =
-        "SELECT peerId, payoutAddress, coverageScore, reliabilityScore FROM nodes "
+        "SELECT peerId, reliabilityScore, coverageScore, proofScore, proofAnswered, firstSeen FROM nodes "
         "WHERE lastSeen >= ? AND lastVerifyOk >= ? AND verifyFails < 3 "
-        "AND coverageScore > 0 "
         "ORDER BY peerId;";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int64(stmt, 1, seenCutoff);
-        sqlite3_bind_int64(stmt, 2, verifyCutoff);
+        sqlite3_bind_int64(stmt, 1, now - 7 * 24 * 60 * 60);
+        sqlite3_bind_int64(stmt, 2, now - 24 * 60 * 60);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            PayoutTarget t;
+            StoragePlan::Node n;
             const unsigned char* p = sqlite3_column_text(stmt, 0);
-            const unsigned char* a = sqlite3_column_text(stmt, 1);
-            if (p) t.peerId = (const char*) p;
-            if (a) t.payoutAddress = (const char*) a;
-            t.coverage = sqlite3_column_double(stmt, 2);
-            t.reliability = sqlite3_column_double(stmt, 3);
-            t.weight = t.coverage * t.reliability;
-            if (!t.payoutAddress.empty() && t.weight > 0.0) out.push_back(t);
+            if (p) n.peerId = (const char*) p;
+            n.reliability = sqlite3_column_double(stmt, 1);
+            n.coverage = sqlite3_column_double(stmt, 2);
+            n.proofScore = sqlite3_column_double(stmt, 3);
+            n.proofAnswered = sqlite3_column_int64(stmt, 4);
+            n.firstSeen = sqlite3_column_int64(stmt, 5);
+            if (!n.peerId.empty()) out.push_back(n);
         }
         sqlite3_finalize(stmt);
     }
     return out;
+}
+
+std::vector<StoragePlan::Cid> PoolDatabase::getPlanCids() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<StoragePlan::Cid> out;
+    // Distinct CIDs: one CID can sit on several rows (assetId/txHash pairs),
+    // and it is one file to store, so it is one file to pay for.
+    const char* sql =
+        "SELECT cid, MAX(sizeBytes) FROM permanent_assets WHERE cid IS NOT NULL AND cid != '' "
+        "GROUP BY cid ORDER BY cid;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            StoragePlan::Cid c;
+            const unsigned char* p = sqlite3_column_text(stmt, 0);
+            if (p) c.cid = (const char*) p;
+            c.sizeBytes = sqlite3_column_int64(stmt, 1);
+            out.push_back(c);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
+std::vector<std::string> PoolDatabase::getCidsMissingSize(unsigned int limit) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    std::vector<std::string> out;
+    const char* sql =
+        "SELECT cid FROM permanent_assets WHERE cid IS NOT NULL AND cid != '' "
+        "GROUP BY cid HAVING MAX(sizeBytes) = 0 ORDER BY RANDOM() LIMIT ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, (int) limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* c = sqlite3_column_text(stmt, 0);
+            if (c) out.emplace_back((const char*) c);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return out;
+}
+
+void PoolDatabase::setCidSize(const std::string& cid, int64_t sizeBytes) {
+    if (sizeBytes <= 0) return;
+    std::lock_guard<std::mutex> lk(_mutex);
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, "UPDATE permanent_assets SET sizeBytes = ? WHERE cid = ?;", -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_int64(stmt, 1, sizeBytes);
+    sqlite3_bind_text(stmt, 2, cid.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+std::vector<PoolDatabase::PayoutTarget> PoolDatabase::getVerifiedPayoutTargets(const StoragePlan::Config& plan) {
+    // Inputs first, each under its own lock; the plan itself is pure.
+    auto nodes = getPlanNodes();
+    auto cids = getPlanCids();
+    auto weights = StoragePlan::weights(nodes, cids, plan);
+
+    std::map<std::string, std::string> addressOf;
+    std::map<std::string, StoragePlan::Node> nodeOf;
+    for (const auto& n: nodes) nodeOf[n.peerId] = n;
+    {
+        std::lock_guard<std::mutex> lk(_mutex);
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, "SELECT peerId, payoutAddress FROM nodes;", -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const unsigned char* p = sqlite3_column_text(stmt, 0);
+                const unsigned char* a = sqlite3_column_text(stmt, 1);
+                if (p && a) addressOf[(const char*) p] = (const char*) a;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    std::vector<PayoutTarget> out;
+    for (const auto& w: weights) {
+        PayoutTarget t;
+        t.peerId = w.peerId;
+        t.payoutAddress = addressOf.count(w.peerId) ? addressOf[w.peerId] : "";
+        t.coverage = nodeOf[w.peerId].coverage;
+        t.reliability = nodeOf[w.peerId].reliability;
+        t.weight = w.weight;
+        t.assignedBytes = w.assignedBytes;
+        t.assignedCids = w.assignedCids;
+        t.held = w.held;
+        t.legacy = w.legacy;
+        if (!t.payoutAddress.empty() && t.weight > 0.0) out.push_back(t);
+    }
+    return out;
+}
+
+bool PoolDatabase::nodeSecretMatches(const std::string& peerId, const std::string& secret) {
+    if (secret.empty()) return false;
+    std::lock_guard<std::mutex> lk(_mutex);
+    bool ok = false;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, "SELECT secret FROM nodes WHERE peerId = ?;", -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* s = sqlite3_column_text(stmt, 0);
+            ok = s && secret == (const char*) s;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return ok;
+}
+
+namespace {
+    bool readChallenge(sqlite3_stmt* stmt, PoolDatabase::Challenge& out) {
+        const unsigned char* id = sqlite3_column_text(stmt, 0);
+        const unsigned char* peer = sqlite3_column_text(stmt, 1);
+        const unsigned char* cid = sqlite3_column_text(stmt, 2);
+        if (!id || !peer || !cid) return false;
+        out.id = (const char*) id;
+        out.peerId = (const char*) peer;
+        out.cid = (const char*) cid;
+        out.offset = sqlite3_column_int64(stmt, 3);
+        out.length = sqlite3_column_int64(stmt, 4);
+        out.issuedAt = sqlite3_column_int64(stmt, 5);
+        return true;
+    }
+}
+
+bool PoolDatabase::getOpenChallenge(const std::string& peerId, Challenge& out) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    bool found = false;
+    const char* sql =
+        "SELECT id, peerId, cid, offset, length, issuedAt FROM storage_challenges "
+        "WHERE peerId = ? AND answeredAt IS NULL AND issuedAt >= ? ORDER BY issuedAt DESC LIMIT 1;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, peerId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, nowUnix() - StoragePlan::CHALLENGE_DEADLINE_SECONDS);
+        if (sqlite3_step(stmt) == SQLITE_ROW) found = readChallenge(stmt, out);
+        sqlite3_finalize(stmt);
+    }
+    return found;
+}
+
+void PoolDatabase::insertChallenge(const Challenge& c) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    const char* sql =
+        "INSERT INTO storage_challenges (id, peerId, cid, offset, length, issuedAt) VALUES (?, ?, ?, ?, ?, ?);";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_text(stmt, 1, c.id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, c.peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, c.cid.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 4, c.offset);
+    sqlite3_bind_int64(stmt, 5, c.length);
+    sqlite3_bind_int64(stmt, 6, c.issuedAt);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+bool PoolDatabase::claimChallenge(const std::string& id, const std::string& peerId, Challenge& out) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    // Read and claim under one lock: the UPDATE only lands on a row still open
+    // and inside its deadline, so a challenge is answered at most once.
+    bool found = false;
+    {
+        const char* sql =
+            "SELECT id, peerId, cid, offset, length, issuedAt FROM storage_challenges "
+            "WHERE id = ? AND peerId = ? AND answeredAt IS NULL AND issuedAt >= ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, peerId.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(stmt, 3, now - StoragePlan::CHALLENGE_DEADLINE_SECONDS);
+            if (sqlite3_step(stmt) == SQLITE_ROW) found = readChallenge(stmt, out);
+            sqlite3_finalize(stmt);
+        }
+    }
+    if (!found) return false;
+    sqlite3_stmt* upd = nullptr;
+    if (sqlite3_prepare_v2(_db, "UPDATE storage_challenges SET answeredAt = ? WHERE id = ? AND answeredAt IS NULL;",
+                           -1, &upd, nullptr) != SQLITE_OK) return false;
+    sqlite3_bind_int64(upd, 1, now);
+    sqlite3_bind_text(upd, 2, id.c_str(), -1, SQLITE_TRANSIENT);
+    bool claimed = sqlite3_step(upd) == SQLITE_DONE && sqlite3_changes(_db) == 1;
+    sqlite3_finalize(upd);
+    return claimed;
+}
+
+void PoolDatabase::recordProofResult(const std::string& id, const std::string& peerId, bool passed) {
+    std::lock_guard<std::mutex> lk(_mutex);
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, "UPDATE storage_challenges SET passed = ? WHERE id = ? AND peerId = ? AND passed IS NULL;",
+                           -1, &stmt, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_int(stmt, 1, passed ? 1 : 0);
+    sqlite3_bind_text(stmt, 2, id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    bool recorded = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(_db) == 1;
+    sqlite3_finalize(stmt);
+    if (!recorded) return;   // a verdict is folded in once
+
+    sqlite3_stmt* node = nullptr;
+    const char* sql =
+        "UPDATE nodes SET proofScore = ? * ? + (1.0 - ?) * proofScore, proofAnswered = proofAnswered + 1 "
+        "WHERE peerId = ?;";
+    if (sqlite3_prepare_v2(_db, sql, -1, &node, nullptr) != SQLITE_OK) return;
+    sqlite3_bind_double(node, 1, StoragePlan::PROOF_EMA);
+    sqlite3_bind_double(node, 2, passed ? 1.0 : 0.0);
+    sqlite3_bind_double(node, 3, StoragePlan::PROOF_EMA);
+    sqlite3_bind_text(node, 4, peerId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(node);
+    sqlite3_finalize(node);
+}
+
+unsigned int PoolDatabase::expireChallenges() {
+    std::lock_guard<std::mutex> lk(_mutex);
+    int64_t now = nowUnix();
+    int64_t cutoff = now - StoragePlan::CHALLENGE_DEADLINE_SECONDS;
+    // A node that has answered before and ignored this one is scored a fail,
+    // so going quiet when a challenge lands on a file you dropped does not
+    // protect your score.
+    const char* penalise =
+        "UPDATE nodes SET proofScore = (1.0 - ?) * proofScore, proofAnswered = proofAnswered + 1 "
+        "WHERE proofAnswered > 0 AND peerId IN ("
+        " SELECT peerId FROM storage_challenges WHERE answeredAt IS NULL AND issuedAt < ?);";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(_db, penalise, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_double(stmt, 1, StoragePlan::PROOF_EMA);
+        sqlite3_bind_int64(stmt, 2, cutoff);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+    const char* close =
+        "UPDATE storage_challenges SET answeredAt = ?, "
+        " passed = CASE WHEN peerId IN (SELECT peerId FROM nodes WHERE proofAnswered > 0) THEN 0 ELSE NULL END "
+        "WHERE answeredAt IS NULL AND issuedAt < ?;";
+    unsigned int closed = 0;
+    if (sqlite3_prepare_v2(_db, close, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, now);
+        sqlite3_bind_int64(stmt, 2, cutoff);
+        if (sqlite3_step(stmt) == SQLITE_DONE) closed = (unsigned int) sqlite3_changes(_db);
+        sqlite3_finalize(stmt);
+    }
+    return closed;
 }
 
 void PoolDatabase::recordPayout(const std::string& payoutAddress, int64_t amountDgbSat,

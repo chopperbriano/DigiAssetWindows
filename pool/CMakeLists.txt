@@ -30,6 +30,8 @@ set(HEADER_FILES
         PoolServer.h
         PoolDashboard.h
         PoolVerifier.h
+        StoragePlan.h
+        KuboClient.h
         )
 
 set(SOURCE_FILES
@@ -44,6 +46,8 @@ set(SOURCE_FILES
         ../src/sqlite3.c
         ../src/curl_stubs.cpp
         ../src/CurlHandler.cpp
+        # SHA-256 for storage challenge answers (POST /proof).
+        ../src/crypto/SHA256.cpp
         )
 
 add_executable(DigiAssetPoolServer ${SOURCE_FILES} ${HEADER_FILES})

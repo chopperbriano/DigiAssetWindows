@@ -522,28 +522,32 @@ void PoolDashboard::processInput() {
         } else if (ch == 'p' || ch == 'P') {
             // Payout preview (read-only).
             auto cfg = readPoolConfig(_configPath);
-            auto targets = _db.getVerifiedPayoutTargets();
+            auto plan = StoragePlan::configFrom(cfg);
+            auto targets = _db.getVerifiedPayoutTargets(plan);
             std::string budgetMode;
             double spend = computeBudget(cfg, budgetMode, targets.size());
             bool enabled = false;
             try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
 
             double totalWeight = 0.0; for (const auto& t: targets) totalWeight += t.weight;
-            addLog("--- Payout Preview (weighted by coverage x reliability) ---");
-            addLog("Eligible hosting nodes: " + std::to_string(targets.size()));
+            addLog("--- Payout Preview (weighted by bytes held x proof x reliability) ---");
+            addLog("Paid nodes: " + std::to_string(targets.size()) +
+                   (plan.maxPaidNodes ? " (cap " + std::to_string(plan.maxPaidNodes) + ")" : std::string(" (no cap)")) +
+                   ", " + std::to_string(plan.replicas) + " paid copies per file");
             char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend < 0 ? 0.0 : spend);
             addLog("Budget: " + std::string(buf) + " DGB (" + budgetMode + ")");
             if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
-            if (targets.empty()) addLog("No eligible nodes: must be verified within 24h AND provably hosting (coverage > 0).");
+            if (targets.empty()) addLog("No eligible nodes: must be verified within 24h AND hold something (passed challenges, or DHT coverage on an older client).");
             else if (spend < 0) addLog("Could not read wallet balance (check rpcuser/rpcpassword/rpcport).");
             else if (spend == 0) addLog("No budget (" + budgetMode + "). If the pool wallet is empty, fund it (sweep DGB from the treasury); otherwise set poolpayoutpercent/poolspendperperiod.");
             else if (totalWeight <= 0.0) addLog("No node has a payout weight yet (coverage/reliability still building - give the verifier time).");
             else {
                 for (const auto& t: targets) {
                     double amt = spend * t.weight / totalWeight;
-                    char line[176];
-                    snprintf(line, sizeof(line), "  %s  cover %.0f%%  uptime %.0f%%  -> %.8f DGB",
-                             t.payoutAddress.c_str(), t.coverage * 100.0, t.reliability * 100.0, amt);
+                    char line[220];
+                    snprintf(line, sizeof(line), "  %s  %.1f MB in %u files  %s %.0f%%  uptime %.0f%%  -> %.8f DGB",
+                             t.payoutAddress.c_str(), (double) t.assignedBytes / 1e6, t.assignedCids,
+                             t.legacy ? "legacy" : "proof", t.held * 100.0, t.reliability * 100.0, amt);
                     addLog(std::string(line));
                 }
             }
@@ -571,7 +575,7 @@ void PoolDashboard::processInput() {
                               std::chrono::system_clock::now().time_since_epoch()).count();
             int64_t lastPayout = _db.getLastPayoutAt();
 
-            auto targets = _db.getVerifiedPayoutTargets();
+            auto targets = _db.getVerifiedPayoutTargets(StoragePlan::configFrom(cfg));
 
             // Cheap guards first; only compute the (RPC-backed) budget once we
             // know we'd actually pay.
@@ -693,7 +697,7 @@ void PoolDashboard::processInput() {
                         if (_pendingPayouts.empty()) {
                             addLog("Nothing to pay: every eligible address is below the dust floor, invalid, or was already paid by a peer pool this period.");
                         } else {
-                            addLog("--- CONFIRM PAYOUT (weighted by coverage x reliability) ---");
+                            addLog("--- CONFIRM PAYOUT (weighted by bytes held x proof x reliability) ---");
                             addLog("Budget: " + budgetMode);
                             char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
                             addLog("Total up to " + std::string(totalBuf) + " DGB -> " +

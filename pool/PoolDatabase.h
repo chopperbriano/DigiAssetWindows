@@ -11,6 +11,7 @@
 #define DIGIASSET_POOL_DATABASE_H
 
 #include "sqlite3.h"
+#include "StoragePlan.h"
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -149,9 +150,51 @@ public:
         std::string payoutAddress;
         double coverage    = 0.0;   // 0..1 EMA: share of sampled CIDs this node provides
         double reliability = 0.0;   // 0..1 EMA: share of verify rounds it passed
-        double weight      = 0.0;   // coverage * reliability - the payout weight
+        double weight      = 0.0;   // the payout weight (see StoragePlan.h)
+        int64_t assignedBytes = 0;  // bytes the plan assigns this node to hold
+        unsigned int assignedCids = 0;
+        double held        = 0.0;   // 0..1 proof score, or legacy coverage estimate
+        bool legacy        = false; // never answered a storage challenge
     };
-    std::vector<PayoutTarget> getVerifiedPayoutTargets();
+    // The paid set and its weights under the storage plan: a capped number of
+    // paid nodes, `replicas` paid copies of each file, weighted by bytes held.
+    std::vector<PayoutTarget> getVerifiedPayoutTargets(const StoragePlan::Config& plan = StoragePlan::Config());
+
+    // Storage plan inputs. Eligible nodes (seen 7d, verified 24h, fewer than 3
+    // consecutive failures) with their scores, and every distinct CID with its
+    // measured size (0 = not measured yet).
+    std::vector<StoragePlan::Node> getPlanNodes();
+    std::vector<StoragePlan::Cid> getPlanCids();
+    std::vector<std::string> getCidsMissingSize(unsigned int limit);
+    void setCidSize(const std::string& cid, int64_t sizeBytes);
+
+    // Storage challenges: "send the SHA-256 of bytes [offset, offset+length)
+    // of this CID". Issued on keepalive, answered on POST /proof.
+    struct Challenge {
+        std::string id;
+        std::string peerId;
+        std::string cid;
+        int64_t offset = 0;
+        int64_t length = 0;
+        int64_t issuedAt = 0;
+    };
+    // Does this secret match the one bound to peerId? An unbound (empty)
+    // secret never matches: a proof must come from the node that registered.
+    bool nodeSecretMatches(const std::string& peerId, const std::string& secret);
+    // The node's unanswered challenge still inside its deadline, if any.
+    bool getOpenChallenge(const std::string& peerId, Challenge& out);
+    void insertChallenge(const Challenge& c);
+    // Claim an open challenge for answering: marks it answered (so it can be
+    // answered once) and returns it. False if unknown, someone else's,
+    // already answered, or past its deadline.
+    bool claimChallenge(const std::string& id, const std::string& peerId, Challenge& out);
+    // Record a claimed challenge's verdict and fold it into the node's proof
+    // score. Every verdict counts toward proofAnswered.
+    void recordProofResult(const std::string& id, const std::string& peerId, bool passed);
+    // Close challenges past their deadline. A node that has answered before is
+    // scored a fail for one it ignored; a node on an older client that has
+    // never answered is not penalised (StoragePlan's legacyFactor covers it).
+    unsigned int expireChallenges();
 
     // Fairness scoring: fold one verify round's observation into a node's
     // coverage + reliability EMAs. coverageObs is that round's hit-rate (0..1),

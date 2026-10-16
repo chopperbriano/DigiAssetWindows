@@ -15,6 +15,7 @@
 // Specific sub-headers, NOT <boost/asio.hpp>, because src/boost/asio.hpp
 // in this repo is a historical no-op stub. See
 // memory/project_boost_stub_trap.md for the full story.
+#include "StoragePlan.h"
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -73,6 +74,16 @@ public:
     // it's assigned before the accept threads launch and only read afterwards,
     // a plain string is safe (no lock needed).
     void setIngestToken(const std::string& token) { _ingestToken = token; }
+
+    // Storage challenges (pool/StoragePlan.h). The keepalive reply carries a
+    // byte-range challenge for a file the node should hold, and POST /proof
+    // checks the answer against the pool's own IPFS at `ipfsApi`. The plan
+    // config picks which files a node is assigned. Set once before start().
+    void setStorageChallenges(const std::string& ipfsApi, const StoragePlan::Config& plan) {
+        _challengeIpfsApi = ipfsApi;
+        if (!_challengeIpfsApi.empty() && _challengeIpfsApi.back() != '/') _challengeIpfsApi += '/';
+        _plan = plan;
+    }
 
     // Info needed to serve GET /pool/stats.json (the public donation/balance
     // page). The donation address is published on the web page; the RPC creds
@@ -156,6 +167,8 @@ private:
     std::atomic<bool> _payoutsEnabled{false};
     // Shared secret for POST /permanent/add; empty = endpoint disabled.
     std::string _ingestToken;
+    std::string _challengeIpfsApi;     // empty = challenges off
+    StoragePlan::Config _plan;
 
     // Donation/stats state. Guarded by _statsMutex; the balance is cached and
     // only refreshed via RPC at most every ~30s so a public endpoint can't be
@@ -267,6 +280,9 @@ private:
     // POST /keepalive — a registered node checking in. Records the node's
     // liveness (keyed off `body` + `clientIp`) in the pool database.
     void handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody);
+    // A storage challenge for this node as a JSON object, or "" for none.
+    std::string challengeFor(const std::string& peerId);
+    void handleProof(const std::string& body, int& outStatus, std::string& outBody);
     // GET/POST /list/<floor>.json — registers a payout address and returns
     // the assets a node should pin at/above the given payout floor. Reports
     // the pool's payout-enabled state so the client shows an honest status.

@@ -18,6 +18,8 @@
 #include "IPFS.h"
 #include "Log.h"
 #include "DigiAssetConstants.h"
+#include "crypto/SHA256.h"
+#include <jsoncpp/json/json.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -425,6 +427,51 @@ void mctrivia::notePermanentFailure(const std::string& what) {
 }
 
 /**
+ * Answer a pool's storage challenge. The pool pays nodes for the files they
+ * hold and checks they hold them by asking for the hash of a random byte range
+ * (pool/StoragePlan.h). Only pinned files are read, so answering never makes
+ * this node download anything.
+ */
+void mctrivia::answerStorageChallenge(const std::string& response, const std::string& peerId) {
+    Log* log = Log::GetInstance();
+    try {
+        Json::Value root;
+        Json::CharReaderBuilder builder;
+        std::istringstream in(response);
+        std::string errs;
+        if (!Json::parseFromStream(builder, in, &root, &errs)) return;
+        const Json::Value& c = root["challenge"];
+        if (!c.isObject()) return;   // a pool that does not challenge
+        std::string id = c.get("id", "").asString();
+        std::string cid = c.get("cid", "").asString();
+        int64_t offset = c.get("offset", -1).asInt64();
+        int64_t length = c.get("length", 0).asInt64();
+        if (id.empty() || !IPFS::isValidCID(cid) || offset < 0 || length <= 0 || length > 1024 * 1024) return;
+
+        IPFS* ipfs = AppMain::GetInstance()->getIPFS();
+        if (!ipfs->isPinned(cid)) {
+            log->addMessage("Pool storage check: " + cid + " is not pinned here, so it was not answered", Log::DEBUG);
+            return;
+        }
+        std::string bytes = ipfs->catRange(cid, (uint64_t) offset, (uint64_t) length);
+        SHA256 h;
+        h.update(bytes);
+        std::string answer = SHA256::toString(h.digest());
+
+        std::string reply = CurlHandler::post(_baseUrl + "/proof",
+                                              {{"peerId", peerId}, {"secret", _secretCode}, {"id", id}, {"sha256", answer}},
+                                              PSP_SERVER_TIMEOUT_MS);
+        bool passed = reply.find("\"passed\":true") != std::string::npos;
+        log->addMessage(std::string("Pool storage check on ") + cid + ": " +
+                                (passed ? "passed" : "not passed (" + reply + ")"),
+                        passed ? Log::DEBUG : Log::WARNING);
+    } catch (const std::exception& e) {
+        log->addMessage(std::string("Pool storage check could not be answered: ") + e.what(), Log::DEBUG);
+    } catch (...) {
+    }
+}
+
+/**
  * Log a keepalive outcome. Failures get the streak/duration treatment above; the
  * first success after failures logs the recovery so the gap is bracketed.
  */
@@ -741,6 +788,7 @@ void mctrivia::_callServer(ServerCalls command, const string& extra) {
                             peerId + ")", Log::DEBUG);
         }
         noteKeepaliveResult(responseOk, "returned UNEXPECTED response: " + describePoolReply(status, response));
+        if (responseOk) answerStorageChallenge(response, peerId);
     }
 
     //update the bad list

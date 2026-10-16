@@ -193,6 +193,10 @@ public:
     bool isPinned(const std::string& cid) const;
     // Blocking query of an object's cumulative size in bytes (object/stat).
     unsigned int getSize(const std::string& cid) const;
+    // Blocking read of bytes [offset, offset+length) of a file. Used to answer
+    // a pool's storage challenge, so callers check isPinned first: this must
+    // never be the node fetching a file it does not hold. Throws on failure.
+    std::string catRange(const std::string& cid, uint64_t offset, uint64_t length) const;
     // Blocking download of a CID to filePath; optionally pins it first (used for
     // startup files that must be present).
     void downloadFile(const std::string& cid, const std::string& filePath, bool pinAlso = false);

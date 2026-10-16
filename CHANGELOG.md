@@ -20,6 +20,29 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased: storage nodes paid for what they hold, not for showing up
+
+The pool paid every verified node a share of one pot, weighted by how much of the whole
+list it seemed to hold. Every node stores everything, so each new node shrank every share,
+and a node with one large video earned the same as one with a thumbnail. Release the pool
+server and the node together; either works with the other's older version.
+
+- **A capped paid set** (`poolmaxpaidnodes`, default 0 = no cap). The most reliable,
+  longest-serving nodes are paid; the rest wait and keep their scores. This is what stops
+  dilution.
+- **Paid copies per file** (`poolreplicas`, default 3). Each file is assigned to that many
+  paid nodes by rendezvous hashing, so assignments stay put when a node comes or goes.
+- **Paid by bytes.** The verifier measures each file's size from the pool's IPFS, and a
+  node's weight is bytes assigned x how surely it holds them x reliability.
+- **Storage challenges.** The keepalive reply now carries a challenge: the SHA-256 of a
+  random byte range of a file the node is assigned. The node answers from its own pinned
+  copy on `POST /proof` (never fetching a file to answer) and the pool checks it against its
+  own. Ignoring a challenge after answering before counts as a fail. A node on an older
+  client keeps `poollegacyweight` (default 0.5) of its weight, judged by DHT coverage as
+  before. `poolchallenges=0` turns challenges off.
+- The rules are in `pool/StoragePlan.h`, unit-tested in `tests/StoragePlanTest.cpp`. See
+  `pool/FAIRNESS.md`.
+
 ## Unreleased — a clean shutdown that answers in time
 
 A snapshot publish on 2026-10-08 failed with `libcurl error: 22` from `cli shutdown`, and the

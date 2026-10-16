@@ -20,6 +20,9 @@
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
 #include "WalletLock.h"
+#include "KuboClient.h"
+#include "StoragePlan.h"
+#include "crypto/SHA256.h"
 #include "Version.h"
 #include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
@@ -33,6 +36,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -670,6 +674,12 @@ void PoolServer::handleRequest(const std::string& method,
     // --- POST /list/<floor>.json -------------------------------------------
     if (method == "POST" && path.rfind("/list/", 0) == 0) {
         handleList(path, body, clientIp, outStatus, outBody);
+        return;
+    }
+
+    // --- POST /proof (a node's answer to its storage challenge) -----------
+    if (method == "POST" && path == "/proof") {
+        handleProof(body, outStatus, outBody);
         return;
     }
 
@@ -1733,22 +1743,111 @@ void PoolServer::handlePermanentRemove(const std::string& body, int& outStatus, 
 // a payout address and peerId, upsert the node (recording clientIp for the
 // map). Always replies with mctrivia's exact expected sentinel string, which
 // existing clients treat as success.
+//
+// A registered node (its secret matches) also gets a storage challenge in the
+// same reply, as a "challenge" field beside the sentinel. Older clients look
+// only for the sentinel text, so they are unaffected; a client that knows the
+// field answers it on POST /proof. See StoragePlan.h.
 void PoolServer::handleKeepalive(const std::string& body, const std::string& clientIp, std::string& outBody) {
     // The C++ client posts form-encoded: address=...&peerId=...&visible=v&secret=...
     auto form = parseFormBody(body);
     auto addrIt = form.find("address");
     auto peerIt = form.find("peerId");
+    std::string challenge;
     if (addrIt != form.end() && peerIt != form.end()
         && !addrIt->second.empty() && !peerIt->second.empty()) {
         try {
             auto secIt = form.find("secret");
             std::string secret = (secIt != form.end()) ? secIt->second : "";
             _db.upsertNode(peerIt->second, addrIt->second, secret, clientIp);
+            if (_db.nodeSecretMatches(peerIt->second, secret)) challenge = challengeFor(peerIt->second);
         } catch (...) {}
     }
     // Match mctrivia's server response exactly — existing clients parse it
     // as the expected-ok sentinel. Don't "fix" this string.
-    outBody = "{\"error\":\"unsubscribe failed will time out anyways\"}";
+    outBody = "{\"error\":\"unsubscribe failed will time out anyways\"";
+    if (!challenge.empty()) outBody += ",\"challenge\":" + challenge;
+    outBody += "}";
+}
+
+// The node's open challenge, or a new one: a byte range of a file the plan
+// assigns it, else of any measured file. "" when challenges are off or no file
+// has a measured size yet.
+std::string PoolServer::challengeFor(const std::string& peerId) {
+    if (_challengeIpfsApi.empty()) return "";
+    PoolDatabase::Challenge c;
+    if (!_db.getOpenChallenge(peerId, c)) {
+        auto cids = _db.getPlanCids();
+        auto paid = StoragePlan::paidSet(_db.getPlanNodes(), _plan);
+        std::vector<const StoragePlan::Cid*> assigned, any;
+        for (const auto& x: cids) {
+            if (x.sizeBytes <= 0 || !KuboClient::safeCid(x.cid)) continue;
+            any.push_back(&x);
+            if (StoragePlan::isAssigned(x.cid, peerId, paid, _plan.replicas)) assigned.push_back(&x);
+        }
+        const auto& pool = assigned.empty() ? any : assigned;
+        if (pool.empty()) return "";
+        std::random_device rd;
+        std::mt19937_64 rng(((uint64_t) rd() << 32) ^ rd());
+        const StoragePlan::Cid* pick = pool[rng() % pool.size()];
+        auto range = StoragePlan::challengeRange(pick->sizeBytes, rng());
+        char id[33];
+        snprintf(id, sizeof(id), "%016llx%016llx", (unsigned long long) rng(), (unsigned long long) rng());
+        c.id = id;
+        c.peerId = peerId;
+        c.cid = pick->cid;
+        c.offset = range.offset;
+        c.length = range.length;
+        c.issuedAt = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch()).count();
+        _db.insertChallenge(c);
+    }
+    return "{\"id\":\"" + jsonEscape(c.id) + "\",\"cid\":\"" + jsonEscape(c.cid) +
+           "\",\"offset\":" + std::to_string(c.offset) + ",\"length\":" + std::to_string(c.length) +
+           ",\"deadline\":" + std::to_string(StoragePlan::CHALLENGE_DEADLINE_SECONDS) + "}";
+}
+
+// POST /proof: a node's answer to its challenge, form-encoded
+//   peerId=...&secret=...&id=<challenge id>&sha256=<hex of the byte range>
+// The answer is judged against the pool's own copy of the range. A challenge
+// is answered once; a wrong or late answer lowers the node's proof score, and
+// a pool that cannot read the file itself scores nothing either way.
+void PoolServer::handleProof(const std::string& body, int& outStatus, std::string& outBody) {
+    auto form = parseFormBody(body);
+    std::string peerId = form.count("peerId") ? form["peerId"] : "";
+    std::string secret = form.count("secret") ? form["secret"] : "";
+    std::string id = form.count("id") ? form["id"] : "";
+    std::string answer = form.count("sha256") ? form["sha256"] : "";
+    if (_challengeIpfsApi.empty()) {
+        outStatus = 404;
+        outBody = "{\"error\":\"storage challenges are off on this pool\"}";
+        return;
+    }
+    if (peerId.empty() || id.empty() || !_db.nodeSecretMatches(peerId, secret)) {
+        outStatus = 403;
+        outBody = "{\"error\":\"unknown node or wrong secret\"}";
+        return;
+    }
+    PoolDatabase::Challenge c;
+    if (!_db.claimChallenge(id, peerId, c)) {
+        outStatus = 409;
+        outBody = "{\"error\":\"no open challenge with that id (already answered, expired, or not yours)\"}";
+        return;
+    }
+    std::string bytes;
+    if (!KuboClient::catRange(_challengeIpfsApi, c.cid, c.offset, c.length, bytes)) {
+        // The pool cannot read its own copy, so it cannot judge. Neither a
+        // pass nor a fail: the node is not punished for the pool's gap.
+        outStatus = 200;
+        outBody = "{\"ok\":true,\"passed\":null,\"reason\":\"the pool could not read that file itself\"}";
+        return;
+    }
+    SHA256 h;
+    h.update(bytes);
+    bool passed = StoragePlan::sameHash(SHA256::toString(h.digest()), answer);
+    _db.recordProofResult(c.id, peerId, passed);
+    outStatus = 200;
+    outBody = std::string("{\"ok\":true,\"passed\":") + (passed ? "true" : "false") + "}";
 }
 
 // Handle the mctrivia-protocol /list registration call: pull peerId + payout
