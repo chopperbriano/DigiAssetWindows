@@ -76,6 +76,9 @@ Get-Raw 'pool/deploy/provision-peer-pool.ps1' (Join-Path $deploy 'provision-peer
 Get-Raw 'pool/deploy/diagnose-website.ps1'  (Join-Path $deploy 'diagnose-website.ps1')
 Get-Raw 'pool/deploy/setup-caddy.ps1'       (Join-Path $deploy 'setup-caddy.ps1')
 Get-Raw 'pool/deploy/Caddyfile'             (Join-Path $deploy 'Caddyfile')
+# setup-caddy.ps1 copies deploy\site over the live site, so a stale copy here would undo the
+# live refresh below the next time it runs.
+Get-Raw 'pool/deploy/site/index.html'       (Join-Path $deploy 'site\index.html')
 Get-Raw 'pool/deploy/backup-digistamp.ps1'  (Join-Path $deploy 'backup-digistamp.ps1')
 
 # Caddyfile DRIFT CHECK.
