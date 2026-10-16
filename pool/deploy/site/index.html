@@ -338,8 +338,8 @@
   <div class="card">
     <ul>
       <li>Publishes the canonical list of asset files that should be kept alive.</li>
-      <li>Accepts node registrations and periodically <strong>verifies</strong> each node is really hosting the content.</li>
-      <li>Pays verified node operators DGB to their chosen address.</li>
+      <li>Accepts node registrations, assigns each file to several nodes, and <strong>challenges</strong> each node to prove it still holds its files.</li>
+      <li>Pays verified node operators DGB to their chosen address, for the bytes they hold. Paid slots go to the most reliable, longest-serving nodes, so one more node joining doesn't shrink every share.</li>
     </ul>
     <p class="muted">It is not a wallet or an explorer. It talks to DigiAsset Core nodes, not to browsers.</p>
   </div>
@@ -591,8 +591,9 @@ psp2payout=YOUR_DGB_ADDRESS</pre>
     return;
   }
   var map = L.map("nodeMap", { worldCopyJump: true, minZoom: 1, attributionControl: true }).setView([25, 5], 2);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: "&copy; OpenStreetMap &copy; CARTO", subdomains: "abcd", maxZoom: 19
+  // Esri's dark-gray canvas needs no API key (Carto's basemaps started requiring one).
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors", maxZoom: 16
   }).addTo(map);
 
   function makeIcon(fill) {

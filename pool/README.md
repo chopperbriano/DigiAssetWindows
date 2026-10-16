@@ -144,7 +144,7 @@ The `nodes` array is `[{lat, lon, city, country}]`, one entry per node seen in
 the last 7 days. The pool geolocates each node's IP (from its multiaddr) via
 `ip-api.com`, **server-side and per-IP cached** so the public endpoint never
 hammers the geo service. The landing page plots them with Leaflet + marker
-clustering (dark Carto tiles). No IPs or peerIds are exposed to the browser —
+clustering (Esri dark-gray tiles, no API key needed). No IPs or peerIds are exposed to the browser —
 only coarse lat/lon + city/country.
 
 **Two pots (important):**
