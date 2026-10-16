@@ -33,10 +33,12 @@ iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setu
 Your node joins the **DigiStamp pool** (`pool.digistamp.co`) on its own. You don't
 run a pool. Full walkthrough: **[NODE-SETUP.md](NODE-SETUP.md)**.
 
-> **Thaw Day.** DigiByte Core **9.26.6 or newer** is required before mainnet block
-> **24,490,000** (about Nov 1 2026). The installer (it pins 9.26.7) and the
-> maintenance task take care of it. On older DigiByte the node refuses to index
-> past that block.
+> **Thaw Day.** Use DigiByte Core **9.26.7**
+> ([Windows installer](https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.7/digibyte-9.26.7-win64-setup.exe),
+> [all platforms](https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.7)).
+> 9.26.6 is the oldest release that follows the Thaw Day rules at mainnet block
+> **24,490,000** (about Nov 1 2026); on anything older the node refuses to index past
+> that block. The installer and the maintenance task install 9.26.7 for you.
 
 ## Update & maintain an existing node
 

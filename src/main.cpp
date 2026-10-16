@@ -308,7 +308,8 @@ int main(int argc, char* argv[]) {
     int nodeVersion = dgb.getNodeVersion();
     if (nodeVersion == 0) {
         log->addMessage("Could not determine DigiByte Core version - getnetworkinfo did not answer. "
-                        "DigiAsset Core requires v9.26.5 or newer.",
+                        "DigiAsset Core requires v9.26.5 or newer; install " +
+                        string(DigiByteCore::RECOMMENDED_NODE_DOWNLOAD),
                         Log::CRITICAL);
         return -1;
     }
@@ -320,7 +321,8 @@ int main(int argc, char* argv[]) {
         log->addMessage("DigiByte Core " + renderVersion(nodeVersion) + " is too old.  DigiAsset Core "
                         "requires v" + renderVersion(DigiByteCore::MINIMUM_NODE_VERSION) + " or newer "
                         "because it indexes DigiDollar, which activated at block 23,869,440 and "
-                        "cannot be validated by earlier releases.  Upgrade the node and restart.",
+                        "cannot be validated by earlier releases.  Upgrade the node to " +
+                        string(DigiByteCore::RECOMMENDED_NODE_DOWNLOAD) + " and restart.",
                         Log::CRITICAL);
         return -1;
     }
@@ -334,14 +336,16 @@ int main(int argc, char* argv[]) {
             log->addMessage("DigiByte Core " + to_string(nodeVersion) + " is too old: the chain is past "
                             "Thaw Day (block " + to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
                             "), whose DigiDollar rules only v9.26.6 and newer follow.  An older node may be "
-                            "on a different chain.  Upgrade DigiByte Core and restart.",
+                            "on a different chain.  Upgrade DigiByte Core to " +
+                            string(DigiByteCore::RECOMMENDED_NODE_DOWNLOAD) + " and restart.",
                             Log::CRITICAL);
             return -1;
         }
         log->addMessage("DigiByte Core " + to_string(nodeVersion) + " must be upgraded to v9.26.6 before "
                         "Thaw Day at block " + to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
                         (tip > 0 ? " (" + to_string(DigiAssetConstants::THAW_DAY_HEIGHT - tip) + " blocks away)" : string()) +
-                        ".  Indexing will pause there until it is.",
+                        ".  Indexing will pause there until it is.  Install " +
+                        string(DigiByteCore::RECOMMENDED_NODE_DOWNLOAD),
                         Log::WARNING);
     }
     log->addMessage("DigiByte Core version " + to_string(nodeVersion) + " accepted");

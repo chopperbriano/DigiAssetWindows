@@ -20,6 +20,17 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — every page points at DigiByte Core 9.26.7
+
+- **Pool page, readme, NODE-SETUP:** name 9.26.7 as the version to run, with links to its
+  Windows installer and release page. The pool page's manual-setup note still said v9.26.5.
+  9.26.6 stays documented as the oldest release that follows the Thaw Day rules.
+- **`monitor-node.ps1` 1.5.1:** tells you to update to 9.26.7 (its thresholds are unchanged).
+- **Node messages (binary, next release):** every "upgrade DigiByte Core" message names v9.26.7
+  and its download link, not only the oldest version allowed.
+- **`update-pool.ps1`** refreshes `pool\deploy\site` too, so a later `setup-caddy.ps1` run can't
+  copy an old page back over the live one.
+
 ## 0.3.3-win.145 — storage nodes paid for what they hold; a clean shutdown that answers in time
 
 Both changes are in the binaries. Update the pool server and the nodes together, and set

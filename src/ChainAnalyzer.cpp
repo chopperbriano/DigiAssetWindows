@@ -775,7 +775,8 @@ void ChainAnalyzer::phaseSync() {
             if ((nodeVersion > 0) && (nodeVersion < DigiByteCore::THAW_DAY_NODE_VERSION)) {
                 throw runtime_error("DigiByte Core " + to_string(nodeVersion) + " is too old to index past Thaw Day (block " +
                                     to_string(DigiAssetConstants::THAW_DAY_HEIGHT) +
-                                    ") - upgrade DigiByte Core to v9.26.6 or newer; indexing resumes by itself once it is");
+                                    ") - upgrade DigiByte Core to " + DigiByteCore::RECOMMENDED_NODE_DOWNLOAD +
+                                    " (9.26.6 is the oldest allowed); indexing resumes by itself once it is");
             }
             if (nodeVersion > 0) _thawDayNodeOk = true; //0 = no answer: ask again next block
         }

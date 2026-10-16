@@ -178,6 +178,13 @@ public:
      */
     static const int THAW_DAY_NODE_VERSION = 92606;
 
+    /**
+     * The release the installer pins, named in every "upgrade DigiByte Core" message so the
+     * operator gets the version to download rather than just the oldest one allowed.
+     */
+    static constexpr const char* RECOMMENDED_NODE_DOWNLOAD =
+            "v9.26.7: https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.7";
+
 
     // Returns a formatted one-line row of accumulated RPC profiling stats:
     // total time, average time per call, and call count.

@@ -72,9 +72,12 @@ asked. Skipped it? Re-run the installer, or run Autologon yourself any time.
 
 ### Thaw Day
 
-DigiByte Core **9.26.6 or newer** is required before mainnet block **24,490,000**
-(about Nov 1 2026). The installer pins 9.26.7 and the maintenance task upgrades
-older installs, so you normally do nothing. On older DigiByte the node refuses to
+Use DigiByte Core **9.26.7**
+([Windows installer](https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.7/digibyte-9.26.7-win64-setup.exe),
+[all platforms](https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.7)).
+9.26.6 is the oldest release that follows the Thaw Day rules at mainnet block
+**24,490,000** (about Nov 1 2026). The installer installs 9.26.7 and the maintenance
+task upgrades older installs, so you normally do nothing. On older DigiByte the node refuses to
 index past that block. If `monitor-node.ps1` shows an old DigiByte version,
 re-run the installer.
 

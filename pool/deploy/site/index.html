@@ -396,7 +396,7 @@
   <h2>Run a node and get paid</h2>
   <p>
     One installer sets up everything &mdash; <strong>DigiAsset for Windows</strong>, DigiByte Core
-    and IPFS. Paste this into an <strong>Administrator PowerShell</strong> on Windows 10 or 11,
+    9.26.7 and IPFS. Paste this into an <strong>Administrator PowerShell</strong> on Windows 10 or 11,
     approve the one Windows prompt, and it runs to the end on its own:
   </p>
   <pre>iwr https://raw.githubusercontent.com/chopperbriano/DigiAssetWindows/master/setup-digiasset.ps1 -OutFile "$env:TEMP\setup-digiasset.ps1" -UseBasicParsing; powershell -ExecutionPolicy Bypass -File "$env:TEMP\setup-digiasset.ps1"</pre>
@@ -410,8 +410,11 @@
   <h3 style="font-size:1rem;margin:28px 0 6px;color:#8b949e">Manual setup</h3>
   <p class="muted">
     Only needed if you are not using the installer above &mdash; it already does all of this.
-    Requires <strong>DigiByte Core v9.26.5 or newer</strong>: earlier releases cannot validate
-    DigiDollar, and the node refuses to start against them.
+    Requires <strong>DigiByte Core v9.26.7</strong>:
+    <a href="https://github.com/DigiByte-Core/digibyte/releases/download/v9.26.7/digibyte-9.26.7-win64-setup.exe">Windows installer</a>
+    &middot; <a href="https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.7">all platforms</a>.
+    Releases before 9.26.6 do not follow the Thaw Day rules at block 24,490,000, and the node
+    stops indexing on them there.
   </p>
   <ol>
     <li>Install and sync DigiAsset for Windows (see the repo).</li>
