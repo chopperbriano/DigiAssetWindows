@@ -20,7 +20,12 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased: storage nodes paid for what they hold, not for showing up
+## 0.3.3-win.145 — storage nodes paid for what they hold; a clean shutdown that answers in time
+
+Both changes are in the binaries. Update the pool server and the nodes together, and set
+`poolmaxpaidnodes` on the pool (it defaults to 0, no cap, which leaves dilution as it was).
+
+### Storage nodes paid for what they hold, not for showing up
 
 The pool paid every verified node a share of one pot, weighted by how much of the whole
 list it seemed to hold. Every node stores everything, so each new node shrank every share,
@@ -42,8 +47,11 @@ server and the node together; either works with the other's older version.
   before. `poolchallenges=0` turns challenges off.
 - The rules are in `pool/StoragePlan.h`, unit-tested in `tests/StoragePlanTest.cpp`. See
   `pool/FAIRNESS.md`.
+- **Pool page:** the node map uses Esri's keyless dark-gray tiles (Carto's tile server now
+  answers every tile with "API KEY REQUIRED"), and the "what the pool does" list describes
+  challenges and pay by bytes held.
 
-## Unreleased — a clean shutdown that answers in time
+### A clean shutdown that answers in time
 
 A snapshot publish on 2026-10-08 failed with `libcurl error: 22` from `cli shutdown`, and the
 script blamed rpcallow even though its preflight had just confirmed `shutdown` was allowed.
