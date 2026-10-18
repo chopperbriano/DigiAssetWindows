@@ -30,6 +30,12 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   and its download link, not only the oldest version allowed.
 - **`update-pool.ps1`** refreshes `pool\deploy\site` too, so a later `setup-caddy.ps1` run can't
   copy an old page back over the live one.
+- **`getassetdata` reports an approval rule's required weight (binary, next release).** It said
+  `"required": false` for every asset with an approval rule: `DigiAssetRules::toJSON` wrote
+  `!_signersRequired`, turning the weight into a bool. It now reports the number the approvers'
+  weights must reach. Only the RPC output changes: validation (`checkRulesPass`) always used the
+  real weight, so no indexed state or past verdict changes. New test:
+  `DigiAssetRules.approvalToJSONReportsTheRequiredWeight` (fails on the old line, passes now).
 
 ## 0.3.3-win.145 — storage nodes paid for what they hold; a clean shutdown that answers in time
 

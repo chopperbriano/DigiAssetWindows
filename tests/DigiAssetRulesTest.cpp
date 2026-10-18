@@ -316,6 +316,19 @@ TEST(DigiAssetRules, vote) {
 // Deflation
 // ─────────────────────────────────────────────────────────────────────────────
 
+TEST(DigiAssetRules, approvalToJSONReportsTheRequiredWeight) {
+    //getassetdata reported "required": false for every approval rule: toJSON negated the weight
+    //into a bool.  The weight is what a transaction's approvers must reach, so report it as is.
+    DigiAssetRules rules;
+    rules.setRequireSigners(3, {{"dgb1qapproverone", 2}, {"dgb1qapprovertwo", 1}});
+    Json::Value json = rules.toJSON();
+    ASSERT_TRUE(json.isMember("approval"));
+    ASSERT_TRUE(json["approval"]["required"].isIntegral());
+    EXPECT_EQ(json["approval"]["required"].asUInt64(), 3u);
+    EXPECT_EQ(json["approval"]["approvers"]["dgb1qapproverone"].asUInt64(), 2u);
+    EXPECT_EQ(json["approval"]["approvers"]["dgb1qapprovertwo"].asUInt64(), 1u);
+}
+
 TEST(DigiAssetRules, deflation) {
     DigiAssetRules rules;
     EXPECT_EQ(rules.getRequiredBurn(), 0u);

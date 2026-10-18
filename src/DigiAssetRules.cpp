@@ -879,7 +879,10 @@ Json::Value DigiAssetRules::toJSON() {
     // Handle approval
     if (_signersRequired > 0) {
         Json::Value approval(Json::objectValue);
-        approval["required"] = Json::Value(!_signersRequired);
+        //the combined weight the approvers must reach.  This read !_signersRequired, which turned
+        //the weight into a bool, so getassetdata reported "required": false for every asset with
+        //an approval rule.  Enforcement (checkRulesPass) always used the real weight.
+        approval["required"] = Json::Value(static_cast<Json::UInt64>(_signersRequired));
         Json::Value signers(Json::objectValue);
         for (const Signer& option: _signers) {
             signers[option.address] = Json::Value(static_cast<Json::UInt64>(option.weight));
