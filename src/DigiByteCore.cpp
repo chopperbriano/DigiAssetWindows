@@ -197,9 +197,12 @@ void DigiByteCore::makeConnection() {
     //DigiByte Core needs to say which wallet it means
     if (_useAssetPort) return;
     _walletName = selectWallet(config);
-    if (!_walletName.empty()) {
+    //core's default wallet is named "" and lives at /wallet/ - only addressed that way when
+    //rpcwallet="" asked for it, since the plain endpoint already means it when it is alone
+    if (!_walletName.empty() || _walletNamed) {
         httpClient->SetUrl(_baseUrl + "/wallet/" + urlEncode(_walletName));
-        Log::GetInstance()->addMessage("Using DigiByte Core wallet \"" + _walletName + "\"");
+        Log::GetInstance()->addMessage("Using DigiByte Core wallet \"" + _walletName + "\"" +
+                                       (_walletName.empty() ? " (the default wallet)" : ""));
     }
 }
 
@@ -218,6 +221,10 @@ void DigiByteCore::makeConnection() {
 std::string DigiByteCore::selectWallet(const Config& config) {
     Log* log = Log::GetInstance();
     std::string requested = config.getString("rpcwallet", "");
+    //rpcwallet="" names core's default wallet, which really is called "".  A bare rpcwallet= never
+    //reaches here (the config reader drops empty values), so the quotes are the only way to say it
+    _walletNamed = !requested.empty();
+    if (requested == "\"\"") requested.clear();
 
     //find out what core has loaded.  A core too old to know the command tells us nothing, in which
     //case we do what has always been done and take the config at its word
@@ -240,7 +247,7 @@ std::string DigiByteCore::selectWallet(const Config& config) {
     }
 
     //operator named one
-    if (!requested.empty()) {
+    if (_walletNamed) {
         if (loadedKnown && (std::find(loaded.begin(), loaded.end(), requested) == loaded.end())) {
             log->addMessage("rpcwallet is set to \"" + requested + "\" but DigiByte Core does not have it loaded." +
                                     (loaded.empty() ? "  No wallets are loaded." : "  Loaded: " + loadedList),
@@ -258,7 +265,7 @@ std::string DigiByteCore::selectWallet(const Config& config) {
     if (loaded.size() > 1) {
         log->addMessage("DigiByte Core has " + std::to_string(loaded.size()) + " wallets loaded(" + loadedList +
                                 ") so it cannot tell which one to use.  Add rpcwallet=<name> to " + _configFileName +
-                                " or every wallet command will fail.",
+                                " (rpcwallet=\"\" for the unnamed default wallet) or every wallet command will fail.",
                         Log::CRITICAL);
     }
     return "";

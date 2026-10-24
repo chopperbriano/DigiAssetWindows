@@ -114,6 +114,7 @@ private:
     std::string _configFileName = "config.cfg";
     std::string _baseUrl;    //rpc url without any wallet on the end
     std::string _walletName; //wallet the connection is pointed at.  empty=core picks
+    bool _walletNamed = false; //true when rpcwallet chose it - lets rpcwallet="" mean core's default("") wallet
 
     std::string selectWallet(const Config& config);
 

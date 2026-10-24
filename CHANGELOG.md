@@ -28,6 +28,14 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 - **`monitor-node.ps1` 1.5.1:** tells you to update to 9.26.7 (its thresholds are unchanged).
 - **Node messages (binary, next release):** every "upgrade DigiByte Core" message names v9.26.7
   and its download link, not only the oldest version allowed.
+- **Sync errors say what DigiByte Core said (binary).** `DigiByteException` never overrode
+  `what()`, so every error DigiByte Core answered with reached the log as "Unknown exception". It
+  now reads "DigiByte Core error <code>: <message>". The recovery log also named the block after
+  the one that failed. Found on a node whose txindex was rebuilding from scratch: it retried
+  block 24,438,840 for hours with no hint why.
+- **`rpcwallet=""` selects DigiByte Core's unnamed default wallet (binary).** With a second
+  wallet loaded (e.g. another app's), every wallet command failed and the default wallet could not
+  be chosen: an empty `rpcwallet=` reads as unset.
 - **`update-pool.ps1`** refreshes `pool\deploy\site` too, so a later `setup-caddy.ps1` run can't
   copy an old page back over the live one.
 - **`getassetdata` reports an approval rule's required weight (binary, next release).** It said
