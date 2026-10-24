@@ -42,6 +42,7 @@ class DigiByteException : public std::exception {
 private:
     int code;
     std::string msg;
+    std::string whatMsg;
 
 public:
     /**
@@ -73,9 +74,19 @@ public:
             this->code = errcode;
             this->msg = message;
         }
+        whatMsg = "DigiByte Core error " + std::to_string(this->code) + ": " + this->msg;
     }
 
     ~DigiByteException() throw() {};
+
+    /**
+     * Without this, std::exception::what() answers - "Unknown exception" on MSVC - and every
+     * error DigiByte Core reported back reached the sync log as that, with the node's own
+     * explanation thrown away.
+     */
+    const char* what() const noexcept override {
+        return whatMsg.c_str();
+    }
 
     int getCode() const {
         return code;

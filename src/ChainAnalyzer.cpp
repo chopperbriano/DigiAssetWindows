@@ -522,7 +522,7 @@ void ChainAnalyzer::mainFunction() {
         _lastPassFailed = true;
         _lastError = e.what();
         if (_lastError.empty()) _lastError = std::string("unlabeled exception (") + typeid(e).name() + ")";
-        _lastErrorHeight = _height + 1;   // the block we were processing when it threw
+        _lastErrorHeight = _height;   // the block we were processing when it threw (phaseSync works on _height itself; +1 named the next block)
         // Deliberately NOT re-thrown. The old code re-threw "so the Threaded framework
         // re-enters mainFunction() to recover", but Threaded's loop calls mainFunction()
         // again on the next iteration whether or not it threw - so the re-throw bought
@@ -541,7 +541,7 @@ void ChainAnalyzer::mainFunction() {
         // Non-std::exception failure - still record something useful, never "unknown".
         _lastPassFailed = true;
         _lastError = "non-standard (non-std::exception) failure";
-        _lastErrorHeight = _height + 1;
+        _lastErrorHeight = _height;
         //same reasoning as above: recovery happens on re-entry, not via the throw
         log->addMessage("Sync interrupted at block " + std::to_string(_lastErrorHeight) +
             ": non-standard exception - recovering on the next pass.", Log::WARNING);
