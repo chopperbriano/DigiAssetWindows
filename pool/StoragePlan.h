@@ -16,7 +16,7 @@
 //
 //   1. A capped PAID SET. Eligible nodes ranked by reliability, then by how
 //      long they have served (firstSeen), then peerId for a stable order; the
-//      top `maxPaidNodes` are paid. 0 means no cap. The rest wait their turn
+//      top `maxPaidNodes` (default 10) are paid. 0 means no cap. The rest wait their turn
 //      and keep their scores, so a paid node that drops out is replaced.
 //
 //   2. A fixed number of PAID COPIES per file. Each CID is assigned to
@@ -52,7 +52,9 @@ namespace StoragePlan {
 
     struct Config {
         unsigned int replicas = 3;          // paid copies per CID
-        unsigned int maxPaidNodes = 0;      // 0 = no cap
+        unsigned int maxPaidNodes = 10;     // 0 = no cap.  Capped by default: uncapped, every new
+                                            // node shrinks every paid node's share
+
         double legacyFactor = 0.5;          // weight kept by a node that never proves
         int64_t unknownSizeBytes = 1;       // weight of a CID not yet measured
     };

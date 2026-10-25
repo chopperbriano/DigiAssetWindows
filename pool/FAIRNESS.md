@@ -80,7 +80,7 @@ cryptographic proof against a determined cheat with a fast connection.
 
 | `pool.cfg` key | Default | |
 |---|---|---|
-| `poolmaxpaidnodes` | `0` (no cap) | Paid nodes per period. Set it to stop dilution. |
+| `poolmaxpaidnodes` | `10` | Paid nodes per period; `0` = no cap, which brings dilution back. |
 | `poolreplicas` | `3` | Paid copies of each file. |
 | `poollegacyweight` | `0.5` | Weight kept by a node that never answers challenges. |
 | `poolchallenges` | `1` | `0` turns challenges off. |

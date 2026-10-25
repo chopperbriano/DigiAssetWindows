@@ -361,6 +361,32 @@ int main(int argc, char* argv[]) {
     }
     log->addMessage("DigiByte Core version " + to_string(nodeVersion) + " accepted");
 
+    //txindex: the analyzer looks transactions up by id, which DigiByte Core can only answer from
+    //txindex.  Without it - or while it is still being rebuilt - sync runs until the first such
+    //lookup and then retries the same block for as long as the index takes, which was hours on a
+    //node whose indexes had been wiped, with nothing at startup to say why.  Not fatal: a node
+    //whose index is catching up carries on by itself once it has
+    try {
+        Json::Value indexes = dgb.sendcommand("getindexinfo", Json::Value(Json::arrayValue));
+        if (!indexes.isMember("txindex")) {
+            log->addMessage("DigiByte Core is running without txindex, which DigiAsset needs to look up "
+                            "transactions - sync will stall.  Set txindex=1 in digibyte.conf and restart "
+                            "DigiByte Core (it then builds the index, which takes hours; restoring the "
+                            "snapshot is faster).",
+                            Log::CRITICAL);
+        } else if (!indexes["txindex"]["synced"].asBool()) {
+            unsigned int indexed = indexes["txindex"]["best_block_height"].asUInt();
+            unsigned int tip = 0;
+            try { tip = dgb.getBlockCount(); } catch (...) {}
+            log->addMessage("DigiByte Core is still building its transaction index (block " + to_string(indexed) +
+                            (tip > 0 ? " of " + to_string(tip) : string()) +
+                            ").  Sync will pause at the first block above that until the index catches up.",
+                            Log::WARNING);
+        }
+    } catch (...) {
+        //getindexinfo is newer than some cores this still starts against - nothing to check then
+    }
+
     /*
      * Get wallet version
      */

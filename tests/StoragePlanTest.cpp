@@ -191,4 +191,6 @@ TEST(StoragePlan, ReadsItsKnobsFromPoolCfgAndKeepsDefaultsOnJunk) {
     EXPECT_DOUBLE_EQ(c.legacyFactor, 0.25);
     auto d = configFrom({{"poolreplicas", "lots"}});
     EXPECT_EQ(d.replicas, 3u);
+    EXPECT_EQ(d.maxPaidNodes, 10u);                 // capped unless the operator says otherwise
+    EXPECT_EQ(configFrom({{"poolmaxpaidnodes", "0"}}).maxPaidNodes, 0u);   // 0 still turns it off
 }

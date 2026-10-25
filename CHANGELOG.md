@@ -20,13 +20,18 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — every page points at DigiByte Core 9.26.7
+## 0.3.3-win.146 — sync errors that say why; the default wallet; a log file again; DigiByte Core 9.26.7 everywhere
+
+Mostly fixes found on live nodes: one stuck for hours on a block with "Unknown exception" (its
+DigiByte txindex was being rebuilt), one whose DigiByte also had another app's wallets loaded, and
+IPFS pin warnings nobody could trace. Update the nodes and the pool server; the pool now caps paid
+nodes at 10 unless `poolmaxpaidnodes` says otherwise.
 
 - **Pool page, readme, NODE-SETUP:** name 9.26.7 as the version to run, with links to its
   Windows installer and release page. The pool page's manual-setup note still said v9.26.5.
   9.26.6 stays documented as the oldest release that follows the Thaw Day rules.
 - **`monitor-node.ps1` 1.5.1:** tells you to update to 9.26.7 (its thresholds are unchanged).
-- **Node messages (binary, next release):** every "upgrade DigiByte Core" message names v9.26.7
+- **Node messages (binary):** every "upgrade DigiByte Core" message names v9.26.7
   and its download link, not only the oldest version allowed.
 - **Sync errors say what DigiByte Core said (binary).** `DigiByteException` never overrode
   `what()`, so every error DigiByte Core answered with reached the log as "Unknown exception". It
@@ -43,9 +48,15 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   (time, request, CID, time allowed, reason). The dashboard warning is limited to one a minute
   and a failed pin was otherwise dropped silently, so there was no way to tell which files keep
   failing. IPFS being down altogether and shutdown aborts are not recorded.
+- **Startup checks DigiByte Core's txindex (binary).** Missing: a CRITICAL saying sync will stall
+  and how to fix it. Still being rebuilt: a warning with how far it has got, instead of the node
+  silently retrying one block for hours.
+- **Pool: `poolmaxpaidnodes` defaults to 10 (binary).** It defaulted to 0 (no cap), which left
+  dilution in place on any pool that did not set it. `poolmaxpaidnodes=0` still removes the cap.
+- **Release gate:** the Log tests (now including log-file rotation) run with the unit tests.
 - **`update-pool.ps1`** refreshes `pool\deploy\site` too, so a later `setup-caddy.ps1` run can't
   copy an old page back over the live one.
-- **`getassetdata` reports an approval rule's required weight (binary, next release).** It said
+- **`getassetdata` reports an approval rule's required weight (binary).** It said
   `"required": false` for every asset with an approval rule: `DigiAssetRules::toJSON` wrote
   `!_signersRequired`, turning the weight into a bool. It now reports the number the approvers'
   weights must reach. Only the RPC output changes: validation (`checkRulesPass`) always used the
