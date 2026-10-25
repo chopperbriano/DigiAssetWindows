@@ -27,6 +27,12 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   takeover) and a payout sent but not written to the ledger. The dashboard redraws over stderr
   within half a second and keeps only its last few lines, so none of this survived. Next to
   `pool.cfg` (`poollogpath`), rotated to `pool.log.1` at 50 MB.
+- **The node's log file records INFO by default (binary)**, not just warnings: which wallet it
+  picked, the txindex state, sync milestones. `logfile=20` in `config.cfg` goes back to warnings only.
+- **Pool on-chain discovery reads blocks (binary).** The scanner started from the chain tip on its
+  first run and never saved that starting point, so every 10-minute cycle began again at the new
+  tip with nothing to scan: no `DGSP1` announcement was ever read. It now saves the tip on first
+  run and scans forward from there.
 
 ---
 

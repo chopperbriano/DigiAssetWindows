@@ -1517,9 +1517,16 @@ void PoolServer::onchainScan(std::set<std::string>& out) {
     if (!_onchain || _rpcUser.empty()) return;
     long tip = (long) rpcNumber(_rpcUser, _rpcPass, _rpcPort, "getblockcount", "[]");
     if (tip <= 0) return;
-    long last = tip;   // first run: forward-only (don't back-scan the whole chain)
     std::string lastStr = _db.getConfig("lastOnchainScanHeight", "");
-    if (!lastStr.empty()) { try { last = std::stol(lastStr); } catch (...) { last = tip; } }
+    if (lastStr.empty()) {
+        //first run: forward-only (don't back-scan the whole chain).  The starting point has to be
+        //saved here - left unsaved, every cycle started again from the new tip with nothing to
+        //scan, and no block was ever read
+        _db.setConfig("lastOnchainScanHeight", std::to_string(tip));
+        return;
+    }
+    long last = tip;
+    try { last = std::stol(lastStr); } catch (...) { last = tip; }
     const long MAXPERCYCLE = 60;
     long to = std::min(tip, last + MAXPERCYCLE);
     for (long h = last + 1; h <= to && _discoveryRunning.load(); h++) {

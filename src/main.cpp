@@ -219,7 +219,7 @@ int main(int argc, char* argv[]) {
     Log* log = Log::GetInstance();
     Config config = Config("config.cfg");
     log->setMinLevelToScreen(static_cast<Log::LogLevel>(config.getInteger("logscreen", static_cast<int>(Log::INFO))));
-    log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::WARNING))));
+    log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::INFO))));
     //The Windows port dropped upstream's Log::GetInstance("debug.log"), so logfile set a level for
     //a file that was never opened and nothing outlived the dashboard's scrollback.  Not called
     //debug.log: DigiByte Core's own log has that name and they are easily confused
