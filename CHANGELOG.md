@@ -33,6 +33,17 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   first run and never saved that starting point, so every 10-minute cycle began again at the new
   tip with nothing to scan: no `DGSP1` announcement was ever read. It now saves the tip on first
   run and scans forward from there.
+- **Automatic payouts: `poolautopayout=1` (binary).** Payouts happened only when someone pressed
+  `[E]`; the live pool last paid on 2026-07-26. The pool now makes that same payout once per
+  `poolpayoutperiodhours` (the `[E]` code was split into plan and send so both run it). A due
+  payout that cannot be made - no verified nodes, empty wallet, locked wallet - is retried hourly
+  and logged with the reason. Off by default; with it off, a daily warning once a payout is two
+  periods overdue.
+- **Payouts require `poolrpcwallet` (binary).** Every pool RPC call went to Core's plain endpoint:
+  with several wallets loaded the payout failed, and with one other wallet loaded it would have
+  paid from that wallet. `poolrpcwallet=<name>` (quotes optional, `""` = default wallet) now
+  names it for every call; without it `[E]` and automatic payouts refuse to run. Startup logs
+  the wallet and its spendable balance, or CRITICAL if Core does not have it loaded.
 
 ---
 

@@ -83,6 +83,9 @@ poolexplorertxprefix=https://digiexplorer.info/tx/
 poolpayouts=0
 poolpayoutpercent=10
 poolpayoutperiodhours=24
+# The wallet payouts come from (required), and pay every period without pressing [E]
+poolrpcwallet=DigiAssetWindows-Wallet
+poolautopayout=1
 
 # Who gets paid (see pool/FAIRNESS.md). A cap on paid nodes is what keeps a
 # node's share worth having as more nodes join; 0 means no cap.

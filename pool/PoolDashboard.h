@@ -13,10 +13,12 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <map>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 class PoolDatabase;
 class PoolServer;
@@ -73,6 +75,13 @@ private:
     // was shown (weighted by each node's coverage x reliability). Only touched on
     // the single dashboard thread.
     std::vector<std::pair<std::string, double>> _pendingPayouts;
+    std::string _plannedBudgetMode;   //how planPayout sized the budget, for display
+    double _plannedSpend = 0.0;
+    // Automatic payout (poolautopayout=1): checked once a minute on the dashboard thread; a
+    // due payout that could not be made is retried hourly, each time logging why.
+    int64_t _nextAutoPayoutCheck{0};
+    int64_t _nextAutoPayoutAttempt{0};
+    int64_t _nextOverdueWarning{0};
     std::atomic<bool> _quit{false};
     std::thread _thread;
     std::chrono::system_clock::time_point _startTime;
@@ -108,6 +117,15 @@ private:
     void refreshLoop();
     void render();
     void processInput();
+
+    // The payout, split so [E]/Y and the automatic payout run the same code: planPayout fills
+    // _pendingPayouts (or logs why it can't), executePayout sends it as one sendmany.
+    bool planPayout(std::map<std::string, std::string>& cfg);
+    void logPlannedPayout(const std::string& header);
+    void executePayout(std::map<std::string, std::string>& cfg);
+    void maybeAutoPayout();
+    // Logs, at startup, which wallet payouts come from and what it holds - or why they can't.
+    void reportPayoutWallet();
 };
 
 #endif // DIGIASSET_POOL_DASHBOARD_H

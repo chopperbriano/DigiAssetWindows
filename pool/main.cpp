@@ -25,6 +25,7 @@
 
 #include "PoolDashboard.h"
 #include "PoolLog.h"
+#include "CoreRpc.h"
 #include "Version.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
@@ -287,6 +288,7 @@ int main(int /*argc*/, char** /*argv*/) {
                                                 : "http://localhost:5001/api/v0/";
 
     PoolLog::setPath(cfg.count("poollogpath") ? cfg["poollogpath"] : "pool.log");
+    CoreRpc::configure(cfg); //every DigiByte Core call from here on goes to poolrpcwallet's wallet
     PoolLog::line(std::string("INFO: DigiAsset Pool Server ") + VERSION_STRING + " starting on port " +
                   std::to_string(port) + ", payouts " + (payoutsEnabled ? "ENABLED" : "disabled"));
 

@@ -31,6 +31,7 @@ set(HEADER_FILES
         PoolDashboard.h
         PoolVerifier.h
         PoolLog.h
+        CoreRpc.h
         StoragePlan.h
         KuboClient.h
         )

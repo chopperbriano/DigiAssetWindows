@@ -14,6 +14,7 @@
 
 #include "PoolDashboard.h"
 #include "PoolLog.h"
+#include "CoreRpc.h"
 #include "PayoutMath.h"
 #include "WalletLock.h"
 #include "CurlHandler.h"
@@ -133,7 +134,7 @@ namespace {
         // The caller charset-validates (isValidDgbAddress) first, so there's no
         // quote/injection risk interpolating the address into the JSON body here.
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"validateaddress\",\"params\":[\"" + address + "\"]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp;
         long status = 0;
         try { status = CurlHandler::postJson(url, body, resp, 8000); }
@@ -178,7 +179,7 @@ namespace {
         // sendmany "" {addr:amount,...}  (first arg is the deprecated dummy account)
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"sendmany\","
                            "\"params\":[\"\"," + amounts + "]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string respBody;
         long status = 0;
         try {
@@ -218,7 +219,7 @@ namespace {
         for (char c : passphrase) { if (c == '\\' || c == '"') esc += '\\'; esc += c; }
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"walletpassphrase\","
                            "\"params\":[\"" + esc + "\"," + std::to_string(seconds) + "]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp; long status = 0;
         try { status = CurlHandler::postJson(url, body, resp, 15000); }
         catch (const std::exception& e) { return std::string("ERROR: ") + e.what(); }
@@ -230,7 +231,7 @@ namespace {
     // Re-lock the wallet after the payout batch (best-effort; ignore result).
     void walletLock(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"walletlock\",\"params\":[]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp;
         try { CurlHandler::postJson(url, body, resp, 15000); } catch (...) {}
     }
@@ -253,7 +254,7 @@ namespace {
         if (rpcUser.empty()) return -1.0;
         // params: [minconf=1, maxconf=big] - confirmed, unlocked, spendable only.
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"listunspent\",\"params\":[1,9999999]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp;
         long status = 0;
         try { status = CurlHandler::postJson(url, body, resp, 15000); }
@@ -372,6 +373,7 @@ bool PoolDashboard::enableVT100() {
 void PoolDashboard::start() {
     if (_running.exchange(true)) return;
     std::cout << ESC "2J" << CURSOR_HOME << HIDE_CURSOR << std::flush;
+    reportPayoutWallet();
     render();
     _thread = std::thread([this]() { this->refreshLoop(); });
 }
@@ -410,6 +412,7 @@ void PoolDashboard::addLog(const std::string& line) {
 void PoolDashboard::refreshLoop() {
     while (_running.load()) {
         processInput();
+        maybeAutoPayout(); //same thread as [E], so _pendingPayouts still needs no lock
         render();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -431,92 +434,8 @@ void PoolDashboard::processInput() {
             // We're waiting for Y/N after an [E] press.
             _awaitingPayoutConfirm.store(false);
             if (ch == 'y' || ch == 'Y') {
-                addLog("Executing payout...");
                 auto cfg = readPoolConfig(_configPath);
-                std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
-                std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
-                int rpcPort = 14022;
-                try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
-
-                // If the pool wallet is encrypted, unlock it for the batch. The
-                // operator sets poolwalletpassphrase in pool.cfg; we unlock just
-                // long enough to send and re-lock immediately after, so the
-                // wallet is never left open. Without a passphrase an encrypted
-                // wallet returns -13 ("walletpassphrase first") per send below.
-                std::string walletPass = cfg.count("poolwalletpassphrase") ? cfg["poolwalletpassphrase"] : "";
-                // Serialize the whole unlock -> sendmany -> lock sequence against the
-                // on-chain-announce thread, which also drives this wallet; otherwise
-                // an announce could walletlock mid-payout and the send fails -13. (B-POOL3)
-                std::lock_guard<std::mutex> walletGuard(poolWalletMutex());
-                bool unlockedNow = false;
-                if (!walletPass.empty()) {
-                    // Generous window (nodes * 5s + 60s) covers a slow batch.
-                    int unlockSecs = (int)(_pendingPayouts.size() * 5 + 60);
-                    std::string ue = walletUnlock(rpcUser, rpcPass, rpcPort, walletPass, unlockSecs);
-                    if (ue.empty()) { unlockedNow = true; addLog("Wallet unlocked for payout."); }
-                    else addLog("WARNING: wallet unlock failed (" + ue + "); sends may fail with -13.");
-                }
-
-                // Execute the whole per-node plan (weighted by coverage x
-                // reliability, computed and shown at [E] time) as ONE atomic
-                // sendmany: either every recipient is paid in a single transaction
-                // or none are, so a shortfall / mid-batch error can never strand
-                // some recipients after paying others.
-                int success = 0;
-                int failed = 0;
-                int ambiguous = 0;
-                bool sawLocked = false;
-                // B-POOL4: arm a DURABLE once-per-period guard BEFORE broadcasting.
-                // If the tx goes out but the per-recipient ledger writes below fail
-                // (or the process dies between the two), getLastPayoutAt() still sees
-                // this row and blocks a re-run - so we never double-pay. Released
-                // only on a clean atomic failure (nothing sent) so a failed attempt
-                // doesn't burn the operator's payout period.
-                int64_t periodGuardId = _db.beginPayoutPeriod();
-                std::string result = sendMany(rpcUser, rpcPass, rpcPort, _pendingPayouts);
-                if (result.substr(0, 7) == "TIMEOUT") {
-                    // Ambiguous: the batch MAY have broadcast. Record EVERY row as
-                    // pending so the period guard blocks a blind re-run, and tell
-                    // the operator to reconcile manually. (audit M7)
-                    for (const auto& pay: _pendingPayouts) {
-                        _db.recordPendingPayout(pay.first, PayoutMath::payoutSats(pay.second));
-                    }
-                    addLog("  TIMEOUT - batch of " + std::to_string(_pendingPayouts.size()) +
-                           " MAY have sent: " + result);
-                    addLog("    -> VERIFY via 'listtransactions' before re-sending; ALL recorded as PENDING.");
-                    ambiguous = (int)_pendingPayouts.size();
-                } else if (result.substr(0, 5) == "ERROR") {
-                    // Atomic failure: nothing was sent, so no recipient is stranded.
-                    // Release the period guard so the operator can retry this period. (B-POOL4)
-                    _db.abortPayoutPeriod(periodGuardId);
-                    if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
-                    addLog("  FAIL (nothing sent - atomic batch): " + result);
-                    failed = (int)_pendingPayouts.size();
-                } else {
-                    // Success: one txid for the whole batch. Record every recipient
-                    // against that shared txid.
-                    for (const auto& pay: _pendingPayouts) {
-                        int64_t amtSat = PayoutMath::payoutSats(pay.second);
-                        char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amtSat / 100000000.0);
-                        addLog("  SENT " + pay.first + " " + std::string(ab) + " DGB");
-                        _db.recordPayout(pay.first, amtSat, result);
-                    }
-                    addLog("  txid=" + result.substr(0, 16) + "... (" +
-                           std::to_string(_pendingPayouts.size()) + " recipients in one tx)");
-                    success = (int)_pendingPayouts.size();
-                }
-                // Re-lock if we opened it, so the wallet isn't left spendable.
-                if (unlockedNow) walletLock(rpcUser, rpcPass, rpcPort);
-                _pendingPayouts.clear();
-                std::string summary = "Payout complete: " + std::to_string(success) + " sent, " +
-                        std::to_string(failed) + " failed";
-                if (ambiguous > 0) summary += ", " + std::to_string(ambiguous) + " PENDING (reconcile!)";
-                addLog(summary);
-                if (sawLocked) {
-                    addLog("Wallet is ENCRYPTED and locked. Fix: add 'poolwalletpassphrase=<your passphrase>'");
-                    addLog("  to pool.cfg (pool auto-unlocks for each payout), OR run in the DigiByte console:");
-                    addLog("  walletpassphrase \"<passphrase>\" 120   then retry the payout.");
-                }
+                executePayout(cfg);
             } else {
                 _pendingPayouts.clear();
                 addLog("Payout cancelled.");
@@ -524,6 +443,7 @@ void PoolDashboard::processInput() {
         } else if (ch == 'p' || ch == 'P') {
             // Payout preview (read-only).
             auto cfg = readPoolConfig(_configPath);
+            CoreRpc::configure(cfg);
             auto plan = StoragePlan::configFrom(cfg);
             auto targets = _db.getVerifiedPayoutTargets(plan);
             std::string budgetMode;
@@ -539,6 +459,8 @@ void PoolDashboard::processInput() {
             char buf[64]; snprintf(buf, sizeof(buf), "%.4f", spend < 0 ? 0.0 : spend);
             addLog("Budget: " + std::string(buf) + " DGB (" + budgetMode + ")");
             if (!enabled) addLog("WARNING: poolpayouts=0 (payouts disabled). Set to 1 to enable.");
+            if (CoreRpc::walletNamed()) addLog("Wallet: \"" + CoreRpc::walletName() + "\" (poolrpcwallet)");
+            else addLog("WARNING: poolrpcwallet is not set - [E] and automatic payouts refuse to run until it is.");
             if (targets.empty()) addLog("No eligible nodes: must be verified within 24h AND hold something (passed challenges, or DHT coverage on an older client).");
             else if (spend < 0) addLog("Could not read wallet balance (check rpcuser/rpcpassword/rpcport).");
             else if (spend == 0) addLog("No budget (" + budgetMode + "). If the pool wallet is empty, fund it (sweep DGB from the treasury); otherwise set poolpayoutpercent/poolspendperperiod.");
@@ -560,160 +482,10 @@ void PoolDashboard::processInput() {
         } else if (ch == 'e' || ch == 'E') {
             // Execute payout — with confirmation gate.
             auto cfg = readPoolConfig(_configPath);
-            bool enabled = false;
-            try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
-            std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
-            std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
-            int rpcPort = 14022;
-            try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
-
-            // Once-per-period spend guard: the budget is a *per period* amount,
-            // so refuse a second payout until the period has elapsed. This stops
-            // a double [E] press (or an itchy operator) from paying twice in a
-            // row. Default period is 24h.
-            int periodHours = 24;
-            try { if (cfg.count("poolpayoutperiodhours")) periodHours = std::stoi(cfg["poolpayoutperiodhours"]); } catch (...) {}
-            int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::system_clock::now().time_since_epoch()).count();
-            int64_t lastPayout = _db.getLastPayoutAt();
-
-            auto targets = _db.getVerifiedPayoutTargets(StoragePlan::configFrom(cfg));
-
-            // Cheap guards first; only compute the (RPC-backed) budget once we
-            // know we'd actually pay.
-            if (!enabled) {
-                addLog("Cannot execute: poolpayouts=0 in pool.cfg. Set to 1 first.");
-            } else if (targets.empty()) {
-                addLog("Cannot execute: no verified nodes eligible for payout.");
-            } else if (rpcUser.empty()) {
-                addLog("Cannot execute: rpcuser not set in pool.cfg (needed for wallet RPC).");
-            } else if (periodHours > 0 && lastPayout > 0 &&
-                       (now - lastPayout) < (int64_t) periodHours * 3600) {
-                int64_t remain = (int64_t) periodHours * 3600 - (now - lastPayout);
-                addLog("Cannot execute: last payout was " + formatDuration(now - lastPayout) +
-                       " ago. Next allowed in " + formatDuration(remain) +
-                       " (poolpayoutperiodhours=" + std::to_string(periodHours) + ").");
-            } else {
-                std::string budgetMode;
-                double spend = computeBudget(cfg, budgetMode, targets.size());
-                if (spend < 0) {
-                    addLog("Cannot execute: could not read wallet balance (RPC error). Check rpcuser/rpcpassword/rpcport.");
-                } else if (spend == 0) {
-                    addLog("Cannot execute: budget is 0 (" + budgetMode + "). Fund the pool wallet (sweep DGB from the treasury), or set poolpayoutpercent/poolspendperperiod.");
-                } else {
-                    double totalWeight = 0.0; for (const auto& t: targets) totalWeight += t.weight;
-                    if (totalWeight <= 0.0) {
-                        addLog("Cannot execute: no node has a payout weight yet (coverage x reliability still building).");
-                    } else {
-                        // Aggregate by payout ADDRESS: several nodes (peerIds) can
-                        // share one address, and we must not send it a separate
-                        // (fee-bearing) tx per node. Sum the per-node shares into
-                        // one send per distinct address. Order-preserving.
-                        _pendingPayouts.clear();
-                        std::map<std::string, size_t> addrIdx;
-                        for (const auto& t: targets) {
-                            double amt = spend * t.weight / totalWeight;
-                            if (amt <= 0.0) continue;
-                            auto it = addrIdx.find(t.payoutAddress);
-                            if (it == addrIdx.end()) {
-                                addrIdx[t.payoutAddress] = _pendingPayouts.size();
-                                _pendingPayouts.push_back(std::make_pair(t.payoutAddress, amt));
-                            } else {
-                                _pendingPayouts[it->second].second += amt;
-                            }
-                        }
-                        // Peer-pool payout coordination: if a peer pool already
-                        // paid an address within this period, skip it here so an
-                        // operator served by both pools isn't paid twice for the
-                        // same period. Opt out with poolpeerpayoutdedupe=0. A peer
-                        // we can't reach is skipped (we still pay) - availability
-                        // over strict coordination.
-                        bool dedup = true;
-                        try { if (cfg.count("poolpeerpayoutdedupe")) dedup = std::stoi(cfg["poolpeerpayoutdedupe"]) != 0; } catch (...) {}
-                        auto peerUrls = _server.getPeerUrls();
-                        if (dedup && !peerUrls.empty()) {
-                            std::map<std::string, int64_t> paidByPeers;
-                            int64_t window = (int64_t) periodHours * 3600;
-                            for (const auto& purl: peerUrls) {
-                                std::map<std::string, int64_t> one;
-                                if (_server.fetchPeerPaidAddresses(purl, window, one)) {
-                                    for (const auto& kv: one) paidByPeers[kv.first] = kv.second;
-                                } else {
-                                    addLog("Peer unreachable (" + purl + ") - paying without its dedup this round.");
-                                }
-                            }
-                            if (!paidByPeers.empty()) {
-                                std::vector<std::pair<std::string, double>> kept;
-                                for (const auto& pp: _pendingPayouts) {
-                                    if (paidByPeers.count(pp.first)) {
-                                        addLog("Skip " + pp.first + " - a peer pool already paid it this period.");
-                                    } else {
-                                        kept.push_back(pp);
-                                    }
-                                }
-                                _pendingPayouts.swap(kept);
-                            }
-                        }
-
-                        // Dust floor: drop any aggregated payout below the network
-                        // dust threshold. A sub-dust output makes DigiByte Core
-                        // reject the ENTIRE sendmany ("Invalid amount"), and because
-                        // the batch is atomic that would strand every recipient - so
-                        // one node whose weight rounds this low must not brick the
-                        // whole payout. Such a node is effectively unpayable this
-                        // period; it becomes payable once its weight grows.
-                        // (0.0001 DGB = 10000 sats = DIGIBYTE_DUST.)
-                        {
-                            std::vector<std::pair<std::string, double>> kept;
-                            for (const auto& pp: _pendingPayouts) {
-                                if (PayoutMath::isBelowDust(pp.second)) {
-                                    char db[48]; snprintf(db, sizeof(db), "%.8f", pp.second);
-                                    addLog("Skip " + pp.first + " - share " + std::string(db) +
-                                           " DGB is below the dust floor (weight too small this period).");
-                                } else {
-                                    kept.push_back(pp);
-                                }
-                            }
-                            _pendingPayouts.swap(kept);
-                        }
-
-                        // Address-validity filter: drop any payout address Core
-                        // rejects (checksum-invalid / wrong network) BEFORE the
-                        // atomic sendmany. Otherwise one bad address (fat-fingered or
-                        // hostile registration) makes Core reject the ENTIRE batch
-                        // and strands every honest recipient - every period. Charset
-                        // gate first (cheap), then Core validateaddress (checksum).
-                        {
-                            std::vector<std::pair<std::string, double>> kept;
-                            for (const auto& pp: _pendingPayouts) {
-                                if (isValidDgbAddress(pp.first) &&
-                                    coreValidatesAddress(rpcUser, rpcPass, rpcPort, pp.first)) {
-                                    kept.push_back(pp);
-                                } else {
-                                    addLog("Skip " + pp.first + " - invalid payout address (dropped so it can't fail the whole batch).");
-                                }
-                            }
-                            _pendingPayouts.swap(kept);
-                        }
-
-                        if (_pendingPayouts.empty()) {
-                            addLog("Nothing to pay: every eligible address is below the dust floor, invalid, or was already paid by a peer pool this period.");
-                        } else {
-                            addLog("--- CONFIRM PAYOUT (weighted by bytes held x proof x reliability) ---");
-                            addLog("Budget: " + budgetMode);
-                            char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", spend);
-                            addLog("Total up to " + std::string(totalBuf) + " DGB -> " +
-                                    std::to_string(_pendingPayouts.size()) + " payment(s):");
-                            for (const auto& pp: _pendingPayouts) {
-                                char line[176];
-                                snprintf(line, sizeof(line), "   %s  %.8f DGB", pp.first.c_str(), pp.second);
-                                addLog(std::string(line));
-                            }
-                            addLog("Press Y to confirm, any other key to cancel");
-                            _awaitingPayoutConfirm.store(true);
-                        }
-                    }
-                }
+            if (planPayout(cfg)) {
+                logPlannedPayout("--- CONFIRM PAYOUT (weighted by bytes held x proof x reliability) ---");
+                addLog("Press Y to confirm, any other key to cancel");
+                _awaitingPayoutConfirm.store(true);
             }
         } else if (ch == 'n' || ch == 'N') {
             addLog("Registered nodes: " + std::to_string(_db.countTotalNodes()));
@@ -1020,4 +792,358 @@ void PoolDashboard::render() {
     out << ESC "J";
 
     std::cout << out.str() << std::flush;
+}
+
+
+// Works out this period's payout into _pendingPayouts, applying every guard [E] always had.
+// Logs why when there is nothing to pay and returns false.  Shared by [E] and the automatic
+// payout so both take exactly the same path.
+bool PoolDashboard::planPayout(std::map<std::string, std::string>& cfg) {
+    CoreRpc::configure(cfg);
+    bool planned = false;
+    _pendingPayouts.clear();
+    bool enabled = false;
+    try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
+    std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+    std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+    int rpcPort = 14022;
+    try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
+
+    // Once-per-period spend guard: the budget is a *per period* amount,
+    // so refuse a second payout until the period has elapsed. This stops
+    // a double [E] press (or an itchy operator) from paying twice in a
+    // row. Default period is 24h.
+    int periodHours = 24;
+    try { if (cfg.count("poolpayoutperiodhours")) periodHours = std::stoi(cfg["poolpayoutperiodhours"]); } catch (...) {}
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+    int64_t lastPayout = _db.getLastPayoutAt();
+
+    auto targets = _db.getVerifiedPayoutTargets(StoragePlan::configFrom(cfg));
+
+    // Cheap guards first; only compute the (RPC-backed) budget once we
+    // know we'd actually pay.
+    if (!enabled) {
+        addLog("Cannot execute: poolpayouts=0 in pool.cfg. Set to 1 first.");
+    } else if (!CoreRpc::walletNamed()) {
+        addLog("Cannot execute: poolrpcwallet is not set in pool.cfg. Name the wallet payouts are paid from, "
+               "e.g. poolrpcwallet=DigiAssetWindows-Wallet (poolrpcwallet=\"\" for the unnamed default wallet).");
+    } else if (targets.empty()) {
+        addLog("Cannot execute: no verified nodes eligible for payout.");
+    } else if (rpcUser.empty()) {
+        addLog("Cannot execute: rpcuser not set in pool.cfg (needed for wallet RPC).");
+    } else if (periodHours > 0 && lastPayout > 0 &&
+               (now - lastPayout) < (int64_t) periodHours * 3600) {
+        int64_t remain = (int64_t) periodHours * 3600 - (now - lastPayout);
+        addLog("Cannot execute: last payout was " + formatDuration(now - lastPayout) +
+               " ago. Next allowed in " + formatDuration(remain) +
+               " (poolpayoutperiodhours=" + std::to_string(periodHours) + ").");
+    } else {
+        std::string budgetMode;
+        double spend = computeBudget(cfg, budgetMode, targets.size());
+        if (spend < 0) {
+            addLog("Cannot execute: could not read wallet balance (RPC error). Check rpcuser/rpcpassword/rpcport.");
+        } else if (spend == 0) {
+            addLog("Cannot execute: budget is 0 (" + budgetMode + "). Fund the pool wallet (sweep DGB from the treasury), or set poolpayoutpercent/poolspendperperiod.");
+        } else {
+            double totalWeight = 0.0; for (const auto& t: targets) totalWeight += t.weight;
+            if (totalWeight <= 0.0) {
+                addLog("Cannot execute: no node has a payout weight yet (coverage x reliability still building).");
+            } else {
+                // Aggregate by payout ADDRESS: several nodes (peerIds) can
+                // share one address, and we must not send it a separate
+                // (fee-bearing) tx per node. Sum the per-node shares into
+                // one send per distinct address. Order-preserving.
+                _pendingPayouts.clear();
+                std::map<std::string, size_t> addrIdx;
+                for (const auto& t: targets) {
+                    double amt = spend * t.weight / totalWeight;
+                    if (amt <= 0.0) continue;
+                    auto it = addrIdx.find(t.payoutAddress);
+                    if (it == addrIdx.end()) {
+                        addrIdx[t.payoutAddress] = _pendingPayouts.size();
+                        _pendingPayouts.push_back(std::make_pair(t.payoutAddress, amt));
+                    } else {
+                        _pendingPayouts[it->second].second += amt;
+                    }
+                }
+                // Peer-pool payout coordination: if a peer pool already
+                // paid an address within this period, skip it here so an
+                // operator served by both pools isn't paid twice for the
+                // same period. Opt out with poolpeerpayoutdedupe=0. A peer
+                // we can't reach is skipped (we still pay) - availability
+                // over strict coordination.
+                bool dedup = true;
+                try { if (cfg.count("poolpeerpayoutdedupe")) dedup = std::stoi(cfg["poolpeerpayoutdedupe"]) != 0; } catch (...) {}
+                auto peerUrls = _server.getPeerUrls();
+                if (dedup && !peerUrls.empty()) {
+                    std::map<std::string, int64_t> paidByPeers;
+                    int64_t window = (int64_t) periodHours * 3600;
+                    for (const auto& purl: peerUrls) {
+                        std::map<std::string, int64_t> one;
+                        if (_server.fetchPeerPaidAddresses(purl, window, one)) {
+                            for (const auto& kv: one) paidByPeers[kv.first] = kv.second;
+                        } else {
+                            addLog("Peer unreachable (" + purl + ") - paying without its dedup this round.");
+                        }
+                    }
+                    if (!paidByPeers.empty()) {
+                        std::vector<std::pair<std::string, double>> kept;
+                        for (const auto& pp: _pendingPayouts) {
+                            if (paidByPeers.count(pp.first)) {
+                                addLog("Skip " + pp.first + " - a peer pool already paid it this period.");
+                            } else {
+                                kept.push_back(pp);
+                            }
+                        }
+                        _pendingPayouts.swap(kept);
+                    }
+                }
+
+                // Dust floor: drop any aggregated payout below the network
+                // dust threshold. A sub-dust output makes DigiByte Core
+                // reject the ENTIRE sendmany ("Invalid amount"), and because
+                // the batch is atomic that would strand every recipient - so
+                // one node whose weight rounds this low must not brick the
+                // whole payout. Such a node is effectively unpayable this
+                // period; it becomes payable once its weight grows.
+                // (0.0001 DGB = 10000 sats = DIGIBYTE_DUST.)
+                {
+                    std::vector<std::pair<std::string, double>> kept;
+                    for (const auto& pp: _pendingPayouts) {
+                        if (PayoutMath::isBelowDust(pp.second)) {
+                            char db[48]; snprintf(db, sizeof(db), "%.8f", pp.second);
+                            addLog("Skip " + pp.first + " - share " + std::string(db) +
+                                   " DGB is below the dust floor (weight too small this period).");
+                        } else {
+                            kept.push_back(pp);
+                        }
+                    }
+                    _pendingPayouts.swap(kept);
+                }
+
+                // Address-validity filter: drop any payout address Core
+                // rejects (checksum-invalid / wrong network) BEFORE the
+                // atomic sendmany. Otherwise one bad address (fat-fingered or
+                // hostile registration) makes Core reject the ENTIRE batch
+                // and strands every honest recipient - every period. Charset
+                // gate first (cheap), then Core validateaddress (checksum).
+                {
+                    std::vector<std::pair<std::string, double>> kept;
+                    for (const auto& pp: _pendingPayouts) {
+                        if (isValidDgbAddress(pp.first) &&
+                            coreValidatesAddress(rpcUser, rpcPass, rpcPort, pp.first)) {
+                            kept.push_back(pp);
+                        } else {
+                            addLog("Skip " + pp.first + " - invalid payout address (dropped so it can't fail the whole batch).");
+                        }
+                    }
+                    _pendingPayouts.swap(kept);
+                }
+
+                if (_pendingPayouts.empty()) {
+                    addLog("Nothing to pay: every eligible address is below the dust floor, invalid, or was already paid by a peer pool this period.");
+                } else {
+                    _plannedBudgetMode = budgetMode;
+                    _plannedSpend = spend;
+                    planned = true;
+                }
+            }
+        }
+    }
+    return planned;
+}
+
+// Lists the payout planPayout() just worked out.
+void PoolDashboard::logPlannedPayout(const std::string& header) {
+    addLog(header);
+    addLog("Budget: " + _plannedBudgetMode + " - wallet \"" + CoreRpc::walletName() + "\"");
+    char totalBuf[64]; snprintf(totalBuf, sizeof(totalBuf), "%.4f", _plannedSpend);
+    addLog("Total up to " + std::string(totalBuf) + " DGB -> " +
+            std::to_string(_pendingPayouts.size()) + " payment(s):");
+    for (const auto& pp: _pendingPayouts) {
+        char line[176];
+        snprintf(line, sizeof(line), "   %s  %.8f DGB", pp.first.c_str(), pp.second);
+        addLog(std::string(line));
+    }
+}
+
+// Sends _pendingPayouts as one atomic sendmany and records the result.  Shared by the Y
+// confirm after [E] and the automatic payout.
+void PoolDashboard::executePayout(std::map<std::string, std::string>& cfg) {
+    CoreRpc::configure(cfg);
+    addLog("Executing payout...");
+    std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+    std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+    int rpcPort = 14022;
+    try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
+
+    // If the pool wallet is encrypted, unlock it for the batch. The
+    // operator sets poolwalletpassphrase in pool.cfg; we unlock just
+    // long enough to send and re-lock immediately after, so the
+    // wallet is never left open. Without a passphrase an encrypted
+    // wallet returns -13 ("walletpassphrase first") per send below.
+    std::string walletPass = cfg.count("poolwalletpassphrase") ? cfg["poolwalletpassphrase"] : "";
+    // Serialize the whole unlock -> sendmany -> lock sequence against the
+    // on-chain-announce thread, which also drives this wallet; otherwise
+    // an announce could walletlock mid-payout and the send fails -13. (B-POOL3)
+    std::lock_guard<std::mutex> walletGuard(poolWalletMutex());
+    bool unlockedNow = false;
+    if (!walletPass.empty()) {
+        // Generous window (nodes * 5s + 60s) covers a slow batch.
+        int unlockSecs = (int)(_pendingPayouts.size() * 5 + 60);
+        std::string ue = walletUnlock(rpcUser, rpcPass, rpcPort, walletPass, unlockSecs);
+        if (ue.empty()) { unlockedNow = true; addLog("Wallet unlocked for payout."); }
+        else addLog("WARNING: wallet unlock failed (" + ue + "); sends may fail with -13.");
+    }
+
+    // Execute the whole per-node plan (weighted by coverage x
+    // reliability, computed and shown at [E] time) as ONE atomic
+    // sendmany: either every recipient is paid in a single transaction
+    // or none are, so a shortfall / mid-batch error can never strand
+    // some recipients after paying others.
+    int success = 0;
+    int failed = 0;
+    int ambiguous = 0;
+    bool sawLocked = false;
+    // B-POOL4: arm a DURABLE once-per-period guard BEFORE broadcasting.
+    // If the tx goes out but the per-recipient ledger writes below fail
+    // (or the process dies between the two), getLastPayoutAt() still sees
+    // this row and blocks a re-run - so we never double-pay. Released
+    // only on a clean atomic failure (nothing sent) so a failed attempt
+    // doesn't burn the operator's payout period.
+    int64_t periodGuardId = _db.beginPayoutPeriod();
+    std::string result = sendMany(rpcUser, rpcPass, rpcPort, _pendingPayouts);
+    if (result.substr(0, 7) == "TIMEOUT") {
+        // Ambiguous: the batch MAY have broadcast. Record EVERY row as
+        // pending so the period guard blocks a blind re-run, and tell
+        // the operator to reconcile manually. (audit M7)
+        for (const auto& pay: _pendingPayouts) {
+            _db.recordPendingPayout(pay.first, PayoutMath::payoutSats(pay.second));
+        }
+        addLog("  TIMEOUT - batch of " + std::to_string(_pendingPayouts.size()) +
+               " MAY have sent: " + result);
+        addLog("    -> VERIFY via 'listtransactions' before re-sending; ALL recorded as PENDING.");
+        ambiguous = (int)_pendingPayouts.size();
+    } else if (result.substr(0, 5) == "ERROR") {
+        // Atomic failure: nothing was sent, so no recipient is stranded.
+        // Release the period guard so the operator can retry this period. (B-POOL4)
+        _db.abortPayoutPeriod(periodGuardId);
+        if (result.find("\"code\":-13") != std::string::npos) sawLocked = true;
+        addLog("  FAIL (nothing sent - atomic batch): " + result);
+        failed = (int)_pendingPayouts.size();
+    } else {
+        // Success: one txid for the whole batch. Record every recipient
+        // against that shared txid.
+        for (const auto& pay: _pendingPayouts) {
+            int64_t amtSat = PayoutMath::payoutSats(pay.second);
+            char ab[32]; snprintf(ab, sizeof(ab), "%.8f", amtSat / 100000000.0);
+            addLog("  SENT " + pay.first + " " + std::string(ab) + " DGB");
+            _db.recordPayout(pay.first, amtSat, result);
+        }
+        addLog("  txid=" + result.substr(0, 16) + "... (" +
+               std::to_string(_pendingPayouts.size()) + " recipients in one tx)");
+        success = (int)_pendingPayouts.size();
+    }
+    // Re-lock if we opened it, so the wallet isn't left spendable.
+    if (unlockedNow) walletLock(rpcUser, rpcPass, rpcPort);
+    _pendingPayouts.clear();
+    std::string summary = "Payout complete: " + std::to_string(success) + " sent, " +
+            std::to_string(failed) + " failed";
+    if (ambiguous > 0) summary += ", " + std::to_string(ambiguous) + " PENDING (reconcile!)";
+    addLog(summary);
+    if (sawLocked) {
+        addLog("Wallet is ENCRYPTED and locked. Fix: add 'poolwalletpassphrase=<your passphrase>'");
+        addLog("  to pool.cfg (pool auto-unlocks for each payout), OR run in the DigiByte console:");
+        addLog("  walletpassphrase \"<passphrase>\" 120   then retry the payout.");
+    }
+}
+// poolautopayout=1: makes the payout [E] would make, once per poolpayoutperiodhours, without
+// anyone at the console.  Payouts used to happen only when someone pressed [E], and none did for
+// three months.  Every guard is planPayout's; this only decides when to ask.  A due payout that
+// cannot be made (no verified nodes, empty wallet, ...) is retried hourly and says why each time,
+// so a quiet stretch shows up in pool.log as reasons rather than silence.
+void PoolDashboard::maybeAutoPayout() {
+    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+    if (now < _nextAutoPayoutCheck) return;
+    _nextAutoPayoutCheck = now + 60;
+    if (_awaitingPayoutConfirm.load()) return; //the operator is part way through [E]
+
+    auto cfg = readPoolConfig(_configPath);
+    auto intCfg = [&cfg](const char* key, int def) {
+        try { auto it = cfg.find(key); return it == cfg.end() ? def : std::stoi(it->second); } catch (...) { return def; }
+    };
+    if (intCfg("poolpayouts", 0) == 0) return;
+    int periodHours = intCfg("poolpayoutperiodhours", 24);
+    int64_t lastPayout = _db.getLastPayoutAt();
+    bool due = (lastPayout <= 0) || (periodHours > 0 && (now - lastPayout) >= (int64_t) periodHours * 3600);
+
+    if (intCfg("poolautopayout", 0) == 0) {
+        //manual payouts: say so once a day when one is two periods overdue
+        int64_t overdueAfter = (int64_t) (periodHours > 0 ? periodHours : 24) * 3600 * 2;
+        if (lastPayout > 0 && (now - lastPayout) >= overdueAfter && now >= _nextOverdueWarning) {
+            _nextOverdueWarning = now + 24 * 3600;
+            addLog("WARNING: no payout for " + formatDuration(now - lastPayout) +
+                   ". Payouts are manual: press [E], or set poolautopayout=1 in pool.cfg.");
+        }
+        return;
+    }
+    if (periodHours <= 0) {
+        //without a period the guard that stops a second payout is off, and this would pay hourly
+        if (now >= _nextAutoPayoutAttempt) {
+            _nextAutoPayoutAttempt = now + 3600;
+            addLog("Automatic payout disabled: poolautopayout=1 needs poolpayoutperiodhours above 0.");
+        }
+        return;
+    }
+    if (!due || now < _nextAutoPayoutAttempt) return;
+    _nextAutoPayoutAttempt = now + 3600;
+
+    addLog("Automatic payout due (poolautopayout=1, every " + std::to_string(periodHours) + "h).");
+    if (!planPayout(cfg)) {
+        addLog("Automatic payout not made (reason above) - trying again in an hour.");
+        return;
+    }
+    logPlannedPayout("--- AUTOMATIC PAYOUT (weighted by bytes held x proof x reliability) ---");
+    executePayout(cfg);
+}
+
+void PoolDashboard::reportPayoutWallet() {
+    auto cfg = readPoolConfig(_configPath);
+    CoreRpc::configure(cfg);
+    bool enabled = false;
+    try { if (cfg.count("poolpayouts")) enabled = std::stoi(cfg["poolpayouts"]) != 0; } catch (...) {}
+    if (!enabled) return;
+    bool autoOn = false;
+    try { if (cfg.count("poolautopayout")) autoOn = std::stoi(cfg["poolautopayout"]) != 0; } catch (...) {}
+    if (!CoreRpc::walletNamed()) {
+        addLog("WARNING: poolpayouts=1 but poolrpcwallet is not set - payouts will refuse to run until "
+               "pool.cfg names the wallet to pay from (e.g. poolrpcwallet=DigiAssetWindows-Wallet).");
+        return;
+    }
+    std::string rpcUser = cfg.count("rpcuser") ? cfg["rpcuser"] : "";
+    std::string rpcPass = cfg.count("rpcpassword") ? cfg["rpcpassword"] : "";
+    int rpcPort = 14022;
+    try { if (cfg.count("rpcport")) rpcPort = std::stoi(cfg["rpcport"]); } catch (...) {}
+    //getwalletinfo answers only if that wallet is loaded, which is the thing worth knowing now
+    std::string resp;
+    long status = 0;
+    try {
+        status = CurlHandler::postJson(CoreRpc::url(rpcUser, rpcPass, rpcPort),
+                                       "{\"jsonrpc\":\"1.0\",\"id\":\"pool\",\"method\":\"getwalletinfo\",\"params\":[]}",
+                                       resp, 8000);
+    } catch (const std::exception& e) {
+        addLog(std::string("WARNING: could not ask DigiByte Core about the payout wallet: ") + e.what());
+        return;
+    }
+    if (status < 200 || status >= 300 || resp.find("\"walletname\"") == std::string::npos) {
+        addLog("CRITICAL: payout wallet \"" + CoreRpc::walletName() + "\" (poolrpcwallet) is not loaded in "
+               "DigiByte Core - payouts will fail.  Core said: " + resp);
+        return;
+    }
+    double bal = getWalletBalance(rpcUser, rpcPass, rpcPort);
+    char balBuf[64]; snprintf(balBuf, sizeof(balBuf), "%.4f", bal < 0 ? 0.0 : bal);
+    addLog("Payout wallet \"" + CoreRpc::walletName() + "\": " + std::string(balBuf) + " DGB spendable. Payouts " +
+           (autoOn ? "automatic (poolautopayout=1)" : "manual - press [E] (poolautopayout=1 automates them)") + ".");
 }

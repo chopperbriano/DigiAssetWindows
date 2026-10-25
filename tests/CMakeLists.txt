@@ -121,6 +121,7 @@ set(UNIT_TESTS
     AssetWalletTest.cpp
     PayoutMathTest.cpp
     StoragePlanTest.cpp
+    CoreRpcTest.cpp
     RuleBackstopTest.cpp
     ThreadedStartupTest.cpp
     DatabaseMigrationTest.cpp

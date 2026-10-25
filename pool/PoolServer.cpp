@@ -17,6 +17,7 @@
 //
 
 #include "PoolServer.h"
+#include "CoreRpc.h"
 #include "PoolDatabase.h"
 #include "CurlHandler.h"
 #include "WalletLock.h"
@@ -142,8 +143,7 @@ namespace {
         if (rpcUser.empty()) return -1.0;
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"poolstats\",\"method\":\"" +
                            method + "\",\"params\":" + paramsJson + "}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" +
-                          std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp;
         long status = 0;
         try {
@@ -171,7 +171,7 @@ namespace {
     double rpcSpendableBalance(const std::string& rpcUser, const std::string& rpcPass, int rpcPort) {
         if (rpcUser.empty()) return -1.0;
         std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"poolstats\",\"method\":\"listunspent\",\"params\":[1,9999999]}";
-        std::string url = "http://" + rpcUser + ":" + rpcPass + "@127.0.0.1:" + std::to_string(rpcPort);
+        std::string url = CoreRpc::url(rpcUser, rpcPass, rpcPort);
         std::string resp;
         long status = 0;
         try { status = CurlHandler::postJson(url, body, resp, 8000); }
@@ -1456,7 +1456,7 @@ std::string PoolServer::rpcRaw(const std::string& method, const std::string& par
     if (_rpcUser.empty()) return "";
     std::string body = "{\"jsonrpc\":\"1.0\",\"id\":\"pooldisc\",\"method\":\"" + method +
                        "\",\"params\":" + paramsJson + "}";
-    std::string url = "http://" + _rpcUser + ":" + _rpcPass + "@127.0.0.1:" + std::to_string(_rpcPort);
+    std::string url = CoreRpc::url(_rpcUser, _rpcPass, _rpcPort);
     std::string resp;
     try { CurlHandler::postJson(url, body, resp, 15000); } catch (...) { return ""; }
     return resp;
