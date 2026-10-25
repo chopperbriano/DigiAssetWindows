@@ -89,3 +89,42 @@ TEST(Log, exceptionFailedToOpen_whatIsNonEmpty) {
     string msg = ex.what();
     EXPECT_FALSE(msg.empty());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// appendToSideFile - every line kept, rotated to <name>.1 once full
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include <cstdio>
+
+static string readAll(const string& path) {
+    ifstream in(path);
+    return string(istreambuf_iterator<char>(in), istreambuf_iterator<char>());
+}
+
+TEST(Log, appendToSideFile_keepsEveryLine) {
+    const string path = "_log_side_test.log";
+    remove(path.c_str());
+    remove((path + ".1").c_str());
+    Log::appendToSideFile(path, "first", 0);
+    Log::appendToSideFile(path, "second", 0);
+    string text = readAll(path);
+    EXPECT_NE(text.find("\tfirst\n"), string::npos);
+    EXPECT_NE(text.find("\tsecond\n"), string::npos);
+    remove(path.c_str());
+}
+
+TEST(Log, appendToSideFile_rotatesWhenFull) {
+    const string path = "_log_side_rotate.log";
+    remove(path.c_str());
+    remove((path + ".1").c_str());
+    //each line is ~30 bytes with its timestamp, so the 100 byte cap is passed on the 4th
+    for (int i = 0; i < 4; i++) Log::appendToSideFile(path, "line" + to_string(i), 100);
+    string rotated = readAll(path + ".1");
+    EXPECT_NE(rotated.find("line3"), string::npos);   //the line that filled it went with it
+    Log::appendToSideFile(path, "after", 100);
+    string fresh = readAll(path);
+    EXPECT_NE(fresh.find("after"), string::npos);
+    EXPECT_EQ(fresh.find("line0"), string::npos);     //the new file starts empty
+    remove(path.c_str());
+    remove((path + ".1").c_str());
+}

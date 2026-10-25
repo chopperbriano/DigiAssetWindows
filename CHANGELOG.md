@@ -36,6 +36,13 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 - **`rpcwallet=""` selects DigiByte Core's unnamed default wallet (binary).** With a second
   wallet loaded (e.g. another app's), every wallet command failed and the default wallet could not
   be chosen: an empty `rpcwallet=` reads as unset.
+- **The node writes a log file again (binary).** The Windows port dropped the line that opened
+  it, so `logfile=` set a level for a file that never existed. Now `digiasset.log` next to
+  `config.cfg` (`logpath`), rotated to `.1` at `logmaxmb` MB (default 50).
+- **`ipfs-failures.log` (binary):** one tab-separated line per failed IPFS pin, download or unpin
+  (time, request, CID, time allowed, reason). The dashboard warning is limited to one a minute
+  and a failed pin was otherwise dropped silently, so there was no way to tell which files keep
+  failing. IPFS being down altogether and shutdown aborts are not recorded.
 - **`update-pool.ps1`** refreshes `pool\deploy\site` too, so a later `setup-caddy.ps1` run can't
   copy an old page back over the live one.
 - **`getassetdata` reports an approval rule's required weight (binary, next release).** It said

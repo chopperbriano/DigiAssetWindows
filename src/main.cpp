@@ -220,6 +220,17 @@ int main(int argc, char* argv[]) {
     Config config = Config("config.cfg");
     log->setMinLevelToScreen(static_cast<Log::LogLevel>(config.getInteger("logscreen", static_cast<int>(Log::INFO))));
     log->setMinLevelToFile(static_cast<Log::LogLevel>(config.getInteger("logfile", static_cast<int>(Log::WARNING))));
+    //The Windows port dropped upstream's Log::GetInstance("debug.log"), so logfile set a level for
+    //a file that was never opened and nothing outlived the dashboard's scrollback.  Not called
+    //debug.log: DigiByte Core's own log has that name and they are easily confused
+    log->setMaxFileBytes(static_cast<uint64_t>(config.getInteger("logmaxmb", 50)) * 1024 * 1024);
+    try {
+        log->setLogFile(config.getString("logpath", "digiasset.log"));
+    } catch (const std::exception& e) {
+        //a missing log file is not a reason to stop the node
+        cout << "Could not open the log file " << config.getString("logpath", "digiasset.log")
+             << " - logging to the screen only" << endl;
+    }
 
     // Set up the in-place console dashboard (config wizard is done, safe to take over screen)
     ConsoleDashboard dashboard;

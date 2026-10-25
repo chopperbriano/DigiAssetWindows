@@ -366,6 +366,33 @@ string IPFS::_timeoutContext() const {
     return peers + queue;
 }
 
+/**
+ * Writes one line per failed request to ipfs-failures.log: time, request, CID, time allowed, reason.
+ * The dashboard warning is rate limited to one a minute, and a failed pin was otherwise swallowed
+ * without a trace, so there was no way to find out WHICH files keep failing.  Tab separated so it
+ * can be grouped by CID: Import-Csv ipfs-failures.log -Delimiter "`t" -Header time,request,cid,allowed,reason
+ */
+static void recordFailure(const string& command, unsigned int timeoutMs, const string& reason) {
+    string request = command;
+    string cid;
+    size_t arg = command.find("?arg=");
+    if (arg != string::npos) {                    //cat?arg=<cid>&offset=...
+        request = command.substr(0, arg);
+        size_t end = command.find('&', arg + 5);
+        cid = command.substr(arg + 5, (end == string::npos) ? string::npos : end - (arg + 5));
+    } else {                                      //pin/add/<cid>, cat/<cid>, pin/rm/<cid>
+        size_t slash = command.rfind('/');
+        if (slash != string::npos) {
+            request = command.substr(0, slash);
+            cid = command.substr(slash + 1);
+        }
+    }
+    string why = reason; //an HTTP error body can span lines, which would break the one-line records
+    for (char& c: why) if ((c == '\t') || (c == '\r') || (c == '\n')) c = ' ';
+    Log::appendToSideFile("ipfs-failures.log",
+                          request + "\t" + cid + "\t" + to_string(timeoutMs / 1000) + "s\t" + why);
+}
+
 string IPFS::_command(const string& command, const map<string, string>& data, unsigned int timeout, const string& outputPath) const {
     string url = _nodePrefix + command;
     if (timeout == 0) timeout = _timeoutCommand * 1000; //never wait forever - see _timeoutCommand
@@ -379,6 +406,7 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
         _markApiUp();
     } catch (const CurlHandler::exceptionTimeout& e) {
         //shutdown aborts every transfer, which arrives here looking exactly like a timeout
+        if (!stopRequested()) recordFailure(command, timeout, "no answer in time");
         if (!stopRequested() && _shouldWarn(_lastTimeoutWarning)) {
             Log::GetInstance()->addMessage(
                     "IPFS node did not answer \"" + command + "\" within " + to_string(timeout / 1000) +
@@ -404,6 +432,7 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
         }
         //Any other failure (HTTP error, bad payload, ...) says nothing reliable
         //about reachability, so leave the flag as it was.
+        if (!stopRequested()) recordFailure(command, timeout, e.what());
         throw;
     }
     return "";

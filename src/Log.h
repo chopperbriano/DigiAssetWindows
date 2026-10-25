@@ -15,6 +15,7 @@
 
 
 
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -66,6 +67,9 @@ public:
  */
 private:
     ofstream _logFile;
+    string _logFileName;
+    uint64_t _maxFileBytes = 50ull * 1024 * 1024;
+    void _rotateIfFull();
     LogLevel _minLevelToScreen = INFO;
     LogLevel _minLevelToFile = INFO;
     // A sink rather than a ConsoleDashboard*, so Log.cpp needs no part of the dashboard.
@@ -77,6 +81,14 @@ private:
 public:
     // Open (append mode) the file that messages at/above the file threshold are written to.
     void setLogFile(const string& filename);
+    // Size at which the log file is renamed to <name>.1 (replacing the previous one) and
+    // started afresh, so a node left running for months cannot fill its disk.  0 = never.
+    void setMaxFileBytes(uint64_t bytes);
+    // Appends one timestamped line to a separate file, rotated the same way at maxBytes.
+    // For records meant to be read as a whole rather than as a log - e.g. every failed IPFS
+    // request - which a level threshold or a rate limit would thin out.
+    static void appendToSideFile(const string& filename, const string& line,
+                                 uint64_t maxBytes = 20ull * 1024 * 1024);
     void setMinLevelToScreen(LogLevel level);
     void setMinLevelToFile(LogLevel level);
     // Attach a dashboard; while set, screen output is routed to it instead of std::cout.

@@ -9,6 +9,7 @@
 #include "Log.h"
 // ConsoleDashboard.h deliberately NOT included - see _dashboardSink in Log.h
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -54,10 +55,46 @@ Log* Log::GetInstance(const string& fileName) {
 
 // Open the log file in append mode; throws exceptionFailedToOpen if it cannot be opened.
 void Log::setLogFile(const string& filename) {
+    if (_logFile.is_open()) _logFile.close();
+    _logFileName = filename;
     _logFile.open(filename, ios_base::app);
     if (!_logFile.is_open()) {
         throw exceptionFailedToOpen();
     }
+}
+
+void Log::setMaxFileBytes(uint64_t bytes) {
+    _maxFileBytes = bytes;
+}
+
+// Moves a full file to <name>.1 (replacing any older one).  Called with the lock held.
+static void rotateFile(const string& filename) {
+    string old = filename + ".1";
+    std::remove(old.c_str());
+    std::rename(filename.c_str(), old.c_str());
+}
+
+// Called with the lock held, after a write.  tellp on an append stream is the file size.
+void Log::_rotateIfFull() {
+    if ((_maxFileBytes == 0) || _logFileName.empty()) return;
+    std::streamoff size = _logFile.tellp();
+    if ((size < 0) || (static_cast<uint64_t>(size) < _maxFileBytes)) return;
+    _logFile.close();
+    rotateFile(_logFileName);
+    _logFile.open(_logFileName, ios_base::app);
+}
+
+void Log::appendToSideFile(const string& filename, const string& line, uint64_t maxBytes) {
+    static std::mutex* sideLock = new std::mutex; //leaked like getLock(): may be used during exit
+    lock_guard<mutex> lock(*sideLock);
+    {
+        ofstream out(filename, ios_base::app);
+        if (!out.is_open()) return; //a record we cannot keep must never stop the node
+        out << logStamp() << "\t" << line << "\n";
+        std::streamoff size = out.tellp();
+        if ((maxBytes == 0) || (size < 0) || (static_cast<uint64_t>(size) < maxBytes)) return;
+    }
+    rotateFile(filename);
 }
 
 void Log::setMinLevelToScreen(LogLevel level) {
@@ -109,6 +146,7 @@ void Log::addMessage(const string& message, LogLevel level) {
 
     if (level >= _minLevelToFile && _logFile.is_open()) {
         _logFile << logStamp() << " " << logMessage << endl;
+        _rotateIfFull();
     }
 }
 
