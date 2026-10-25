@@ -10,6 +10,7 @@
 //
 
 #include "PoolDatabase.h"
+#include "PoolLog.h"
 #include <chrono>
 #include <map>
 #include <iostream>
@@ -264,6 +265,8 @@ void PoolDatabase::upsertNode(const std::string& peerId,
     if (!secretOk) {
         fprintf(stderr, "[POOL] rejected registration for peerId=%s (secret mismatch) - possible payout-address takeover attempt\n", peerId.c_str());
         fflush(stderr);
+        PoolLog::line("WARNING: rejected registration for peerId=" + peerId +
+                      " (secret mismatch) - possible payout-address takeover attempt");
         return;
     }
     sqlite3_stmt* stmt = nullptr;
@@ -676,6 +679,9 @@ void PoolDatabase::recordPayout(const std::string& payoutAddress, int64_t amount
         fprintf(stderr, "[POOL][CRITICAL] payout SENT but LEDGER WRITE FAILED - reconcile manually: addr=%s sat=%lld txid=%s\n",
                 payoutAddress.c_str(), (long long) amountDgbSat, txid.c_str());
         fflush(stderr);
+        //the dashboard redraws over stderr within half a second; this is the copy that survives
+        PoolLog::line("CRITICAL: payout SENT but LEDGER WRITE FAILED - reconcile manually: addr=" + payoutAddress +
+                      " sat=" + std::to_string((long long) amountDgbSat) + " txid=" + txid);
     }
 }
 

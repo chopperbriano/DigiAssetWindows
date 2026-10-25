@@ -20,6 +20,16 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — the pool server writes a log file
+
+- **`pool.log` (binary):** every line the pool dashboard logs, plus startup, fatal errors and the
+  two messages that went only to stderr - a rejected registration (possible payout-address
+  takeover) and a payout sent but not written to the ledger. The dashboard redraws over stderr
+  within half a second and keeps only its last few lines, so none of this survived. Next to
+  `pool.cfg` (`poollogpath`), rotated to `pool.log.1` at 50 MB.
+
+---
+
 ## 0.3.3-win.146 — sync errors that say why; the default wallet; a log file again; DigiByte Core 9.26.7 everywhere
 
 Mostly fixes found on live nodes: one stuck for hours on a block with "Unknown exception" (its

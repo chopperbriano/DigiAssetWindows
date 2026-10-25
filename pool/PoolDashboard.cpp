@@ -13,6 +13,7 @@
 //
 
 #include "PoolDashboard.h"
+#include "PoolLog.h"
 #include "PayoutMath.h"
 #include "WalletLock.h"
 #include "CurlHandler.h"
@@ -398,6 +399,7 @@ static std::string poolLogStamp() {
 }
 
 void PoolDashboard::addLog(const std::string& line) {
+    PoolLog::line(line); //the screen keeps the last few; the file keeps them all
     std::lock_guard<std::mutex> lk(_logMutex);
     _logLines.push_back(poolLogStamp() + " " + line);
     while (_logLines.size() > MAX_LOG_LINES) _logLines.pop_front();

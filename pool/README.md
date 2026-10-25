@@ -99,6 +99,7 @@ from the working directory. Keys:
 |---|---|---|
 | `poolport` | `14028` | TCP port the pool server listens on |
 | `pooldbpath` | `pool.db` | sqlite file for pool state |
+| `poollogpath` | `pool.log` | Log file: every dashboard log line plus the critical messages (rejected registrations, a payout sent but not recorded), timestamped. Rotated to `pool.log.1` at 50 MB. |
 | `pooladmintoken` | *(unset)* | Shared secret gating `POST /permanent/add` and `POST /permanent/remove`. Unset = the ingestion endpoint is **disabled** (403). Set it (and give the same value to your publisher, e.g. the marketplace) to let a trusted service push freshly-minted asset CIDs onto the permanent list. |
 | `ipfspath` | `http://localhost:5001/api/v0/` | kubo HTTP API base the verifier uses for dial-back, `findprovs`, and `cat`. The pool operator's own IPFS node must be running for verification (including the NAT fallback) to work. |
 | `poolpayouts` | `0` | **Foot-gun.** `1` enables payouts: the pool advertises `payoutsEnabled:true` and the `[E]` key can send DGB. Leave `0` until you've funded a wallet and run a smoke test. |

@@ -30,6 +30,7 @@ set(HEADER_FILES
         PoolServer.h
         PoolDashboard.h
         PoolVerifier.h
+        PoolLog.h
         StoragePlan.h
         KuboClient.h
         )
@@ -40,6 +41,7 @@ set(SOURCE_FILES
         PoolServer.cpp
         PoolDashboard.cpp
         PoolVerifier.cpp
+        PoolLog.cpp
         # Borrow sqlite3.c and curl_stubs.cpp from the main src/ tree so the
         # pool server doesn't need its own copies. sqlite for the pool db,
         # curl_stubs for the first-run HTTP snapshot of mctrivia's /permanent.
@@ -48,6 +50,8 @@ set(SOURCE_FILES
         ../src/CurlHandler.cpp
         # SHA-256 for storage challenge answers (POST /proof).
         ../src/crypto/SHA256.cpp
+        # Rotating file writer behind pool.log (PoolLog).
+        ../src/Log.cpp
         )
 
 add_executable(DigiAssetPoolServer ${SOURCE_FILES} ${HEADER_FILES})

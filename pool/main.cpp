@@ -24,6 +24,8 @@
 //
 
 #include "PoolDashboard.h"
+#include "PoolLog.h"
+#include "Version.h"
 #include "PoolDatabase.h"
 #include "PoolServer.h"
 #include "PoolVerifier.h"
@@ -284,6 +286,10 @@ int main(int /*argc*/, char** /*argv*/) {
     std::string ipfsApi = cfg.count("ipfspath") ? cfg["ipfspath"]
                                                 : "http://localhost:5001/api/v0/";
 
+    PoolLog::setPath(cfg.count("poollogpath") ? cfg["poollogpath"] : "pool.log");
+    PoolLog::line(std::string("INFO: DigiAsset Pool Server ") + VERSION_STRING + " starting on port " +
+                  std::to_string(port) + ", payouts " + (payoutsEnabled ? "ENABLED" : "disabled"));
+
     std::cout << "DigiAsset Pool Server starting...\n";
     std::cout << "  db: " << dbPath << "\n";
     std::cout << "  port: " << port << "\n";
@@ -302,6 +308,7 @@ int main(int /*argc*/, char** /*argv*/) {
         db = new PoolDatabase(dbPath);
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to open pool database: " << e.what() << std::endl;
+        PoolLog::line(std::string("CRITICAL: failed to open pool database: ") + e.what());
         return 1;
     }
 
@@ -401,6 +408,7 @@ int main(int /*argc*/, char** /*argv*/) {
     } catch (const std::exception& e) {
         std::cerr << "FATAL: failed to start pool server on port " << port << ": " << e.what() << std::endl;
         std::cerr << "Is another process already listening on " << port << "? Check netstat -ano." << std::endl;
+        PoolLog::line("CRITICAL: failed to start pool server on port " + std::to_string(port) + ": " + e.what());
         delete db;
         return 1;
     }
@@ -451,5 +459,6 @@ int main(int /*argc*/, char** /*argv*/) {
     delete db;
 
     std::cout << "\n\033[?25hDigiAsset Pool Server stopped.\n";
+    PoolLog::line("INFO: DigiAsset Pool Server stopped");
     return 0;
 }
