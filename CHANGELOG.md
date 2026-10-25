@@ -20,7 +20,11 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — the pool server writes a log file
+## 0.3.3-win.147 — automatic pool payouts from a named wallet; pool.log; on-chain discovery reads blocks
+
+The live pool had not paid since 2026-07-26: payouts ran only when someone pressed [E], and every
+pool RPC call went to DigiByte Core without naming a wallet. Update the pool server, then set
+`poolrpcwallet` (required for payouts) and `poolautopayout=1` in `pool.cfg`.
 
 - **`pool.log` (binary):** every line the pool dashboard logs, plus startup, fatal errors and the
   two messages that went only to stderr - a rejected registration (possible payout-address
