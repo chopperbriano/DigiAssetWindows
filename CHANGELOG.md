@@ -20,7 +20,7 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — approval rules count approvers on pruned nodes
+## 0.3.3-win.148 — approval rules count approvers on pruned nodes; installer survives Defender
 
 - **Approval rule (binary).** An approver signs a transfer by spending one of their own coins,
   usually plain DGB. A node not storing non-asset UTXOs had no record of it, and this fork's
@@ -36,6 +36,16 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   transfer is recorded with its outputs as sent, so the royalty goes unchecked. Upstream does the
   same; clearing the outputs alone would make this fork disagree with upstream about who holds the
   assets. It now logs a WARNING naming the transaction.
+- **Installer: Windows Defender no longer kills the DigiByte install** (`setup-digiasset.ps1`
+  2.36.0, `install-digibyte.ps1` 1.6.0). Defender can flag the official DigiByte 9.26.7 installer
+  as potentially unwanted software and delete it on download, so setup died with "the file
+  contains a virus". When DigiByte-Core publishes the installer's SHA-256 (GitHub asset digest,
+  else the release's `SHA256SUMS`), the download folder is excluded from Defender, the hash is
+  checked before anything runs (a mismatch aborts), the DigiByte install folder is then excluded
+  too, and the download-folder exclusion is removed afterwards. With no published hash nothing is
+  excluded. The checksum is now required when published (before, any error in that step - such as
+  Defender deleting the file - was logged as "checksum step skipped"). If Defender still blocks it
+  (Tamper Protection, a company policy, another antivirus), the message says how to allow it.
 
 ---
 

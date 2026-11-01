@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.5.0'
+$SCRIPT_VERSION = '1.6.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when
@@ -279,7 +279,10 @@ function Resolve-DigiByteAsset($tag) {
     if ($rel) {
         $a = $rel.assets | Where-Object { $_.name -match 'win64-setup\.exe$' } | Select-Object -First 1
         if (-not $a) { $a = $rel.assets | Where-Object { $_.name -match 'win64.*\.exe$' } | Select-Object -First 1 }
-        if ($a) { return @{ url = $a.browser_download_url; name = $a.name; ver = $tag.TrimStart('v') } }
+        if ($a) {
+            $sha = ''; if ($a.digest -match '^sha256:([0-9a-fA-F]{64})$') { $sha = $Matches[1].ToLower() }
+            return @{ url = $a.browser_download_url; name = $a.name; ver = $tag.TrimStart('v'); sha256 = $sha }
+        }
     }
     $v = $tag.TrimStart('v')
     return @{ url = "https://github.com/DigiByte-Core/digibyte/releases/download/$tag/digibyte-$v-win64-setup.exe"; name = "digibyte-$v-win64-setup.exe"; ver = $v }
@@ -306,42 +309,95 @@ function Get-DigiByteQt {
     return (Join-Path $DigiByteDir 'digibyte-qt.exe')
 }
 
+# SHA-256 DigiByte-Core published for this installer: GitHub's asset digest, else
+# the release's SHA256SUMS. '' when neither is available.
+function Get-DigiByteInstallerSha256($asset) {
+    if ($asset.sha256) { return $asset.sha256 }
+    try {
+        $sumsUrl = ($asset.url -replace '/[^/]+$', '/SHA256SUMS')
+        $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop).Content
+        if ($sums -is [byte[]]) { $sums = [Text.Encoding]::ASCII.GetString($sums) }
+        foreach ($line in ($sums -split "`n")) {
+            if ($line -match ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset.name) + '\s*$')) { return $Matches[1].ToLower() }
+        }
+    } catch {}
+    return ''
+}
+
+# Windows Defender exclusions for the DigiByte installer (see Install-DigiByteBinaries).
+# True when this call added the exclusion. Quiet no-op without Defender; a refusal
+# (Tamper Protection, a company policy) is a warning, not a failure.
+function Add-DefenderExclusion($path) {
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) { return $false }
+    try {
+        Ensure-Dir $path
+        $existing = @((Get-MpPreference -ErrorAction Stop).ExclusionPath)
+        if ($existing -contains $path) { return $false }   # already there: not ours to remove
+        Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+        Log "  Windows Defender: excluded $path (DigiByte false positive)."
+        return $true
+    } catch {
+        Log "  (could not add a Windows Defender exclusion for $path : $($_.Exception.Message))" 'WARN'
+        return $false
+    }
+}
+function Remove-DefenderExclusion($path) {
+    try { Remove-MpPreference -ExclusionPath $path -ErrorAction Stop } catch {}
+}
+
+# Turn an antivirus block into instructions instead of a bare "contains a virus".
+function Get-AvBlockMessage($msg) {
+    if ($msg -match 'virus|potentially unwanted') {
+        return "antivirus blocked the DigiByte installer ($msg). This is a known false positive for the official DigiByte Core release. In Windows Security > Virus & threat protection > Protection history, choose Allow for the DigiByte item (or allow it in your antivirus), then run the same one-liner again."
+    }
+    return $msg
+}
+
 # Download the DigiByte win64 setup.exe and install it silently into $DigiByteDir.
 function Install-DigiByteBinaries($asset) {
-    $inst = Join-Path $Tmp $asset.name
-    if (-not (Get-File $asset.url $inst)) { throw "could not download DigiByte from $($asset.url)" }
-
-    # Optional SHA256 verification. DigiByte often doesn't publish a SHA256SUMS
-    # file (and a fetch can hiccup) - that's fine, we already downloaded over
-    # HTTPS - so an absent/failed checksum is a quiet note, NOT a scary error.
-    # A real MISMATCH still aborts.
+    # Windows Defender can flag the official DigiByte installer as "potentially
+    # unwanted software" (a common false positive for crypto wallets) and delete it
+    # the moment it is written, so the install died with "the file contains a
+    # virus". So: when DigiByte publishes the installer's SHA-256, its download
+    # folder is excluded from Defender, the hash is checked BEFORE anything runs
+    # (a mismatch aborts and drops the exclusion), and only then is the DigiByte
+    # install folder excluded too (Defender can also flag the installed wallet).
+    # With no published hash nothing is excluded.
+    $dlDir = Join-Path $Tmp 'digibyte-installer'
+    $inst  = Join-Path $dlDir $asset.name
+    $wantHash = Get-DigiByteInstallerSha256 $asset
+    $excluded = $false
+    if ($wantHash) { $excluded = Add-DefenderExclusion $dlDir }
     try {
-        $sumsUrl  = ($asset.url -replace '/[^/]+$', '/SHA256SUMS')
-        $sumsFile = Join-Path $Tmp 'DGB_SHA256SUMS'
-        $want = $null
-        try {
-            Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsFile -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
-            if (Test-Path $sumsFile) { $want = (Get-Content $sumsFile | Where-Object { $_ -match [regex]::Escape($asset.name) } | Select-Object -First 1) }
-        } catch { $want = $null }
-        if ($want) {
-            $wantHash = ($want -split '\s+')[0].ToLower()
-            $gotHash  = (Get-FileHash $inst -Algorithm SHA256).Hash.ToLower()
-            if ($wantHash -ne $gotHash) { Remove-Item $inst -Force; throw 'DigiByte checksum mismatch - aborting.' }
-            Log '  DigiByte checksum verified (SHA-256).' 'OK'
-        } else {
-            Log '  (no published DigiByte checksum; verified via HTTPS instead)'
+        if (Test-Path $inst) { Remove-Item $inst -Force -ErrorAction SilentlyContinue }
+        if (-not (Get-File $asset.url $inst)) {
+            $hint = ''; if (-not $excluded) { $hint = ' (if antivirus removed it: allow the DigiByte installer, or install it by hand from https://github.com/DigiByte-Core/digibyte/releases)' }
+            throw "could not download DigiByte from $($asset.url)$hint"
         }
-    } catch {
-        if ($_.Exception.Message -match 'mismatch') { throw }
-        Log '  (DigiByte checksum step skipped; downloaded over HTTPS)'
-    }
+        if ($wantHash) {
+            $gotHash = ''
+            try { $gotHash = (Get-FileHash $inst -Algorithm SHA256 -ErrorAction Stop).Hash.ToLower() } catch { throw (Get-AvBlockMessage $_.Exception.Message) }
+            if ($wantHash -ne $gotHash) {
+                Remove-Item $inst -Force -ErrorAction SilentlyContinue
+                throw "DigiByte checksum mismatch (expected $wantHash, got $gotHash) - aborting, nothing was installed."
+            }
+            Log '  DigiByte installer checksum verified (SHA-256 published by DigiByte-Core).' 'OK'
+            [void](Add-DefenderExclusion $DigiByteDir)
+        } else {
+            Log '  (no published DigiByte checksum; downloaded over HTTPS from GitHub)'
+        }
 
-    # NSIS silent install. /D=<dir> MUST be the last arg and cannot be quoted, so
-    # the install dir must have no spaces (enforced up in the main flow).
-    Log "  installing DigiByte $($asset.ver) silently to $DigiByteDir (this can take a minute)..."
-    $proc = Start-Process -FilePath $inst -ArgumentList @('/S', "/D=$DigiByteDir") -Wait -PassThru
-    if ($proc -and $proc.ExitCode -ne 0) {
-        throw "DigiByte installer exited with code $($proc.ExitCode) - the install may be incomplete (locked files?)."
+        # NSIS silent install. /D=<dir> MUST be the last arg and cannot be quoted, so
+        # the install dir must have no spaces (enforced up in the main flow).
+        Log "  installing DigiByte $($asset.ver) silently to $DigiByteDir (this can take a minute)..."
+        try { $proc = Start-Process -FilePath $inst -ArgumentList @('/S', "/D=$DigiByteDir") -Wait -PassThru -ErrorAction Stop }
+        catch { throw (Get-AvBlockMessage $_.Exception.Message) }
+        if ($proc -and $proc.ExitCode -ne 0) {
+            throw "DigiByte installer exited with code $($proc.ExitCode) - the install may be incomplete (locked files?)."
+        }
+    } finally {
+        Remove-Item $inst -Force -ErrorAction SilentlyContinue
+        if ($excluded) { Remove-DefenderExclusion $dlDir }
     }
     Start-Sleep -Seconds 3
     $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
