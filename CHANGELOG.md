@@ -20,6 +20,25 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — approval rules count approvers on pruned nodes
+
+- **Approval rule (binary).** An approver signs a transfer by spending one of their own coins,
+  usually plain DGB. A node not storing non-asset UTXOs had no record of it, and this fork's
+  `Database::getAssetUTXO` shortcut returned it with an empty address (upstream asks DigiByte
+  Core). The approver went uncounted, the transfer failed "Signers", and its assets were destroyed
+  here while upstream nodes moved them. The approval check now asks Core for those addresses, and
+  fails the sync loudly (retrying the block) if it cannot. New tests:
+  `AssetWalletRulesDb.approverSpendingPlainDgbIsCounted`,
+  `AssetWalletRulesDb.approverInputWithNoStoredAddressIsNotSilentlyUncounted` (fails without the fix
+  with "Signers rule failed").
+- **Logged, not changed: rules that cannot be checked.** When a transfer's rules throw
+  `out_of_range` - usually a royalty asset whose exchange rate is unknown at that height - the
+  transfer is recorded with its outputs as sent, so the royalty goes unchecked. Upstream does the
+  same; clearing the outputs alone would make this fork disagree with upstream about who holds the
+  assets. It now logs a WARNING naming the transaction.
+
+---
+
 ## 0.3.3-win.147 — automatic pool payouts from a named wallet; pool.log; on-chain discovery reads blocks
 
 The live pool had not paid since 2026-07-26: payouts ran only when someone pressed [E], and every

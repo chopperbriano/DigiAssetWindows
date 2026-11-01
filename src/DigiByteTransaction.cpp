@@ -374,6 +374,16 @@ bool DigiByteTransaction::decodeAssetTX(const getrawtransaction_t& txData, int d
         } catch (const DigiAsset::exception& e) {
             return false;
         } catch (const out_of_range& e) {
+            //Kept exactly as upstream has it, outputs NOT cleared: the transfer is recorded as if
+            //its rules passed.  The usual cause is a royalty asset whose exchange rate is unknown at
+            //this height ("Unknown Exchange Rate"), so the royalty goes unchecked.  Clearing the
+            //outputs here would be stricter, but would also make this fork disagree with every
+            //upstream node about who holds those assets - so it is logged instead, for a fix agreed
+            //upstream.
+            Log::GetInstance()->addMessage("Transaction " + _txid + " in block " + std::to_string(_height) +
+                                                   ": asset rules could not be checked (" + e.what() +
+                                                   ") - recorded as upstream does, with its outputs as sent",
+                                           Log::WARNING);
             return false;
         }
         _txType = burn ? DIGIASSET_BURN : DIGIASSET_TRANSFER;

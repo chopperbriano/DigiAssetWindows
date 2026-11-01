@@ -764,12 +764,37 @@ void DigiAsset::checkRulesPass(const vector<AssetUTXO>& inputs, const vector<Ass
 
     //check signer rules
     if (_rules.getRequiredSignerWeight() > 0) {
+        //An approver signs by spending one of their own coins in the transaction, usually plain DGB.
+        //A node that does not store non-asset UTXOs keeps no record of those, and this fork's
+        //Database::getAssetUTXO then hands them back with no address (upstream asks DigiByte Core
+        //instead) - so the approval went uncounted, the rule failed, and the transfer's assets were
+        //destroyed here while upstream nodes moved them.  Ask Core for just those inputs, and only
+        //for assets with this rule.  If Core can't answer, fail loudly: the sync retries the block
+        //rather than recording a wrong verdict.
+        vector<string> inputAddresses;
+        inputAddresses.reserve(inputs.size());
+        for (const AssetUTXO& utxo: inputs) {
+            string address = utxo.address;
+            if (address.empty() && !utxo.txid.empty()) {
+                AppMain* main = AppMain::GetInstance();
+                if (!main->isDigiByteCoreSet()) {
+                    throw runtime_error("can not check approval rule: input " + utxo.txid + ":" +
+                                        to_string(utxo.vout) + " has no stored address and DigiByte Core is not connected");
+                }
+                getrawtransaction_t tx = main->getDigiByteCore()->getRawTransaction(utxo.txid);
+                if ((utxo.vout < tx.vout.size()) && !tx.vout[utxo.vout].scriptPubKey.addresses.empty()) {
+                    address = tx.vout[utxo.vout].scriptPubKey.addresses[0];
+                }
+            }
+            inputAddresses.push_back(address);
+        }
+
         vector<Signer> signers = _rules.getSigners();
         uint64_t totalWeight = 0;
         for (const Signer& signer: signers) {
             bool wasSigned = false;
-            for (const AssetUTXO& utxo: inputs) {
-                if (signer.address == utxo.address) {
+            for (const string& inputAddress: inputAddresses) {
+                if (signer.address == inputAddress) {
                     wasSigned = true;
                     break;
                 }

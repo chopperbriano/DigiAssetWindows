@@ -183,3 +183,60 @@ TEST_F(AssetWalletRulesDb, transferWithRoyaltyOutputPassesTheRules) {
 
     EXPECT_NO_THROW(asset.checkRulesPass({input}, {toRecipient, change, royaltyPayment}, 24106276, 1756252800));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Approval rule: the approver signs by spending a coin of their own - usually plain DGB, which a
+// node that does not store non-asset UTXOs has no record of.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+    const string APPROVER = "dgb1qlk3hldeynl3prqw259u8gv0jh7w5nwppxlvt3v";
+
+    //asset input from the holder, a plain DGB input from the approver, the asset to a recipient
+    void approvalTransfer(const DigiAsset& asset, const string& approverInputAddress,
+                          vector<AssetUTXO>& inputs, vector<AssetUTXO>& outputs) {
+        AssetUTXO holder;
+        holder.txid = "aa00000000000000000000000000000000000000000000000000000000000001";
+        holder.vout = 0;
+        holder.address = "dgb1holderaddress00000000000000000000000";
+        holder.digibyte = 100000;
+        holder.assets.push_back(asset);
+
+        AssetUTXO approver; //no assets: plain DGB
+        approver.txid = "bb00000000000000000000000000000000000000000000000000000000000002";
+        approver.vout = 1;
+        approver.address = approverInputAddress;
+        approver.digibyte = 100000;
+
+        AssetUTXO toRecipient;
+        toRecipient.address = "dgb1recipientaddress00000000000000000";
+        toRecipient.digibyte = 1000;
+        toRecipient.assets.push_back(asset);
+
+        inputs = {holder, approver};
+        outputs = {toRecipient};
+    }
+}
+
+//Control: an approver input whose address is known counts, so the transfer passes.
+TEST_F(AssetWalletRulesDb, approverSpendingPlainDgbIsCounted) {
+    DigiAssetRules rules;
+    rules.setRequireSigners(1, {{.address = APPROVER, .weight = 1}});
+    DigiAsset asset = assetWithRules(rules);
+    vector<AssetUTXO> inputs, outputs;
+    approvalTransfer(asset, APPROVER, inputs, outputs);
+    EXPECT_NO_THROW(asset.checkRulesPass(inputs, outputs, 24106276, 1756252800));
+}
+
+//A pruned node hands that input back with no address.  It used to be matched as-is, so the
+//approval went uncounted and the transfer failed "Signers" - destroying its assets on this fork
+//while upstream, which asks DigiByte Core for the address, moved them.  Now the address is asked
+//of Core; with no Core to ask it must fail loudly (sync retries), never as a rule failure.
+TEST_F(AssetWalletRulesDb, approverInputWithNoStoredAddressIsNotSilentlyUncounted) {
+    DigiAssetRules rules;
+    rules.setRequireSigners(1, {{.address = APPROVER, .weight = 1}});
+    DigiAsset asset = assetWithRules(rules);
+    vector<AssetUTXO> inputs, outputs;
+    approvalTransfer(asset, "", inputs, outputs);
+    EXPECT_THROW(asset.checkRulesPass(inputs, outputs, 24106276, 1756252800), std::runtime_error);
+}
