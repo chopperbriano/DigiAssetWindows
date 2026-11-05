@@ -56,6 +56,21 @@
 		file_server
 	}
 
-	# Don't leak the reverse-proxy target in error pages.
-	header -Server
+	# Security headers on every response (security review, 2026-11-05: the
+	# landing page sent none and could be framed by any site).
+	#
+	# The Content-Security-Policy allows exactly what index.html uses: its own
+	# inline scripts and styles, Leaflet from unpkg.com, map tiles from
+	# server.arcgisonline.com, and fetches to this host only. Adding a new
+	# external script, stylesheet, image host or fetch target means adding it
+	# here too, or the browser blocks it.
+	header {
+		# Don't leak the reverse-proxy target in error pages.
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://unpkg.com https://server.arcgisonline.com; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	}
 }
