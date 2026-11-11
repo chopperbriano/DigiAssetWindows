@@ -120,7 +120,7 @@ $ProgressPreference = 'SilentlyContinue'
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-$SCRIPT_VERSION = '2.36.0'
+$SCRIPT_VERSION = '2.37.0'
 $Repo           = 'chopperbriano/DigiAssetWindows'
 $RawScriptUrl   = "https://raw.githubusercontent.com/$Repo/master/setup-digiasset.ps1"
 # Fast-sync snapshot manifest (snapshot.json on your Cloudflare R2). Set this to
@@ -143,6 +143,7 @@ $PoolExe        = Join-Path $DigiAssetDir 'DigiAssetPoolServer.exe'  # present o
 $LegacyIpfsRepo = Join-Path $DigiAssetDir 'ipfs-repo'
 $NodeConfig     = Join-Path $DigiAssetDir 'config.cfg'
 $DgbConf        = Join-Path $DigiByteDir  'digibyte.conf'  # conf lives in C:\DigiByte (NOT in Data)
+$DgbQtArgs      = "-datadir=$DgbData -conf=$DgbConf"     # every DigiByte-Qt launch + shortcut
 $LogDir         = Join-Path $DigiAssetDir 'logs'
 $LogFile        = Join-Path $LogDir       'setup.log'
 $StateFile      = Join-Path $DigiAssetDir 'state\versions.json'
@@ -495,6 +496,7 @@ function Request-Autologon {
 # that is). Returns a list of problems it could not fix.
 function Repair-StartupTasks($state) {
     $left = @()
+    Set-DigiByteShortcuts
     $want = @($TaskMaint)
     if ("$($state.startOnLogon)" -ne 'False') { $want += @($TaskWallet, $TaskNode) }
     foreach ($name in $want) {
@@ -1109,6 +1111,57 @@ function Install-DigiByteBinaries($asset) {
     Ensure-Dir (Split-Path -Parent $DgbExeMarker)
     Set-Content -Path $DgbExeMarker -Value $found.FullName -Encoding UTF8
     Log "  + DigiByte $($asset.ver) -> $($found.FullName)" 'OK'
+    Set-DigiByteShortcuts
+}
+
+# DigiByte's own installer makes Start-menu and desktop shortcuts with no arguments,
+# so DigiByte-Qt opened from one used the stock %APPDATA%\DigiByte - an empty folder -
+# and offered to download the whole blockchain. Point every DigiByte-Qt shortcut that
+# targets OUR install at our data dir and conf (all users, so it also works from the
+# SYSTEM maintenance task), and make sure there is one on the desktop. Re-run after
+# every DigiByte install/upgrade, because the installer recreates its shortcuts.
+# Shortcuts for -testnet/-regtest/-signet, or to another DigiByte install, are left
+# alone. Never fatal.
+function Set-DigiByteShortcuts {
+    try {
+        $qt = Get-DigiByteQt
+        if (-not (Test-Path $qt)) { return }
+        $want  = $DgbQtArgs
+        $shell = New-Object -ComObject WScript.Shell
+        $roots = @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:PUBLIC\Desktop")
+        foreach ($p in (Get-ChildItem (Split-Path -Parent $env:PUBLIC) -Directory -ErrorAction SilentlyContinue)) {
+            $roots += (Join-Path $p.FullName 'Desktop')
+            $roots += (Join-Path $p.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs')
+        }
+        $fixed = 0; $onDesktop = $false
+        foreach ($root in ($roots | Where-Object { Test-Path $_ })) {
+            foreach ($f in (Get-ChildItem $root -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue)) {
+                try {
+                    $lnk = $shell.CreateShortcut($f.FullName)
+                    if ($lnk.TargetPath -notlike "$DigiByteDir\*" -or (Split-Path -Leaf $lnk.TargetPath) -ne 'digibyte-qt.exe') { continue }
+                    if ($lnk.Arguments -match '-(testnet|regtest|signet)') { continue }
+                    if ($f.FullName -like '*\Desktop\*') { $onDesktop = $true }
+                    if ($lnk.Arguments -eq $want -and $lnk.WorkingDirectory -eq $DigiByteDir) { continue }
+                    $lnk.Arguments = $want
+                    $lnk.WorkingDirectory = $DigiByteDir
+                    $lnk.Save()
+                    $fixed++
+                } catch { Log "  (could not update shortcut $($f.FullName): $($_.Exception.Message))" 'WARN' }
+            }
+        }
+        if (-not $onDesktop) {
+            $lnk = $shell.CreateShortcut((Join-Path "$env:PUBLIC\Desktop" 'DigiByte Core.lnk'))
+            $lnk.TargetPath = $qt
+            $lnk.Arguments = $want
+            $lnk.WorkingDirectory = $DigiByteDir
+            $lnk.IconLocation = "$qt,0"
+            $lnk.Save()
+            $fixed++
+        }
+        if ($fixed) { Log "  DigiByte-Qt shortcuts now open $want ($fixed updated)." 'OK' }
+    } catch {
+        Log "  (could not update the DigiByte shortcuts: $($_.Exception.Message))" 'WARN'
+    }
 }
 
 function Stop-DigiByteGracefully {
@@ -2197,6 +2250,7 @@ function Invoke-Install {
     Restore-Snapshot   # fast-sync: extract pre-synced blockchain + chain.db before first launch (fresh install only)
     if (Get-ScheduledTask -TaskName $TaskDigiByte -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskDigiByte -Confirm:$false }  # drop legacy headless task
     if (-not $NoStartOnLogon) { Register-GuardedLogonTask $TaskWallet (Get-DigiByteQt) $DigiByteDir 'digibyte-qt' "-datadir=$DgbData -conf=$DgbConf" }
+    Set-DigiByteShortcuts
     Start-DigiByteWallet | Out-Null
     Log '  DigiByte wallet (GUI) running + opens at every logon. Blockchain syncs in the background.' 'OK'
     Log '  what this does: runs a FULL DigiByte node - validates + relays the blockchain for the whole network, not just your wallet.'

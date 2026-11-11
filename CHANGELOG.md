@@ -20,6 +20,21 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
+## Unreleased — DigiByte shortcuts open the DigiAsset data folder
+
+- **Installer: DigiByte-Qt shortcuts point at `C:\DigiByte\Data`** (`setup-digiasset.ps1` 2.37.0,
+  `install-digibyte.ps1` 1.7.0). DigiByte's own installer makes Start-menu and desktop shortcuts
+  with no arguments, so DigiByte-Qt opened from one used the stock `%APPDATA%\DigiByte`, an empty
+  folder, and offered to download the whole blockchain. Every DigiByte-Qt shortcut that targets our
+  install (all users' Start menus and desktops) now gets `-datadir=C:\DigiByte\Data
+  -conf=C:\DigiByte\digibyte.conf`, and a `DigiByte Core` shortcut is put on the public desktop if
+  none is there. This runs after every DigiByte install or upgrade (the installer recreates its
+  shortcuts), at the end of setup, and on every maintenance run, so existing installs are fixed
+  without re-running setup. Shortcuts for `-testnet`/`-regtest`/`-signet` or to another DigiByte
+  install are left alone.
+
+---
+
 ## 0.3.3-win.148 — approval rules count approvers on pruned nodes; installer survives Defender
 
 - **Approval rule (binary).** An approver signs a transfer by spending one of their own coins,

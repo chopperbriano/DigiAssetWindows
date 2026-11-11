@@ -79,7 +79,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$SCRIPT_VERSION = '1.6.0'
+$SCRIPT_VERSION = '1.7.0'
 
 # Did the caller pick a data directory, or are we defaulting? Captured BEFORE we
 # elevate so the answer survives the UAC relaunch (we only forward -DataDir when
@@ -88,6 +88,7 @@ $DataDirExplicit = -not [string]::IsNullOrWhiteSpace($DataDir)
 if (-not $DataDirExplicit) { $DataDir = Join-Path $DigiByteDir 'Data' }
 
 $DgbConf   = Join-Path $DigiByteDir 'digibyte.conf'   # conf lives beside Data, not inside it
+$DgbQtArgs = "-datadir=$DataDir -conf=$DgbConf"   # every DigiByte-Qt launch + shortcut
 $LogDir    = Join-Path $DigiByteDir 'logs'
 $LogFile   = Join-Path $LogDir      'install-digibyte.log'
 $Tmp       = Join-Path $env:TEMP    'digibyte-install'
@@ -353,6 +354,56 @@ function Get-AvBlockMessage($msg) {
     return $msg
 }
 
+# DigiByte's own installer makes Start-menu and desktop shortcuts with no arguments,
+# so DigiByte-Qt opened from one used the stock %APPDATA%\DigiByte - an empty folder -
+# and offered to download the whole blockchain. Point every DigiByte-Qt shortcut that
+# targets OUR install at our data dir and conf (all users, so it also works from the
+# SYSTEM maintenance task), and make sure there is one on the desktop. Re-run after
+# every DigiByte install/upgrade, because the installer recreates its shortcuts.
+# Shortcuts for -testnet/-regtest/-signet, or to another DigiByte install, are left
+# alone. Never fatal.
+function Set-DigiByteShortcuts {
+    try {
+        $qt = Get-DigiByteQt
+        if (-not (Test-Path $qt)) { return }
+        $want  = $DgbQtArgs
+        $shell = New-Object -ComObject WScript.Shell
+        $roots = @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:PUBLIC\Desktop")
+        foreach ($p in (Get-ChildItem (Split-Path -Parent $env:PUBLIC) -Directory -ErrorAction SilentlyContinue)) {
+            $roots += (Join-Path $p.FullName 'Desktop')
+            $roots += (Join-Path $p.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs')
+        }
+        $fixed = 0; $onDesktop = $false
+        foreach ($root in ($roots | Where-Object { Test-Path $_ })) {
+            foreach ($f in (Get-ChildItem $root -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue)) {
+                try {
+                    $lnk = $shell.CreateShortcut($f.FullName)
+                    if ($lnk.TargetPath -notlike "$DigiByteDir\*" -or (Split-Path -Leaf $lnk.TargetPath) -ne 'digibyte-qt.exe') { continue }
+                    if ($lnk.Arguments -match '-(testnet|regtest|signet)') { continue }
+                    if ($f.FullName -like '*\Desktop\*') { $onDesktop = $true }
+                    if ($lnk.Arguments -eq $want -and $lnk.WorkingDirectory -eq $DigiByteDir) { continue }
+                    $lnk.Arguments = $want
+                    $lnk.WorkingDirectory = $DigiByteDir
+                    $lnk.Save()
+                    $fixed++
+                } catch { Log "  (could not update shortcut $($f.FullName): $($_.Exception.Message))" 'WARN' }
+            }
+        }
+        if (-not $onDesktop) {
+            $lnk = $shell.CreateShortcut((Join-Path "$env:PUBLIC\Desktop" 'DigiByte Core.lnk'))
+            $lnk.TargetPath = $qt
+            $lnk.Arguments = $want
+            $lnk.WorkingDirectory = $DigiByteDir
+            $lnk.IconLocation = "$qt,0"
+            $lnk.Save()
+            $fixed++
+        }
+        if ($fixed) { Log "  DigiByte-Qt shortcuts now open $want ($fixed updated)." 'OK' }
+    } catch {
+        Log "  (could not update the DigiByte shortcuts: $($_.Exception.Message))" 'WARN'
+    }
+}
+
 # Download the DigiByte win64 setup.exe and install it silently into $DigiByteDir.
 function Install-DigiByteBinaries($asset) {
     # Windows Defender can flag the official DigiByte installer as "potentially
@@ -403,6 +454,7 @@ function Install-DigiByteBinaries($asset) {
     $found = Get-ChildItem $DigiByteDir -Recurse -Filter 'digibyted.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $found) { throw "DigiByte installed but digibyted.exe was not found under $DigiByteDir." }
     Log "  + DigiByte $($asset.ver) -> $($found.FullName)" 'OK'
+    Set-DigiByteShortcuts
 }
 
 # ---------------------------------------------------------------------------
@@ -983,6 +1035,7 @@ else         { $upnpOk = Invoke-UpnpForward }
 
 # --- 5. Start ---------------------------------------------------------------
 Step 5 'Starting DigiByte...'
+Set-DigiByteShortcuts
 if (-not $NoStartOnLogon) {
     Register-LogonTask
     Log "  + registered '$TaskWallet' - DigiByte starts automatically at logon." 'OK'
