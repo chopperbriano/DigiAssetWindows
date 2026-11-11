@@ -52,7 +52,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '2.9.0'
+$ScriptVersion = '2.9.1'
 
 $NodeExe = Join-Path $DigiAssetDir 'DigiAssetWindows.exe'
 $CliExe  = Join-Path $DigiAssetDir 'DigiAssetWindows-cli.exe'
@@ -212,7 +212,7 @@ function New-DigiByteArchive {
     Write-Utf8NoBom (Join-Path $OutDir 'digibyte-part.json') ($part|ConvertTo-Json)
     Say "  + digibyte-part.json" 'Green'
     if ($running -and $qtPath) {
-        Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`""
+        Say "Reopening DigiByte..." 'Cyan'; Start-Process $qtPath -ArgumentList "-datadir=`"$DgbData`" -conf=`"$DgbConf`""   # -conf: C:\DigiByte keeps it outside Data; without it RPC is off
         # Wait (up to -StartWaitSec) for DigiByte to finish loading and answer RPC
         # before moving on: the chain.db step that follows needs the DigiAsset node
         # to be answering, and the node can't until DigiByte is back. RPC returns

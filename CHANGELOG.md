@@ -20,7 +20,7 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — DigiByte shortcuts open the DigiAsset data folder
+## Unreleased — DigiByte-Qt always opens the DigiAsset data folder and conf
 
 - **Installer: DigiByte-Qt shortcuts point at `C:\DigiByte\Data`** (`setup-digiasset.ps1` 2.37.0,
   `install-digibyte.ps1` 1.7.0). DigiByte's own installer makes Start-menu and desktop shortcuts
@@ -32,6 +32,10 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   shortcuts), at the end of setup, and on every maintenance run, so existing installs are fixed
   without re-running setup. Shortcuts for `-testnet`/`-regtest`/`-signet` or to another DigiByte
   install are left alone.
+- **Snapshot scripts reopen DigiByte-Qt with its conf** (`make-snapshot.ps1` 2.9.1,
+  `snapshot-digibyte-datadir.ps1` 1.0.1). After archiving they reopened DigiByte-Qt with
+  `-datadir` only. On the `C:\DigiByte` layout the conf lives outside `Data`, so DigiByte came back
+  with RPC off, and `make-snapshot.ps1`'s chain.db step, which waits for RPC, could not run.
 
 ---
 

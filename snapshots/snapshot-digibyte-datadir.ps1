@@ -59,7 +59,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.0.1'
 
 function Say($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
 function Confirm-OrAbort($prompt) {
@@ -195,7 +195,7 @@ if ($Mode -eq 'Snapshot') {
         if ($exe) { Say "Restarting digibyted..." 'Cyan'; Start-Process $exe -ArgumentList "-datadir=`"$DataDir`" -conf=`"$DgbConf`"" -WindowStyle Hidden }
     } elseif ($wasQt) {
         $exe = Get-DgbExe 'digibyte-qt.exe'
-        if ($exe) { Say "Reopening DigiByte-Qt..." 'Cyan'; Start-Process $exe -ArgumentList "-datadir=`"$DataDir`"" }
+        if ($exe) { Say "Reopening DigiByte-Qt..." 'Cyan'; Start-Process $exe -ArgumentList "-datadir=`"$DataDir`" -conf=`"$DgbConf`"" }
     }
     Say "`n===== Snapshot done =====" 'Green'
     Say "Copy BOTH files to each target box (or a share), then run: -Mode Restore -Archive <path>" 'White'
