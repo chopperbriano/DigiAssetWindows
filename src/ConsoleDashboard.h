@@ -155,6 +155,8 @@ private:
     std::atomic<bool>       _quitRequested{false};
     std::function<void()>   _quitCallback;
     bool                    _showDebug = false;
+    // [C] clears the log files only when pressed twice within 10 s, so a stray key can't.
+    std::chrono::steady_clock::time_point _clearLogsArmedAt{};
 
     // Port check results: port -> "Open" / "Closed" / "Checking..." / ""
     std::mutex _portCheckMutex;

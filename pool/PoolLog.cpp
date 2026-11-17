@@ -20,6 +20,16 @@ void PoolLog::setPath(const std::string& path) {
     currentPath() = path;
 }
 
+unsigned long long PoolLog::clear() {
+    std::string path;
+    {
+        std::lock_guard<std::mutex> lock(pathLock());
+        path = currentPath();
+    }
+    if (path.empty()) return 0;
+    try { return Log::clearSideFile(path); } catch (...) { return 0; }
+}
+
 void PoolLog::line(const std::string& text) {
     std::string path;
     {

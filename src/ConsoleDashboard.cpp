@@ -159,7 +159,7 @@ void ConsoleDashboard::refreshLoop() {
 
 /**
  * Non-blocking keyboard handler (Windows). Drains all pending keystrokes and
- * dispatches single-key commands: Q quit, L toggle log level, P port check,
+ * dispatches single-key commands: Q quit, L toggle log level, C clear logs, P port check,
  * A list recent assets, F fix IPFS announce, V emit swarm-connect verify
  * commands, N list pool nodes, H/? help menu, and 1-6 for topic detail. The
  * network/DB-heavy actions are spawned on detached threads so input stays
@@ -183,6 +183,25 @@ void ConsoleDashboard::processInput() {
                     Log* log = Log::GetInstance();
                     log->setMinLevelToScreen(_showDebug ? Log::DEBUG : Log::INFO);
                     log->addMessage(_showDebug ? "Log level: DEBUG" : "Log level: INFO");
+                }
+                break;
+            case 'c':
+            case 'C':
+                // Clear the log files (press twice within 10 s). They are capped anyway
+                // (logmaxmb, rotated to .1), but an operator short on disk can free them now.
+                {
+                    Log* log = Log::GetInstance();
+                    auto now = std::chrono::steady_clock::now();
+                    if ((_clearLogsArmedAt.time_since_epoch().count() != 0) &&
+                        (now - _clearLogsArmedAt < std::chrono::seconds(10))) {
+                        _clearLogsArmedAt = {};
+                        uint64_t freed = log->clearLogFile() + Log::clearSideFile("ipfs-failures.log");
+                        char buf[32]; snprintf(buf, sizeof(buf), "%.1f MB", freed / 1048576.0);
+                        log->addMessage(std::string("Log files cleared (log file, ipfs-failures.log and their .1 copies): ") + buf + " freed");
+                    } else {
+                        _clearLogsArmedAt = now;
+                        log->addMessage("Press C again within 10 seconds to clear the log files (digiasset.log, ipfs-failures.log)");
+                    }
                 }
                 break;
             case 'p':
@@ -262,6 +281,7 @@ void ConsoleDashboard::processInput() {
                     log->addMessage("[1] Block Sync   [2] Assets & Coverage   [3] Serving");
                     log->addMessage("[4] Pool & Payment   [5] Services & Config   [6] Keys");
                     log->addMessage("[N] List pool nodes (IP + peerId) and self-check your node");
+                    log->addMessage("[C] Clear the log files (press twice)");
                 }
                 break;
             case '1':
@@ -1127,7 +1147,7 @@ void ConsoleDashboard::render() {
     if (showFixKey) {
         out << "  " << RESET << FG_YELLOW << "[F] Fix IPFS" << RESET << DIM;
     }
-    out << "  [V] Verify  [H] Info" << RESET;
+    out << "  [V] Verify  [C] Clear logs  [H] Info" << RESET;
 
     // Write everything in one shot to minimize flicker
     std::cout << out.str() << std::flush;

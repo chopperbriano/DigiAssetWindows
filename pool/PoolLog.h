@@ -19,6 +19,9 @@ namespace PoolLog {
 
     // Appends one timestamped line.  Never throws: a log we cannot write must not stop the pool.
     void line(const std::string& text);
+
+    // Empties pool.log and deletes pool.log.1.  Returns the bytes freed.
+    unsigned long long clear();
 }
 
 #endif //DIGIASSET_POOL_POOLLOG_H

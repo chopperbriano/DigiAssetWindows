@@ -128,3 +128,46 @@ TEST(Log, appendToSideFile_rotatesWhenFull) {
     remove(path.c_str());
     remove((path + ".1").c_str());
 }
+
+TEST(Log, clearSideFile_emptiesFileAndDropsRotatedCopy) {
+    const string path = "_log_side_clear.log";
+    remove(path.c_str());
+    remove((path + ".1").c_str());
+    for (int i = 0; i < 6; i++) Log::appendToSideFile(path, "line" + to_string(i), 100);
+    ASSERT_FALSE(readAll(path + ".1").empty());
+    EXPECT_GT(Log::clearSideFile(path), 0u);
+    EXPECT_TRUE(readAll(path).empty());
+    FILE* rotated = fopen((path + ".1").c_str(), "r");
+    EXPECT_EQ(rotated, nullptr);
+    if (rotated) fclose(rotated);
+    Log::appendToSideFile(path, "after", 100);                //still writable
+    EXPECT_NE(readAll(path).find("after"), string::npos);
+    remove(path.c_str());
+}
+
+TEST(Log, clearSideFile_missingFileIsNotCreated) {
+    const string path = "_log_side_absent.log";
+    remove(path.c_str());
+    EXPECT_EQ(Log::clearSideFile(path), 0u);
+    FILE* f = fopen(path.c_str(), "r");
+    EXPECT_EQ(f, nullptr);
+    if (f) fclose(f);
+}
+
+TEST(Log, clearLogFile_emptiesTheLogAndLoggingCarriesOn) {
+    const string path = "_log_main_clear.log";
+    remove(path.c_str());
+    remove((path + ".1").c_str());
+    Log* log = Log::GetInstance();
+    log->setLogFile(path);                                    //closes the file it had open
+    log->addMessage("before clear", Log::CRITICAL);
+    ASSERT_NE(readAll(path).find("before clear"), string::npos);
+    EXPECT_GT(log->clearLogFile(), 0u);
+    EXPECT_TRUE(readAll(path).empty());
+    log->addMessage("after clear", Log::CRITICAL);
+    string text = readAll(path);
+    EXPECT_NE(text.find("after clear"), string::npos);
+    EXPECT_EQ(text.find("before clear"), string::npos);
+    log->setLogFile("debug.log");                             //back to what the other tests use
+    remove(path.c_str());
+}

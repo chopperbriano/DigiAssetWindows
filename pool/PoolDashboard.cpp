@@ -487,6 +487,19 @@ void PoolDashboard::processInput() {
                 addLog("Press Y to confirm, any other key to cancel");
                 _awaitingPayoutConfirm.store(true);
             }
+        } else if (ch == 'c' || ch == 'C') {
+            // Clear pool.log (press twice within 10 s). It is capped at 50 MB + pool.log.1 anyway.
+            auto now = std::chrono::steady_clock::now();
+            if ((_clearLogArmedAt.time_since_epoch().count() != 0) &&
+                (now - _clearLogArmedAt < std::chrono::seconds(10))) {
+                _clearLogArmedAt = {};
+                unsigned long long freed = PoolLog::clear();
+                char buf[32]; snprintf(buf, sizeof(buf), "%.1f MB", freed / 1048576.0);
+                addLog(std::string("pool.log and pool.log.1 cleared: ") + buf + " freed");
+            } else {
+                _clearLogArmedAt = now;
+                addLog("Press C again within 10 seconds to clear pool.log");
+            }
         } else if (ch == 'n' || ch == 'N') {
             addLog("Registered nodes: " + std::to_string(_db.countTotalNodes()));
         } else if (ch == 'a' || ch == 'A') {
@@ -496,6 +509,7 @@ void PoolDashboard::processInput() {
             addLog("--- Help ---");
             addLog("Q = Quit   N = Node count   A = Asset count   H = This help");
             addLog("P = Preview payouts (read-only)   E = Execute payout (asks Y/N to confirm)");
+            addLog("C = Clear pool.log (press twice)");
             addLog("Verified row: nodes that passed the dial-back swarm/connect probe.");
             addLog("Failed out: nodes with 3+ consecutive probe failures (excluded from /nodes.json).");
             addLog("Payouts are WEIGHTED: each node's share = coverage (share of the pool's");
@@ -785,7 +799,7 @@ void PoolDashboard::render() {
     // Key hints row — pinned at the bottom thanks to the padding above.
     out << ERASE_LINE
         << " [Q] Quit  [N] Nodes  [A] Assets  [H] Help"
-        << "  [P] Preview  [E] Execute payout";
+        << "  [P] Preview  [E] Execute payout  [C] Clear log";
 
     // Clear everything below: wipe stale lines from prior renders or
     // window resize, so the screen is clean below the key hints.

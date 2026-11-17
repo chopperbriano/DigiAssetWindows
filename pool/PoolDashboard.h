@@ -70,6 +70,8 @@ private:
     int64_t _externalIpCheckedAt{0};
     std::atomic<bool> _running{false};
     std::atomic<bool> _awaitingPayoutConfirm{false};
+    // [C] clears pool.log only when pressed twice within 10 s, so a stray key can't.
+    std::chrono::steady_clock::time_point _clearLogArmedAt{};
     // The exact payout plan (address -> DGB amount) computed at [E] time and
     // executed verbatim on Y confirm, so what's sent matches what the operator
     // was shown (weighted by each node's coverage x reliability). Only touched on

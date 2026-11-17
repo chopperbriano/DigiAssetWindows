@@ -13,6 +13,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <sys/stat.h>
 
 std::mutex& Log::getLock() {
     static std::mutex* mutex = new std::mutex; //intentionally leaked - see header
@@ -84,9 +85,14 @@ void Log::_rotateIfFull() {
     _logFile.open(_logFileName, ios_base::app);
 }
 
+//one lock for every side file, shared by appendToSideFile and clearSideFile
+static std::mutex& sideLock() {
+    static std::mutex* m = new std::mutex; //leaked like getLock(): may be used during exit
+    return *m;
+}
+
 void Log::appendToSideFile(const string& filename, const string& line, uint64_t maxBytes) {
-    static std::mutex* sideLock = new std::mutex; //leaked like getLock(): may be used during exit
-    lock_guard<mutex> lock(*sideLock);
+    lock_guard<mutex> lock(sideLock());
     {
         ofstream out(filename, ios_base::app);
         if (!out.is_open()) return; //a record we cannot keep must never stop the node
@@ -95,6 +101,38 @@ void Log::appendToSideFile(const string& filename, const string& line, uint64_t 
         if ((maxBytes == 0) || (size < 0) || (static_cast<uint64_t>(size) < maxBytes)) return;
     }
     rotateFile(filename);
+}
+
+// Size of a file and its rotated .1 copy; a missing file counts as 0.
+static uint64_t sizeWithRotated(const string& filename) {
+    uint64_t total = 0;
+    for (const string& f: {filename, filename + ".1"}) {
+        struct stat st;
+        if (stat(f.c_str(), &st) == 0) total += static_cast<uint64_t>(st.st_size);
+    }
+    return total;
+}
+
+uint64_t Log::clearLogFile() {
+    lock_guard<mutex> lock(getLock());
+    if (_logFileName.empty()) return 0;
+    uint64_t before = sizeWithRotated(_logFileName);
+    _logFile.close();
+    std::remove((_logFileName + ".1").c_str());
+    _logFile.open(_logFileName, ios_base::out | ios_base::trunc);
+    if (!_logFile.is_open()) _logFile.open(_logFileName, ios_base::app); //held open elsewhere: keep logging
+    uint64_t after = sizeWithRotated(_logFileName);
+    return (before > after) ? before - after : 0;
+}
+
+uint64_t Log::clearSideFile(const string& filename) {
+    lock_guard<mutex> lock(sideLock());
+    uint64_t before = sizeWithRotated(filename);
+    struct stat st;
+    if (stat(filename.c_str(), &st) == 0) { ofstream out(filename, ios_base::out | ios_base::trunc); }
+    std::remove((filename + ".1").c_str());
+    uint64_t after = sizeWithRotated(filename);
+    return (before > after) ? before - after : 0;
 }
 
 void Log::setMinLevelToScreen(LogLevel level) {

@@ -89,6 +89,11 @@ public:
     // request - which a level threshold or a rate limit would thin out.
     static void appendToSideFile(const string& filename, const string& line,
                                  uint64_t maxBytes = 20ull * 1024 * 1024);
+    // Empties the log file and deletes its rotated <name>.1; logging carries on into the
+    // emptied file.  Returns the bytes freed.  For the dashboards' "clear logs" key.
+    uint64_t clearLogFile();
+    // Same for a side file written by appendToSideFile.
+    static uint64_t clearSideFile(const string& filename);
     void setMinLevelToScreen(LogLevel level);
     void setMinLevelToFile(LogLevel level);
     // Attach a dashboard; while set, screen output is routed to it instead of std::cout.
