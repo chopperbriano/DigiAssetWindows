@@ -52,6 +52,12 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   set, all of those use it; the dashboard shows "(publicip)", [5] shows both addresses, and [P]
   says how to test the published IP from another network instead of testing the outbound one.
   Anything that is not an IPv4/IPv6 address is ignored with a warning. New `PublicIpTest`.
+- **[F] no longer guesses on a box with several public IPs.** It was offered when an online probe
+  found port 4001 open on the outbound IP, but on a shared outbound IP that port can be forwarded
+  to a different machine, and [F] then announced it. With `publicip` set, the probe (which cannot
+  test the published IP) is skipped and [F] announces `publicip`. Without it, if IPFS lists a public
+  address other than the outbound one, [F] is withheld and the dashboard says to set `publicip` -
+  also when [F] has already announced the outbound IP.
 - **Downloads IPFS drops mid-request are retried, not stuck.** Restarting IPFS while the node was
   downloading logged `CRITICAL: Threaded mainFunction exception: Failed to receive data` once per
   running download (10 by default). Only a timeout was caught; any other failure escaped with the

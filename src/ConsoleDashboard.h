@@ -55,6 +55,11 @@ public:
     // Check if quit was requested via keyboard
     bool quitRequested() const { return _quitRequested; }
 
+    // Public IPv4 addresses in an IPFS /id response other than ourIp. IPFS lists the
+    // addresses peers see it at; one that is not where our outbound traffic leaves from
+    // means the box has several public IPs and ourIp is not necessarily the published one.
+    static std::vector<std::string> otherPublicIpv4s(const std::string& idJson, const std::string& ourIp);
+
 private:
     // Refresh loop (runs in its own thread)
     void refreshLoop();
@@ -179,6 +184,7 @@ private:
     std::mutex _ipfsAnnounceMutex;
     bool _ipfsAnnouncedDirectly = false;   // /id lists an address containing our WAN IP
     bool _ipfsPort4001Open = false;         // ifconfig.co reports 4001 reachable
+    std::string _ipfsSeenAtOtherIp;         // IPFS seen at a public IP that isn't ours; publicip unset
     bool _ipfsAnnounceChecked = false;      // we've completed at least one check
     bool _ipfsAnnounceFixApplied = false;   // F was pressed; poll aggressively until Kubo catches up
     std::string _ipfsAnnounceHint;          // dashboard status line, empty if all good

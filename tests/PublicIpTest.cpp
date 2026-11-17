@@ -61,3 +61,27 @@ TEST_F(PublicIpTest, poolGetsTheAnnouncedAddressForThePublishedIp) {
     EXPECT_EQ(IPFS::findPublicAddress(addrs, "203.0.113.10"), "/ip4/203.0.113.10/tcp/4001/p2p/" + self);
     EXPECT_EQ(IPFS::findPublicAddress(addrs, "198.51.100.7"), "/ip4/198.51.100.7/tcp/4001/p2p/" + self);
 }
+
+// ---- spotting a second public IP in IPFS's /id (the case where [F] picked the wrong one) ----
+
+#include "ConsoleDashboard.h"
+
+TEST(OtherPublicIpv4s, findsAPublicAddressThatIsNotOurs) {
+    string id = R"({"ID":"12D3KooWSelf","Addresses":["/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWSelf",)"
+                R"("/ip4/192.168.1.20/tcp/4001/p2p/12D3KooWSelf","/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWSelf",)"
+                R"("/ip4/203.0.113.10/udp/4001/quic-v1/p2p/12D3KooWSelf","/ip4/198.51.100.7/tcp/4001/p2p/12D3KooWSelf"]})";
+    auto other = ConsoleDashboard::otherPublicIpv4s(id, "198.51.100.7");
+    ASSERT_EQ(other.size(), 1u);                 //listed once although it has two transports
+    EXPECT_EQ(other[0], "203.0.113.10");
+}
+
+TEST(OtherPublicIpv4s, singleIpBoxHasNone) {
+    string id = R"({"Addresses":["/ip4/10.0.0.5/tcp/4001/p2p/S","/ip4/172.20.1.1/tcp/4001/p2p/S",)"
+                R"("/ip4/100.64.3.2/tcp/4001/p2p/S","/ip4/198.51.100.7/tcp/4001/p2p/S"]})";
+    EXPECT_TRUE(ConsoleDashboard::otherPublicIpv4s(id, "198.51.100.7").empty());
+}
+
+TEST(OtherPublicIpv4s, relayAddressesAreNotWhereWeAreSeen) {
+    string id = R"({"Addresses":["/ip4/203.0.113.99/tcp/4001/p2p/12D3KooWRelay/p2p-circuit/p2p/S"]})";
+    EXPECT_TRUE(ConsoleDashboard::otherPublicIpv4s(id, "198.51.100.7").empty());
+}

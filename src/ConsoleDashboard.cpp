@@ -1717,8 +1717,9 @@ void ConsoleDashboard::checkIpfsAnnounce() {
 
     // Step 1: does IPFS /id already list an address containing our WAN IP?
     bool announced = false;
+    std::string idJson;
     try {
-        std::string idJson = CurlHandler::post(apiBase + "id", {}, 5000);
+        idJson = CurlHandler::post(apiBase + "id", {}, 5000);
         // Cheap substring check — we don't need full JSON parsing for this.
         if (idJson.find(wanIp) != std::string::npos) {
             announced = true;
@@ -1731,11 +1732,24 @@ void ConsoleDashboard::checkIpfsAnnounce() {
         return;
     }
 
+    // Several public IPs: the online probe below tests the address our outbound traffic
+    // leaves from, which is not necessarily where this box is published - its 4001 can
+    // be forwarded to another machine entirely. With publicip set, the operator has named
+    // the published IP, so trust it and skip the probe. Without it, if IPFS says peers see
+    // it at a different public IP, [F] would announce the wrong one: offer no fix, say why.
+    std::string outbound = ws->getOutboundIP();
+    bool publicIpSet = !IPFS::configuredPublicIp().empty();
+    bool multiIp = publicIpSet && outbound != "unknown" && outbound != wanIp;
+    std::vector<std::string> seenAt;
+    if (!publicIpSet) seenAt = otherPublicIpv4s(idJson, wanIp); //even when announced: [F] may have announced the wrong one
+
     // Step 2: if not announced, probe port 4001 externally to see whether
     // fixing is even possible. If the port isn't reachable, setting
     // Addresses.Announce would advertise a dead address.
     bool portOpen = false;
-    if (!announced) {
+    if (!announced && multiIp) {
+        portOpen = true; //publicip asserts it is forwarded; the probe cannot test it
+    } else if (!announced && seenAt.empty()) {
         try {
             std::string resp = CurlHandler::get("http://ifconfig.co/port/4001", 10000);
             if (resp.find("\"reachable\": true") != std::string::npos ||
@@ -1750,16 +1764,23 @@ void ConsoleDashboard::checkIpfsAnnounce() {
     std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
     _ipfsAnnouncedDirectly = announced;
     _ipfsPort4001Open = portOpen;
+    _ipfsSeenAtOtherIp = seenAt.empty() ? std::string() : seenAt[0];
     _ipfsAnnounceChecked = true;
     _lastIpfsAnnounceCheck = std::chrono::steady_clock::now();
 
-    if (announced) {
-        // Convergence reached: the fix (manual or auto) has taken effect
-        _ipfsAnnounceFixApplied = false;
+    if (announced) _ipfsAnnounceFixApplied = false; //the fix (manual or auto) has taken effect
+
+    if (!seenAt.empty()) {
+        _ipfsAnnounceHint = "IPFS is also seen at " + seenAt[0] + " but outbound traffic uses " + wanIp +
+                            " - if " + seenAt[0] + " is this box's published IP, set publicip=" + seenAt[0] +
+                            " in config.cfg";
+    } else if (announced) {
         _ipfsAnnounceHint.clear();
     } else if (_ipfsAnnounceFixApplied) {
         // Fix was applied but Kubo hasn't picked it up yet — keep reminding
         _ipfsAnnounceHint = "Waiting for IPFS Desktop restart to pick up new announce list...";
+    } else if (portOpen && multiIp) {
+        _ipfsAnnounceHint = "IPFS isn't announcing publicip " + wanIp + " - press [F] to fix";
     } else if (portOpen) {
         _ipfsAnnounceHint = "Port 4001 is open but IPFS isn't announcing it - press [F] to fix";
     } else {
@@ -1796,6 +1817,12 @@ bool ConsoleDashboard::applyIpfsAnnounceFix() {
         std::lock_guard<std::mutex> lock(_ipfsAnnounceMutex);
         if (!_ipfsAnnounceChecked) {
             log->addMessage("Fix aborted: diagnosis hasn't run yet, please wait a moment", Log::WARNING);
+            return false;
+        }
+        if (!_ipfsSeenAtOtherIp.empty()) {
+            log->addMessage("Fix aborted: this box has more than one public IP (IPFS is seen at " + _ipfsSeenAtOtherIp +
+                            "), so the IP to announce is not known. Set publicip=<published IP> in config.cfg "
+                            "and restart the node.", Log::WARNING);
             return false;
         }
         if (_ipfsAnnouncedDirectly) {
@@ -2037,6 +2064,32 @@ void ConsoleDashboard::checkPorts() {
 }
 
 // ---- Static helpers ---------------------------------------------------------
+
+std::vector<std::string> ConsoleDashboard::otherPublicIpv4s(const std::string& idJson, const std::string& ourIp) {
+    std::vector<std::string> out;
+    const std::string key = "/ip4/";
+    for (size_t pos = idJson.find(key); pos != std::string::npos; pos = idJson.find(key, pos)) {
+        pos += key.size();
+        size_t end = idJson.find('/', pos);
+        if (end == std::string::npos) break;
+        std::string ip = idJson.substr(pos, end - pos);
+        int o[4] = {-1, -1, -1, -1};
+        if (sscanf(ip.c_str(), "%d.%d.%d.%d", &o[0], &o[1], &o[2], &o[3]) != 4) continue;
+        bool valid = true;
+        for (int v: o) if (v < 0 || v > 255) valid = false;
+        if (!valid) continue;
+        bool priv = (o[0] == 10) || (o[0] == 127) || (o[0] == 0) ||
+                    (o[0] == 169 && o[1] == 254) || (o[0] == 192 && o[1] == 168) ||
+                    (o[0] == 172 && o[1] >= 16 && o[1] <= 31) ||
+                    (o[0] == 100 && o[1] >= 64 && o[1] <= 127); //carrier-grade NAT
+        if (priv || ip == ourIp) continue;
+        //a relay's address is followed by /p2p/<relay>/p2p-circuit - not where WE are seen
+        size_t nextQuote = idJson.find('"', end);
+        if (idJson.substr(end, nextQuote - end).find("p2p-circuit") != std::string::npos) continue;
+        if (std::find(out.begin(), out.end(), ip) == out.end()) out.push_back(ip);
+    }
+    return out;
+}
 
 std::string ConsoleDashboard::centerText(const std::string& text, int width) {
     if ((int)text.size() >= width) return text;
