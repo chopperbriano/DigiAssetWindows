@@ -352,7 +352,15 @@ void ConsoleDashboard::processInput() {
                     if (hw) {
                         log->addMessage("Web UI: http://localhost:" + std::to_string(hw->getPort()) + "/");
                         std::string ip = hw->getExternalIP();
-                        if (!ip.empty() && ip != "unknown") log->addMessage("External IP: " + ip);
+                        std::string outbound = hw->getOutboundIP();
+                        if (!IPFS::configuredPublicIp().empty()) {
+                            log->addMessage("External IP: " + ip + " (publicip in config.cfg)");
+                            if (outbound != ip) log->addMessage("  Outbound traffic leaves from " + outbound +
+                                                                " - expected on a box with several public IPs.");
+                        } else if (!ip.empty() && ip != "unknown") {
+                            log->addMessage("External IP: " + ip + " (as api.ipify.org sees us; set publicip= in");
+                            log->addMessage("  config.cfg if this box is published at a different IP)");
+                        }
                     }
                     log->addMessage("RPC: port 14024 (DigiAssetWindows-cli.exe getnodestats)");
                     log->addMessage("Config: config.cfg in the exe's working directory.");
@@ -751,7 +759,9 @@ void ConsoleDashboard::render() {
             << cell("Web Server", webVal,
                     webOnline ? FG_GREEN : FG_RED, COL1_LABEL_W, COL1_VALUE_W);
         if (!externalIP.empty() && externalIP != "unknown") {
-            out << cell("External IP", externalIP, FG_BRIGHT_WHITE, COL2_LABEL_W, 0);
+            bool fromConfig = !IPFS::configuredPublicIp().empty();
+            out << cell("External IP", fromConfig ? externalIP + " (publicip)" : externalIP,
+                        FG_BRIGHT_WHITE, COL2_LABEL_W, 0);
         }
         out << "\n"; totalRows++;
     }
@@ -1988,6 +1998,18 @@ void ConsoleDashboard::checkPorts() {
     ports.push_back({12024, "DigiByte P2P"});
 
     log->addMessage("--- Port Check (external IP: " + externalIP + ") ---");
+
+    // ifconfig.co tests the address the request comes from. When publicip names another one
+    // its answer would be about the wrong IP, so say how to test the right one instead.
+    std::string outbound = ws ? ws->getOutboundIP() : std::string();
+    if (!IPFS::configuredPublicIp().empty() && outbound != "unknown" && outbound != externalIP) {
+        log->addMessage("  Outbound traffic leaves from " + outbound + ", not publicip " + externalIP +
+                        ", so the online checker can only test " + outbound + ".", Log::WARNING);
+        log->addMessage("  Test the published IP from a machine on ANOTHER network:");
+        log->addMessage("    Test-NetConnection " + externalIP + " -Port 4001");
+        log->addMessage("    Test-NetConnection " + externalIP + " -Port 12024");
+        return;
+    }
 
     for (const auto& p : ports) {
         std::string status;

@@ -130,7 +130,8 @@ set(UNIT_TESTS
     # so they need no database, so they belong in the suite that actually runs on every build.
     AssetWalletRulesTest.cpp
     # Needs nothing running either; moved so the release gate covers log-file rotation.
-    LogTest.cpp)
+    LogTest.cpp
+    PublicIpTest.cpp)
 
 add_executable(Unit_Tests_run ${UNIT_TESTS})
 target_link_libraries(Unit_Tests_run digiasset_core_lib)

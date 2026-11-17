@@ -41,8 +41,11 @@ public:
     unsigned short getPort() const { return _port; }
     bool isRunning() const { return _running; }
 
-    // Get the external IP address (cached, fetched once on first call)
+    // This node's public IP: publicip= from config.cfg when set, otherwise getOutboundIP().
     std::string getExternalIP();
+    // The address outbound traffic leaves from, per api.ipify.org (cached, fetched once;
+    // "unknown" on failure).
+    std::string getOutboundIP();
 
 private:
     // Thread body: binds the acceptor and serves requests until stop requested.

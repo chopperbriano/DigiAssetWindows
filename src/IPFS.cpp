@@ -14,7 +14,9 @@
 #include "CurlHandler.h"
 #include "Database.h"
 #include "Log.h"
+#include <cctype>
 #include <fstream>
+#include <mutex>
 #include <iostream>
 #include <regex>
 
@@ -443,10 +445,52 @@ string IPFS::_command(const string& command, const map<string, string>& data, un
 ///try, so a short limit is right - the point is to move on rather than to succeed
 static const unsigned int IP_LOOKUP_TIMEOUT_MS = 15000;
 
+namespace {
+    std::mutex& publicIpLock() {
+        static std::mutex* m = new std::mutex; //leaked: read from detached threads during exit
+        return *m;
+    }
+    std::string& publicIpValue() {
+        static std::string* v = new std::string;
+        return *v;
+    }
+}
+
+bool IPFS::setPublicIp(const string& ip) {
+    string v = ip;
+    while (!v.empty() && isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+    while (!v.empty() && isspace(static_cast<unsigned char>(v.front()))) v.erase(v.begin());
+    if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+    bool hasDigit = false;
+    for (char c: v) {
+        if (isdigit(static_cast<unsigned char>(c))) hasDigit = true;
+        else if (!isxdigit(static_cast<unsigned char>(c)) && c != '.' && c != ':') return false;
+    }
+    if (!v.empty() && (!hasDigit || v.size() > 45 ||
+                       (v.find('.') == string::npos && v.find(':') == string::npos))) return false;
+    lock_guard<mutex> lock(publicIpLock());
+    publicIpValue() = v;
+    return true;
+}
+
+string IPFS::configuredPublicIp() {
+    lock_guard<mutex> lock(publicIpLock());
+    return publicIpValue();
+}
+
 /**
- * Gets the users current IP address
+ * Gets this node's public IP: publicip= when configured, else the outbound address.
  */
 string IPFS::getIP() {
+    string configured = configuredPublicIp();
+    if (!configured.empty()) return configured;
+    return getOutboundIP();
+}
+
+/**
+ * Gets the address our outbound traffic leaves from
+ */
+string IPFS::getOutboundIP() {
     vector<string> ipSources = {
             "https://api.ipify.org/",
             "https://icanhazip.com/",
@@ -456,6 +500,7 @@ string IPFS::getIP() {
         try {
             //bounded so one unresponsive lookup service does not stop us trying the next
             string ip = CurlHandler::get(url, IP_LOOKUP_TIMEOUT_MS);
+            while (!ip.empty() && isspace(static_cast<unsigned char>(ip.back()))) ip.pop_back();
             if (ip.empty()) continue;
             return ip;
         } catch (const runtime_error& e) {

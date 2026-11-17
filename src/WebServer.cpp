@@ -119,10 +119,18 @@ void WebServer::stop() {
     _running = false;
 }
 
-// Returns the node's public IP, fetching it once from api.ipify.org (5s timeout)
-// and caching the result. Trailing whitespace/newlines are trimmed; on any error
-// the value is cached as "unknown". Subsequent calls return the cached string.
+// This node's public IP: publicip= from config.cfg when set (a box with several public
+// IPs reaches ipify from one it is not published at), otherwise the outbound address.
 std::string WebServer::getExternalIP() {
+    std::string configured = IPFS::configuredPublicIp();
+    if (!configured.empty()) return configured;
+    return getOutboundIP();
+}
+
+// Returns the address outbound traffic leaves from, fetching it once from api.ipify.org
+// (5s timeout) and caching the result. Trailing whitespace/newlines are trimmed; on any
+// error the value is cached as "unknown". Subsequent calls return the cached string.
+std::string WebServer::getOutboundIP() {
     if (_externalIPFetched) return _externalIP;
     try {
         _externalIP = CurlHandler::get("http://api.ipify.org", 5000);

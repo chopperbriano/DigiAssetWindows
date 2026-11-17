@@ -113,13 +113,6 @@ private:
     // Database, executes it against the local node, then removes the job and
     // fires its callback. Sleeps briefly when the queue is empty.
     void mainFunction() override;
-    // Returns this machine's public WAN IP by querying external IP-echo services.
-    static std::string getIP();
-    // Chooses the best multiaddr from the node's advertised addresses that a
-    // remote peer can dial: prefers a direct TCP address containing our WAN IP,
-    // then a p2p-circuit relay address, then falls back to substituting our IP
-    // into a local address. Picks lowest port when several qualify.
-    static std::string findPublicAddress(const std::vector<std::string>& addresses, const std::string& ip);
     // Parses the /id JSON response and returns its "Addresses" list.
     static std::vector<std::string> extractAddresses(const std::string& idString);
     // Pull the bare "ID" field from the /id JSON response (the local
@@ -136,6 +129,24 @@ private:
 
 
 public:
+    // Returns this node's public IP: publicip= from config.cfg when set, otherwise what the
+    // external IP-echo services see (getOutboundIP).
+    static std::string getIP();
+    // The address our outbound traffic leaves from, as api.ipify.org / icanhazip.com see it.
+    // Throws when none of them answers.
+    static std::string getOutboundIP();
+    // publicip= in config.cfg: the IP this node is published at.  Needed when the box's
+    // outbound traffic leaves from a different address than the one forwarded to it (several
+    // public IPs, 1:1 NAT, a VPN): without it the address sent to the pool, the port check and
+    // [F] all use the outbound address.  Returns false (and keeps the old value) for anything
+    // that is not an IPv4/IPv6 address; "" clears it.
+    static bool setPublicIp(const std::string& ip);
+    static std::string configuredPublicIp();
+    // Chooses the best multiaddr from the node's advertised addresses that a
+    // remote peer can dial: prefers a direct TCP address containing our WAN IP,
+    // then a p2p-circuit relay address, then falls back to substituting our IP
+    // into a local address. Picks lowest port when several qualify.
+    static std::string findPublicAddress(const std::vector<std::string>& addresses, const std::string& ip);
     // Loads IPFS settings from configFile and, unless runStart is false, starts
     // the worker thread.
     IPFS(const std::string& configFile, bool runStart = true);

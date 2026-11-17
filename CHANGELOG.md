@@ -43,6 +43,15 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   50 MB, `ipfs-failures.log` 20 MB, `pool.log` 50 MB, each plus one rotated copy), so this frees
   the space now rather than fixing unbounded growth. New `Log::clearLogFile` and
   `Log::clearSideFile`, with tests.
+- **`publicip=` in config.cfg: the IP the node is published at.** The node took its public IP from
+  api.ipify.org, which sees the address outbound traffic leaves from. On a box with several public
+  IPs (or a 1:1 NAT or VPN) that is not the address ports 4001/12024 are forwarded to, and it was
+  used everywhere: the dashboard's External IP, the multiaddr sent to the pool (a made-up address
+  on the outbound IP, so the pool's direct dial failed and the node passed only on the DHT
+  fallback), the [P] port check, and [F], which would have announced the wrong IP. With `publicip`
+  set, all of those use it; the dashboard shows "(publicip)", [5] shows both addresses, and [P]
+  says how to test the published IP from another network instead of testing the outbound one.
+  Anything that is not an IPv4/IPv6 address is ignored with a warning. New `PublicIpTest`.
 
 ---
 

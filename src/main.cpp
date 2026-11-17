@@ -232,6 +232,18 @@ int main(int argc, char* argv[]) {
              << " - logging to the screen only" << endl;
     }
 
+    //publicip: the IP this node is published at, when outbound traffic leaves from another one.
+    //Set before IPFS and the web server start so nothing reports the outbound address first
+    {
+        std::string publicIp = config.getString("publicip", "");
+        if (!IPFS::setPublicIp(publicIp)) {
+            log->addMessage("publicip=" + publicIp + " in config.cfg is not an IP address - ignored, "
+                            "using the address outbound traffic leaves from", Log::WARNING);
+        } else if (!IPFS::configuredPublicIp().empty()) {
+            log->addMessage("publicip=" + IPFS::configuredPublicIp() + " (config.cfg): published at this IP");
+        }
+    }
+
     // Set up the in-place console dashboard (config wizard is done, safe to take over screen)
     ConsoleDashboard dashboard;
     if (ConsoleDashboard::enableVT100()) {
