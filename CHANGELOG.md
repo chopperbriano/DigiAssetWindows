@@ -20,7 +20,7 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — DigiByte-Qt always opens the DigiAsset data folder and conf
+## Unreleased — DigiByte-Qt opens the right data folder; [C] clears the log files
 
 - **Installer: DigiByte-Qt shortcuts point at `C:\DigiByte\Data`** (`setup-digiasset.ps1` 2.37.0,
   `install-digibyte.ps1` 1.7.0). DigiByte's own installer makes Start-menu and desktop shortcuts
@@ -36,6 +36,13 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   `snapshot-digibyte-datadir.ps1` 1.0.1). After archiving they reopened DigiByte-Qt with
   `-datadir` only. On the `C:\DigiByte` layout the conf lives outside `Data`, so DigiByte came back
   with RPC off, and `make-snapshot.ps1`'s chain.db step, which waits for RPC, could not run.
+- **[C] clears the log files** (node and pool dashboards; press twice within 10 seconds). The node
+  empties its log file (`logpath`, default `digiasset.log`) and `ipfs-failures.log` and deletes
+  their `.1` copies; the pool does the same for `pool.log`. Logging carries on into the emptied
+  files, and the freed space is shown. The files were already capped (node log `logmaxmb`, default
+  50 MB, `ipfs-failures.log` 20 MB, `pool.log` 50 MB, each plus one rotated copy), so this frees
+  the space now rather than fixing unbounded growth. New `Log::clearLogFile` and
+  `Log::clearSideFile`, with tests.
 
 ---
 
