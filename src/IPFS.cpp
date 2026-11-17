@@ -192,6 +192,21 @@ void IPFS::mainFunction() {
                 return; //don't remove job or make callback
             }
             failed = true;
+        } catch (const std::exception& e) {
+            //IPFS went away mid-download (restarted, crashed, "Failed to receive data", or not
+            //listening).  Upstream lets this escape: Threaded logs it CRITICAL once per running
+            //job, and the job keeps the lock getNextIPFSJob gave it - never retried, never
+            //removed, holding up everything queued behind it in the same sync group until the
+            //node restarts.  Release it and try again shortly; a restarted IPFS is back in
+            //well under a minute.  The failure itself is already in ipfs-failures.log.
+            if (!stopRequested() && _shouldWarn(_lastOfflineWarning)) {
+                Log::GetInstance()->addMessage(std::string("IPFS dropped a download (") + e.what() +
+                                                       ") - it and any others will be retried in " +
+                                                       to_string(DROPPED_DOWNLOAD_RETRY_MS / 1000) + " seconds",
+                                               Log::WARNING);
+            }
+            db->pauseIPFSSync(jobIndex, sync, DROPPED_DOWNLOAD_RETRY_MS);
+            return; //don't remove job or make callback
         }
     }
 

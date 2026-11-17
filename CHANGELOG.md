@@ -52,6 +52,13 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
   set, all of those use it; the dashboard shows "(publicip)", [5] shows both addresses, and [P]
   says how to test the published IP from another network instead of testing the outbound one.
   Anything that is not an IPv4/IPv6 address is ignored with a warning. New `PublicIpTest`.
+- **Downloads IPFS drops mid-request are retried, not stuck.** Restarting IPFS while the node was
+  downloading logged `CRITICAL: Threaded mainFunction exception: Failed to receive data` once per
+  running download (10 by default). Only a timeout was caught; any other failure escaped with the
+  job still locked, so it was never retried or removed, and everything queued behind it in the
+  same sync group waited until the node restarted. Such a download is now released and retried in
+  60 seconds, with one WARNING (rate-limited) instead of a CRITICAL per job. Upstream has the same
+  gap.
 
 ---
 

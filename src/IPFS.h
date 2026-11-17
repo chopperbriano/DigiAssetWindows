@@ -105,6 +105,8 @@ private:
     mutable std::atomic<long long> _lastTimeoutWarning{0};
     mutable std::atomic<long long> _lastOfflineWarning{0};
     static bool _shouldWarn(std::atomic<long long>& lastWarning);
+    // How long a download that IPFS dropped mid-request waits before it is tried again.
+    static const unsigned int DROPPED_DOWNLOAD_RETRY_MS = 60000;
     ///peer count + queue depth appended to a timeout warning, so the log says whether the
     ///daemon is cut off or the content just has no provider
     std::string _timeoutContext() const;
