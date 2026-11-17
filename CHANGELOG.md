@@ -20,7 +20,7 @@ Version format: `{upstream_version}-win.{build}` (e.g. `0.3.0-win.4`)
 
 ---
 
-## Unreleased — DigiByte-Qt opens the right data folder; [C] clears the log files
+## 0.3.3-win.149 — publicip for multi-IP boxes; IPFS drops retried; [C] clears the log files; DigiByte-Qt shortcuts
 
 - **Installer: DigiByte-Qt shortcuts point at `C:\DigiByte\Data`** (`setup-digiasset.ps1` 2.37.0,
   `install-digibyte.ps1` 1.7.0). DigiByte's own installer makes Start-menu and desktop shortcuts
